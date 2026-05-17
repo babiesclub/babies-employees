@@ -1,157 +1,176 @@
-
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2D6A4F">
+<title>בייביז 🐾</title>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700&display=swap');
-:root{--primary:#2D6A4F;--pl:#52B788;--pxl:#D8F3DC;--acc:#F77F00;--accl:#FDEBD0;--bg:#F8FAF9;--sur:#FFFFFF;--brd:#E0EAE4;--txt:#1A2E23;--mut:#6B8F76;--dan:#C0392B;--danl:#FDECEA;--r:12px;--rs:8px}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direction:rtl;font-size:14px}
-.app-header{background:var(--primary);color:white;padding:0 16px;height:54px;display:flex;align-items:center;justify-content:space-between}
-.logo{font-size:18px;font-weight:700}.logo span{color:var(--pl)}
-.hu{display:flex;align-items:center;gap:8px;font-size:13px}
-.av{width:30px;height:30px;background:var(--pl);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:var(--primary)}
-.btn-lo{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:white;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'Heebo',sans-serif;font-size:12px}
-#login-screen{min-height:500px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1A3A2A,#2D6A4F 60%,#52B788)}
-.lcard{background:white;border-radius:20px;padding:40px 32px;width:340px;text-align:center}
-.llogo{font-size:28px;font-weight:700;color:var(--primary);margin-bottom:4px}.llogo span{color:var(--acc)}
-.lsub{color:var(--mut);font-size:13px;margin-bottom:24px}
-.lcard label{display:block;text-align:right;font-size:12px;font-weight:500;color:var(--mut);margin-bottom:5px}
-.lcard input{width:100%;padding:10px 12px;border:1.5px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:14px;margin-bottom:12px;direction:rtl;outline:none;transition:border-color 0.2s}
-.lcard input:focus{border-color:var(--pl)}
-.btn-p{width:100%;padding:11px;background:var(--primary);color:white;border:none;border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:15px;font-weight:600;cursor:pointer}
-.btn-p:hover{background:#235A40}
-.lerr{background:var(--danl);color:var(--dan);border-radius:8px;padding:9px 12px;font-size:12px;margin-bottom:12px;display:none}
-.nav-tabs{background:var(--sur);border-bottom:1px solid var(--brd);display:flex;padding:0 12px;overflow-x:auto}
-.nav-tab{padding:12px 14px;font-size:13px;font-weight:500;color:var(--mut);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;transition:all 0.2s;user-select:none}
-.nav-tab.active{color:var(--primary);border-bottom-color:var(--primary)}
-.app-content{padding:16px;max-width:860px;margin:0 auto}
+:root{--p:#2D6A4F;--pl:#52B788;--pxl:#D8F3DC;--acc:#F77F00;--bg:#F2F5F3;--sur:#fff;--brd:#DDE8E2;--txt:#1A2E23;--mut:#7A9B85;--dan:#C0392B;--danl:#FDECEA;--bnav:70px;--hdr:54px;--r:16px;--rs:12px}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden}
+body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direction:rtl;overscroll-behavior:none}
+#login-screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,#0F2419 0%,#1E4D35 40%,#2D6A4F 70%,#52B788 100%);padding:32px 24px}
+.login-brand{text-align:center;margin-bottom:40px}
+.login-brand .emoji{font-size:56px;display:block;margin-bottom:12px}
+.login-brand h1{color:white;font-size:32px;font-weight:800}
+.login-brand h1 span{color:#95E8C0}
+.login-brand p{color:rgba(255,255,255,0.6);font-size:14px;margin-top:4px}
+.login-box{background:white;border-radius:24px;padding:28px 24px;width:100%;max-width:360px;box-shadow:0 24px 64px rgba(0,0,0,0.35)}
+.lerr{background:var(--danl);color:var(--dan);border-radius:10px;padding:12px 16px;font-size:13px;margin-bottom:16px;display:none;text-align:center;font-weight:500}
+.lf-label{font-size:12px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px}
+.lf-input{width:100%;padding:15px 16px;border:2px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:16px;margin-bottom:16px;direction:rtl;outline:none;transition:border-color 0.2s;-webkit-appearance:none;background:var(--bg)}
+.lf-input:focus{border-color:var(--pl);background:white}
+.btn-login{width:100%;padding:17px;background:var(--p);color:white;border:none;border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:17px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(45,106,79,0.4);-webkit-appearance:none}
+.btn-login:active{transform:scale(0.98)}
+#app{position:fixed;inset:0;display:none;flex-direction:column;background:var(--bg)}
+.hdr{height:var(--hdr);background:var(--p);color:white;display:flex;align-items:center;justify-content:space-between;padding:0 16px;flex-shrink:0;box-shadow:0 2px 12px rgba(0,0,0,0.2)}
+.hdr-logo{font-size:19px;font-weight:800}
+.hdr-logo span{color:#95E8C0}
+.hdr-right{display:flex;align-items:center;gap:10px}
+.hdr-av{width:34px;height:34px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;border:2px solid rgba(255,255,255,0.3)}
+.hdr-name{font-size:13px;opacity:0.85;font-weight:500}
+.btn-out{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:white;padding:7px 13px;border-radius:20px;cursor:pointer;font-family:'Heebo',sans-serif;font-size:12px;font-weight:600}
+.body{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 16px calc(var(--bnav) + 24px);-webkit-overflow-scrolling:touch}
+.bnav{position:fixed;bottom:0;left:0;right:0;height:calc(var(--bnav) + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);background:white;border-top:1px solid var(--brd);display:flex;z-index:100;box-shadow:0 -4px 20px rgba(0,0,0,0.08)}
+.bnt{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;color:var(--mut);font-size:10px;font-weight:600;border:none;background:none;font-family:'Heebo',sans-serif;padding:10px 4px;transition:all 0.2s}
+.bnt-icon{font-size:24px;line-height:1;transition:transform 0.2s}
+.bnt.active{color:var(--p)}.bnt.active .bnt-icon{transform:scale(1.2)}
+.bnt.admin-only{display:none}
 .screen{display:none}.screen.active{display:block}
-.card{background:var(--sur);border-radius:var(--r);border:1px solid var(--brd);padding:20px;margin-bottom:16px}
-.ct{font-size:15px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px}
-.ct .icon{width:28px;height:28px;background:var(--pxl);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px}
-.form-row{display:grid;gap:12px;margin-bottom:12px}
-.fr2{grid-template-columns:1fr 1fr}
-.fg label{display:block;font-size:12px;font-weight:500;color:var(--mut);margin-bottom:5px}
-.fg input,.fg select,.fg textarea{width:100%;padding:9px 11px;border:1.5px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:13px;color:var(--txt);background:white;direction:rtl;outline:none;transition:border-color 0.2s}
-.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--pl)}
-.pills{display:flex;flex-wrap:wrap;gap:6px}
-.pill{padding:6px 14px;border-radius:20px;border:1.5px solid var(--brd);font-size:12px;font-weight:500;cursor:pointer;transition:all 0.15s;user-select:none;color:var(--mut);background:white}
-.pill.selected{background:var(--primary);border-color:var(--primary);color:white}
-.tag-grid{display:flex;flex-wrap:wrap;gap:6px}
-.tag{padding:5px 12px;border-radius:6px;border:1.5px solid var(--brd);font-size:12px;cursor:pointer;transition:all 0.15s;user-select:none;color:var(--mut);background:white}
-.tag.selected{background:var(--pxl);border-color:var(--pl);color:var(--primary);font-weight:500}
-.btn-sub{padding:10px 28px;background:var(--primary);color:white;border:none;border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:14px;font-weight:600;cursor:pointer;margin-top:6px}
-.btn-sub:hover{background:#235A40}
-.suc{background:#D8F3DC;border:1px solid var(--pl);color:var(--primary);border-radius:var(--rs);padding:10px 14px;font-size:13px;font-weight:500;display:none;margin-top:10px}
-.hf{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-.hf select,.hf input[type=month]{padding:7px 10px;border:1.5px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:12px;color:var(--txt);outline:none;background:white}
-.rt{width:100%;border-collapse:collapse;font-size:12px}
-.rt th{text-align:right;padding:9px 10px;background:var(--bg);color:var(--mut);font-weight:500;border-bottom:1px solid var(--brd)}
-.rt td{padding:10px 10px;border-bottom:1px solid var(--brd);color:var(--txt)}
+.card{background:var(--sur);border-radius:var(--r);border:1px solid var(--brd);padding:18px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+.card-title{font-size:17px;font-weight:700;margin-bottom:18px;display:flex;align-items:center;gap:8px}
+.card-icon{width:32px;height:32px;background:var(--pxl);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.fg{margin-bottom:14px}
+.fg label{display:block;font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
+.fg input,.fg select,.fg textarea{width:100%;padding:14px 16px;border:2px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:16px;color:var(--txt);background:var(--bg);direction:rtl;outline:none;-webkit-appearance:none;min-height:52px;transition:border-color 0.2s}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--pl);background:white}
+.fr2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pills{display:flex;flex-wrap:wrap;gap:8px}
+.pill{padding:11px 18px;border-radius:24px;border:2px solid var(--brd);font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s;user-select:none;color:var(--mut);background:white;min-height:48px;display:flex;align-items:center}
+.pill.selected{background:var(--p);border-color:var(--p);color:white;box-shadow:0 3px 10px rgba(45,106,79,0.3)}
+.tags{display:flex;flex-wrap:wrap;gap:8px}
+.tag{padding:11px 18px;border-radius:12px;border:2px solid var(--brd);font-size:14px;font-weight:500;cursor:pointer;transition:all 0.15s;user-select:none;color:var(--mut);background:white;min-height:48px;display:flex;align-items:center}
+.tag.selected{background:var(--pxl);border-color:var(--pl);color:var(--p);font-weight:700}
+.btn-prim{width:100%;padding:17px;background:var(--p);color:white;border:none;border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:17px;font-weight:700;cursor:pointer;margin-top:8px;min-height:56px;box-shadow:0 4px 14px rgba(45,106,79,0.3);-webkit-appearance:none}
+.btn-prim:active{transform:scale(0.98)}
+.btn-sec{padding:13px 20px;border:2px solid var(--p);border-radius:var(--rs);background:white;color:var(--p);font-family:'Heebo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;min-height:48px}
+.btn-xl{padding:14px 20px;background:#1D6B38;color:white;border:none;border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:14px;font-weight:600;cursor:pointer;min-height:48px}
+.suc{background:#D8F3DC;border:1px solid var(--pl);color:var(--p);border-radius:var(--rs);padding:14px;font-size:14px;font-weight:600;display:none;margin-top:12px;text-align:center}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.stat{background:var(--sur);border:1px solid var(--brd);border-radius:var(--rs);padding:16px 8px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+.stat-n{font-size:28px;font-weight:800;color:var(--p);line-height:1}
+.stat-l{font-size:11px;color:var(--mut);margin-top:4px;font-weight:600}
+.hf{display:flex;gap:8px;margin-bottom:14px}
+.hf select,.hf input[type=month]{flex:1;padding:12px 14px;border:2px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:14px;color:var(--txt);outline:none;background:var(--bg);min-height:48px;-webkit-appearance:none}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.rt{width:100%;border-collapse:collapse;font-size:13px;min-width:360px}
+.rt th{text-align:right;padding:10px 10px;background:var(--bg);color:var(--mut);font-weight:700;border-bottom:2px solid var(--brd);font-size:11px;text-transform:uppercase;letter-spacing:0.4px}
+.rt td{padding:13px 10px;border-bottom:1px solid var(--brd);color:var(--txt)}
 .rt tr:last-child td{border-bottom:none}
-.rt tr:hover td{background:var(--bg)}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
-.bg{background:var(--pxl);color:var(--primary)}
-.emp{text-align:center;padding:32px 16px;color:var(--mut);font-size:13px}
-.emp .ei{font-size:28px;margin-bottom:6px}
-.acs{display:flex;gap:8px;margin-bottom:16px}
-.acs input{flex:1}
-.btn-s{padding:9px 18px;background:var(--primary);color:white;border:none;border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:13px;font-weight:500;cursor:pointer}
-.ares{border:1px solid var(--brd);border-radius:var(--r);padding:16px;display:none}
-.arh{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--brd)}
-.aeb{font-size:36px}.art{font-size:18px;font-weight:700}.ars2{font-size:12px;color:var(--mut)}
-.css{display:grid;gap:10px}
-.cs{border-radius:8px;padding:12px 14px}
-.cs.al{background:#D8F3DC;border:1px solid #95D5B2}
-.cs.fo{background:var(--danl);border:1px solid #F5A9A9}
-.cs.ti{background:#FFF9E6;border:1px solid #FFD970}
-.cs.ha{background:#EAF3FE;border:1px solid #90C1F4}
-.cs h4{font-size:12px;font-weight:600;margin-bottom:6px}
+.badge{display:inline-block;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700;background:var(--pxl);color:var(--p)}
+.emp{text-align:center;padding:40px 20px;color:var(--mut)}
+.emp .ei{font-size:40px;margin-bottom:10px}
+.emp p{font-size:14px;font-weight:500}
+.srch-row{display:flex;gap:10px;margin-bottom:18px}
+.srch-row input{flex:1;padding:14px 16px;border:2px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:16px;direction:rtl;outline:none;background:var(--bg);min-height:52px;-webkit-appearance:none}
+.srch-row input:focus{border-color:var(--pl);background:white}
+.btn-srch{padding:0 20px;background:var(--p);color:white;border:none;border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:15px;font-weight:700;cursor:pointer;min-height:52px;white-space:nowrap;flex-shrink:0}
+.ares{border:2px solid var(--brd);border-radius:var(--r);padding:18px;display:none;background:var(--sur)}
+.arh{display:flex;align-items:center;gap:14px;margin-bottom:16px;padding-bottom:16px;border-bottom:2px solid var(--brd)}
+.aeb{font-size:44px;line-height:1}
+.art{font-size:20px;font-weight:800}
+.ars2{font-size:13px;color:var(--mut);margin-top:3px;font-weight:500}
+.csg{display:grid;gap:12px}
+.cs{border-radius:12px;padding:14px 16px}
+.cs.al{background:#D8F3DC;border:2px solid #95D5B2}
+.cs.fo{background:var(--danl);border:2px solid #F5A9A9}
+.cs.ti{background:#FFF9E6;border:2px solid #FFD970}
+.cs.ha{background:#EAF3FE;border:2px solid #90C1F4}
+.cs h4{font-size:13px;font-weight:700;margin-bottom:8px}
 .cs.al h4{color:#1B4332}.cs.fo h4{color:#7B1F1F}.cs.ti h4{color:#7A5500}.cs.ha h4{color:#0A3260}
-.cs ul{font-size:12px;line-height:1.7;padding-right:16px}
+.cs ul{font-size:13px;line-height:1.8;padding-right:18px}
 .cs.al li{color:#1B4332}.cs.fo li{color:#7B1F1F}.cs.ti li{color:#7A5500}.cs.ha li{color:#0A3260}
-.sg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
-.sc{background:var(--sur);border:1px solid var(--brd);border-radius:var(--rs);padding:14px;text-align:center}
-.sn{font-size:24px;font-weight:700;color:var(--primary)}.sl{font-size:11px;color:var(--mut);margin-top:3px}
-.atabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
-.atab{padding:7px 14px;border-radius:20px;border:1.5px solid var(--brd);font-size:12px;font-weight:500;cursor:pointer;transition:all 0.15s;color:var(--mut);background:white}
-.atab.active{background:var(--primary);border-color:var(--primary);color:white}
+.api-note{font-size:12px;color:var(--mut);margin-top:10px;text-align:center;padding:10px;background:var(--bg);border-radius:10px;display:none;font-weight:500}
+.atabs{display:flex;gap:8px;margin-bottom:16px;overflow-x:auto;padding-bottom:4px}
+.atab{padding:10px 18px;border-radius:24px;border:2px solid var(--brd);font-size:13px;font-weight:700;cursor:pointer;color:var(--mut);background:white;white-space:nowrap;min-height:44px;flex-shrink:0}
+.atab.active{background:var(--p);border-color:var(--p);color:white}
 .apanel{display:none}.apanel.active{display:block}
-.irl{display:grid;gap:8px}
-.ir{background:var(--sur);border:1px solid var(--brd);border-radius:var(--rs);padding:12px 14px;display:flex;align-items:center;justify-content:space-between}
-.ii{display:flex;align-items:center;gap:8px}
-.iav{width:32px;height:32px;background:var(--pxl);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;color:var(--primary)}
-.in{font-size:13px;font-weight:500}.ig{font-size:11px;color:var(--mut);margin-top:1px}
-.btn-ed{padding:5px 12px;border:1.5px solid var(--brd);border-radius:5px;background:white;color:var(--txt);font-family:'Heebo',sans-serif;font-size:11px;cursor:pointer}
-.btn-ed:hover{border-color:var(--primary);color:var(--primary)}
-.btn-dn{padding:5px 12px;border:1.5px solid #F5A9A9;border-radius:5px;background:white;color:var(--dan);font-family:'Heebo',sans-serif;font-size:11px;cursor:pointer;margin-right:6px}
-.btn-dn:hover{background:var(--danl)}
-.aif{background:var(--sur);border:1.5px dashed var(--pl);border-radius:var(--r);padding:16px;margin-top:10px;display:none}
+.irl{display:grid;gap:10px}
+.ir{background:var(--sur);border:2px solid var(--brd);border-radius:var(--r);padding:14px 16px;display:flex;align-items:center;justify-content:space-between}
+.ii{display:flex;align-items:center;gap:12px}
+.iav{width:40px;height:40px;background:var(--pxl);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;color:var(--p);flex-shrink:0}
+.iname{font-size:14px;font-weight:700}
+.isub{font-size:12px;color:var(--mut);margin-top:2px;font-weight:500}
+.btn-ed{padding:8px 14px;border:2px solid var(--brd);border-radius:10px;background:white;color:var(--txt);font-family:'Heebo',sans-serif;font-size:12px;font-weight:600;cursor:pointer;min-height:40px}
+.btn-dn{padding:8px 14px;border:2px solid #F5A9A9;border-radius:10px;background:white;color:var(--dan);font-family:'Heebo',sans-serif;font-size:12px;font-weight:600;cursor:pointer;min-height:40px;margin-left:8px}
+.aif{background:var(--bg);border:2px dashed var(--pl);border-radius:var(--r);padding:18px;margin-top:12px;display:none}
 .aif.open{display:block}
-.btn-out{padding:8px 16px;border:1.5px solid var(--primary);border-radius:var(--rs);background:white;color:var(--primary);font-family:'Heebo',sans-serif;font-size:13px;font-weight:500;cursor:pointer}
-.btn-out:hover{background:var(--pxl)}
-.gc-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
-.gc{display:flex;align-items:center;gap:5px;padding:5px 10px;border:1.5px solid var(--brd);border-radius:6px;cursor:pointer;font-size:12px;transition:all 0.15s;user-select:none;background:white}
-.gc.checked{background:var(--pxl);border-color:var(--pl);color:var(--primary);font-weight:500}
+.gc-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.gc{display:flex;align-items:center;gap:6px;padding:8px 14px;border:2px solid var(--brd);border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;transition:all 0.15s;user-select:none;background:white;min-height:44px}
+.gc.checked{background:var(--pxl);border-color:var(--pl);color:var(--p)}
 .air{display:flex;gap:8px;margin-top:12px}
-.air input{flex:1}
-.btn-add{padding:9px 14px;background:var(--pxl);border:1.5px solid var(--pl);border-radius:var(--rs);color:var(--primary);font-family:'Heebo',sans-serif;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
-.mo{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;display:none;align-items:center;justify-content:center}
+.air input{flex:1;padding:13px 16px;border:2px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:15px;direction:rtl;outline:none;background:var(--bg);min-height:50px;-webkit-appearance:none}
+.btn-add{padding:0 16px;background:var(--pxl);border:2px solid var(--pl);border-radius:var(--rs);color:var(--p);font-family:'Heebo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;min-height:50px;white-space:nowrap}
+.litem{display:flex;align-items:center;justify-content:space-between;padding:13px 0;border-bottom:1px solid var(--brd);font-size:14px;font-weight:500}
+.rf{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.rf label{font-size:12px;color:var(--mut);font-weight:700;text-transform:uppercase;letter-spacing:0.4px}
+.rf select,.rf input[type=month]{padding:10px 14px;border:2px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:13px;color:var(--txt);outline:none;background:var(--bg);min-height:44px;-webkit-appearance:none}
+.mo{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;display:none;align-items:flex-end;justify-content:center}
 .mo.open{display:flex}
-.md{background:white;border-radius:var(--r);padding:24px;width:460px;max-width:92vw;max-height:80vh;overflow-y:auto}
-.mt{font-size:16px;font-weight:600;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}
-.mc{cursor:pointer;font-size:20px;color:var(--mut);line-height:1}
-.ma{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
-.rf{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
-.rf label{font-size:12px;color:var(--mut);font-weight:500}
-.btn-xl{padding:9px 18px;background:#1D6B38;color:white;border:none;border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:6px}
-.btn-xl:hover{background:#155228}
-.api-note{font-size:11px;color:var(--mut);margin-top:10px;text-align:center;padding:8px;background:var(--bg);border-radius:6px;display:none}
-.spinner-inline{display:inline-block;width:14px;height:14px;border:2px solid var(--brd);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-left:6px}
+.md{background:white;border-radius:24px 24px 0 0;padding:28px 24px calc(28px + env(safe-area-inset-bottom));width:100%;max-height:85vh;overflow-y:auto}
+.mt{font-size:18px;font-weight:800;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center}
+.mc{cursor:pointer;font-size:24px;color:var(--mut);width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:50%}
+.ma{display:flex;gap:10px;margin-top:20px}
+.md-input{width:100%;padding:14px;border:2px solid var(--brd);border-radius:var(--rs);font-family:'Heebo',sans-serif;font-size:16px;direction:rtl;outline:none;background:var(--bg);margin-bottom:14px}
 @keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:550px){.fr2{grid-template-columns:1fr}.sg{grid-template-columns:1fr 1fr}}
+.spi{display:inline-block;width:18px;height:18px;border:2px solid var(--brd);border-top-color:var(--p);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-left:8px}
 </style>
-
+</head>
+<body>
 <div id="login-screen">
-  <div class="lcard">
-    <div class="llogo">בייביז <span>🐾</span></div>
-    <p class="lsub">מערכת מדריכים פנימית</p>
+  <div class="login-brand">
+    <span class="emoji">🐾</span>
+    <h1>בייביז <span>Club</span></h1>
+    <p>מערכת מדריכים פנימית</p>
+  </div>
+  <div class="login-box">
     <div id="lerr" class="lerr">שם משתמש או סיסמא שגויים</div>
-    <label>שם משתמש</label>
-    <input type="text" id="lu" placeholder="הזן שם משתמש..." onkeydown="if(event.key==='Enter')doLogin()">
-    <label>סיסמא</label>
-    <input type="password" id="lp" placeholder="הזן סיסמא..." onkeydown="if(event.key==='Enter')doLogin()">
-    <button class="btn-p" onclick="doLogin()">כניסה</button>
+    <label class="lf-label">שם משתמש</label>
+    <input class="lf-input" type="text" id="lu" placeholder="הזן שם משתמש..." onkeydown="if(event.key==='Enter')doLogin()">
+    <label class="lf-label">סיסמא</label>
+    <input class="lf-input" type="password" id="lp" placeholder="הזן סיסמא..." onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn-login" onclick="doLogin()">כניסה למערכת</button>
   </div>
 </div>
 
-<div id="app" style="display:none">
-  <header class="app-header">
-    <div class="logo">בייביז <span>🐾</span></div>
-    <div class="hu">
-      <div class="av" id="hav">?</div>
-      <span id="hn"></span>
-      <button class="btn-lo" onclick="doLogout()">יציאה</button>
+<div id="app">
+  <header class="hdr">
+    <div class="hdr-logo">בייביז <span>🐾</span></div>
+    <div class="hdr-right">
+      <div class="hdr-av" id="hav">?</div>
+      <span class="hdr-name" id="hn"></span>
+      <button class="btn-out" onclick="doLogout()">יציאה</button>
     </div>
   </header>
-  <nav class="nav-tabs">
-    <div class="nav-tab active" data-s="att">⏱ נוכחות</div>
-    <div class="nav-tab" data-s="his">📋 היסטוריה</div>
-    <div class="nav-tab" data-s="ani">🐾 טיפול בבע"ח</div>
-    <div class="nav-tab admin-only" data-s="adm" style="display:none">⚙️ ניהול</div>
-  </nav>
-  <main class="app-content">
-
+  <main class="body">
     <div id="s-att" class="screen active">
       <div class="card">
-        <div class="ct"><div class="icon">⏱</div>דיווח נוכחות</div>
-        <div class="form-row fr2">
+        <div class="card-title"><div class="card-icon">⏱</div>דיווח נוכחות</div>
+        <div class="fr2">
           <div class="fg"><label>גן</label><select id="att-g"><option value="">בחר גן...</option></select></div>
           <div class="fg"><label>תאריך</label><input type="date" id="att-d"></div>
         </div>
-        <div class="form-row fr2">
+        <div class="fr2">
           <div class="fg"><label>שעת כניסה</label><input type="time" id="att-ti"></div>
           <div class="fg"><label>שעת יציאה</label><input type="time" id="att-to"></div>
         </div>
-        <div class="fg" style="margin-bottom:12px">
+        <div class="fg">
           <label>משך פעילות</label>
           <div class="pills" id="dur-pills">
             <div class="pill" data-v="30">30 דק׳</div>
@@ -163,13 +182,13 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <div class="pill" data-v="120">120 דק׳</div>
           </div>
         </div>
-        <div class="form-row fr2">
-          <div class="fg"><label>מספר קבוצות</label><input type="number" id="att-gr" min="1" max="20" placeholder="למשל: 2"></div>
-          <div class="fg"><label>בעל חיים</label><select id="att-an"><option value="">בחר בע"ח...</option></select></div>
+        <div class="fr2">
+          <div class="fg"><label>מספר קבוצות</label><input type="number" id="att-gr" min="1" max="20" placeholder="2"></div>
+          <div class="fg"><label>בעל חיים</label><select id="att-an"><option value="">בחר...</option></select></div>
         </div>
-        <div class="fg" style="margin-bottom:12px">
-          <label>כיתות (ניתן לבחור מספר)</label>
-          <div class="tag-grid" id="cls-tags">
+        <div class="fg">
+          <label>כיתות</label>
+          <div class="tags" id="cls-tags">
             <div class="tag" data-v="תינוקייה">תינוקייה</div>
             <div class="tag" data-v="פעוטון">פעוטון</div>
             <div class="tag" data-v="גן א">גן א׳</div>
@@ -180,19 +199,18 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
           </div>
         </div>
         <div class="fg"><label>הערות</label><textarea id="att-no" rows="2" placeholder="הערות לגבי הביקור..."></textarea></div>
-        <button class="btn-sub" onclick="submitAtt()">✓ שמור דיווח</button>
+        <button class="btn-prim" onclick="submitAtt()">✓ שמור דיווח</button>
         <div class="suc" id="att-suc">✅ הדיווח נשמר בהצלחה!</div>
       </div>
     </div>
-
     <div id="s-his" class="screen">
-      <div class="sg">
-        <div class="sc"><div class="sn" id="sv">0</div><div class="sl">ביקורים החודש</div></div>
-        <div class="sc"><div class="sn" id="sh">0</div><div class="sl">שעות פעילות</div></div>
-        <div class="sc"><div class="sn" id="sgr">0</div><div class="sl">קבוצות סה"כ</div></div>
+      <div class="stats">
+        <div class="stat"><div class="stat-n" id="sv">0</div><div class="stat-l">ביקורים</div></div>
+        <div class="stat"><div class="stat-n" id="sh">0</div><div class="stat-l">שעות</div></div>
+        <div class="stat"><div class="stat-n" id="sgr">0</div><div class="stat-l">קבוצות</div></div>
       </div>
       <div class="card">
-        <div class="ct"><div class="icon">📋</div>היסטוריית ביקורים</div>
+        <div class="card-title"><div class="card-icon">📋</div>היסטוריית ביקורים</div>
         <div class="hf">
           <select id="hgf"><option value="">כל הגנים</option></select>
           <input type="month" id="hmf">
@@ -200,20 +218,18 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
         <div id="hc"><div class="emp"><div class="ei">📭</div><p>אין ביקורים להצגה</p></div></div>
       </div>
     </div>
-
     <div id="s-ani" class="screen">
       <div class="card">
-        <div class="ct"><div class="icon">🐾</div>מדריך טיפול בבעלי חיים</div>
-        <p style="font-size:12px;color:var(--mut);margin-bottom:14px">חפש לפי שם בע"ח או שם סדנה — מאגר מקומי + AI לגיבוי</p>
-        <div class="acs">
-          <input type="text" id="asi" placeholder="למשל: כלב, ארנב, מסיבת זוחלים..." onkeydown="if(event.key==='Enter')searchAnimal()">
-          <button class="btn-s" onclick="searchAnimal()">🔍 חפש</button>
+        <div class="card-title"><div class="card-icon">🐾</div>מדריך טיפול בבע"ח</div>
+        <p style="font-size:13px;color:var(--mut);margin-bottom:16px;font-weight:500">חפש לפי שם בע"ח או שם סדנה</p>
+        <div class="srch-row">
+          <input type="text" id="asi" placeholder="ארנב, כלב, מסיבת זוחלים..." onkeydown="if(event.key==='Enter')searchAnimal()">
+          <button class="btn-srch" onclick="searchAnimal()">חפש</button>
         </div>
         <div id="ares" class="ares"></div>
         <div class="api-note" id="api-note"></div>
       </div>
     </div>
-
     <div id="s-adm" class="screen">
       <div class="atabs">
         <div class="atab active" data-p="ins">מדריכים</div>
@@ -223,361 +239,118 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
       </div>
       <div class="apanel active" id="p-ins">
         <div class="card">
-          <div class="ct"><div class="icon">👥</div>מדריכים</div>
+          <div class="card-title"><div class="card-icon">👥</div>מדריכים</div>
           <div class="irl" id="irl"></div>
-          <button class="btn-out" style="margin-top:12px" onclick="toggleAddInst()">+ הוסף מדריך</button>
+          <button class="btn-sec" style="margin-top:14px;width:100%" onclick="toggleAddInst()">+ הוסף מדריך</button>
           <div class="aif" id="aif">
-            <div class="form-row fr2">
+            <div class="fr2">
               <div class="fg"><label>שם מלא</label><input type="text" id="ni-n" placeholder="שם המדריך"></div>
-              <div class="fg"><label>שם משתמש</label><input type="text" id="ni-u" placeholder="לכניסה למערכת"></div>
+              <div class="fg"><label>שם משתמש</label><input type="text" id="ni-u" placeholder="לכניסה"></div>
             </div>
-            <div class="form-row fr2">
-              <div class="fg"><label>סיסמא</label><input type="password" id="ni-p" placeholder="סיסמא"></div>
-            </div>
+            <div class="fg"><label>סיסמא</label><input type="password" id="ni-p" placeholder="סיסמא"></div>
             <div class="fg"><label>גנים משויכים</label><div class="gc-list" id="ni-g"></div></div>
-            <div style="display:flex;gap:8px;margin-top:12px">
-              <button class="btn-sub" onclick="addInst()">שמור</button>
-              <button class="btn-out" onclick="toggleAddInst()">ביטול</button>
+            <div style="display:flex;gap:10px;margin-top:14px">
+              <button class="btn-prim" style="margin-top:0" onclick="addInst()">שמור</button>
+              <button class="btn-sec" onclick="toggleAddInst()">ביטול</button>
             </div>
           </div>
         </div>
       </div>
       <div class="apanel" id="p-grd">
         <div class="card">
-          <div class="ct"><div class="icon">🌿</div>גנים</div>
+          <div class="card-title"><div class="card-icon">🌿</div>גנים</div>
           <div id="grd-list"></div>
           <div class="air"><input type="text" id="ng" placeholder="שם הגן החדש..."><button class="btn-add" onclick="addGarden()">+ הוסף</button></div>
         </div>
       </div>
       <div class="apanel" id="p-anm">
         <div class="card">
-          <div class="ct"><div class="icon">🐾</div>בעלי חיים</div>
+          <div class="card-title"><div class="card-icon">🐾</div>בעלי חיים</div>
           <div id="anm-list"></div>
           <div class="air"><input type="text" id="na" placeholder='שם הבע"ח...'><button class="btn-add" onclick="addAnimal()">+ הוסף</button></div>
         </div>
       </div>
       <div class="apanel" id="p-rep">
         <div class="card">
-          <div class="ct"><div class="icon">📊</div>דוחות וייצוא</div>
+          <div class="card-title"><div class="card-icon">📊</div>דוחות וייצוא</div>
           <div class="rf">
             <label>מדריך:</label><select id="rif"><option value="">כולם</option></select>
             <label>חודש:</label><input type="month" id="rmf">
           </div>
-          <div id="rc"><div class="emp"><div class="ei">📊</div><p>בחר מסננים להצגת דוח</p></div></div>
-          <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--brd)">
-            <p style="font-size:12px;color:var(--mut);margin-bottom:10px">ייצוא כל הנתונים לאקסל:</p>
-            <div style="display:flex;gap:10px;flex-wrap:wrap">
-              <button class="btn-xl" onclick="exportExcel('month')">📥 ייצא חודש נוכחי</button>
-              <button class="btn-xl" onclick="exportExcel('all')">📥 ייצא הכל</button>
+          <div id="rc"><div class="emp"><div class="ei">📊</div><p>בחר מסננים</p></div></div>
+          <div style="margin-top:16px;padding-top:16px;border-top:2px solid var(--brd)">
+            <p style="font-size:11px;color:var(--mut);margin-bottom:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">ייצוא לאקסל</p>
+            <div style="display:flex;gap:10px">
+              <button class="btn-xl" style="flex:1" onclick="exportExcel('month')">📥 חודש נוכחי</button>
+              <button class="btn-xl" style="flex:1" onclick="exportExcel('all')">📥 כל הנתונים</button>
             </div>
           </div>
         </div>
       </div>
     </div>
   </main>
+  <nav class="bnav">
+    <button class="bnt active" data-s="att"><span class="bnt-icon">⏱</span>נוכחות</button>
+    <button class="bnt" data-s="his"><span class="bnt-icon">📋</span>היסטוריה</button>
+    <button class="bnt" data-s="ani"><span class="bnt-icon">🐾</span>בע"ח</button>
+    <button class="bnt admin-only" data-s="adm"><span class="bnt-icon">⚙️</span>ניהול</button>
+  </nav>
 </div>
 
 <div class="mo" id="edit-mo">
   <div class="md">
     <div class="mt"><span>עריכת מדריך</span><span class="mc" onclick="closeMo()">×</span></div>
-    <div class="fg" style="margin-bottom:12px"><label>שם מלא</label><input type="text" id="ei-n"></div>
-    <div class="fg" style="margin-bottom:12px"><label>סיסמא חדשה (ריק = ללא שינוי)</label><input type="password" id="ei-p" placeholder="סיסמא חדשה..."></div>
-    <div class="fg"><label>גנים משויכים</label><div class="gc-list" id="ei-g"></div></div>
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">שם מלא</label>
+    <input type="text" id="ei-n" class="md-input">
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">סיסמא חדשה (ריק = ללא שינוי)</label>
+    <input type="password" id="ei-p" placeholder="סיסמא חדשה..." class="md-input">
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">גנים משויכים</label>
+    <div class="gc-list" id="ei-g"></div>
     <div class="ma">
-      <button class="btn-sub" onclick="saveEdit()">שמור</button>
-      <button class="btn-out" onclick="closeMo()">ביטול</button>
+      <button class="btn-prim" style="margin-top:0;flex:1" onclick="saveEdit()">שמור שינויים</button>
+      <button class="btn-sec" onclick="closeMo()">ביטול</button>
     </div>
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
-const ANIMALS_LIST = ['דגים – ראש השנה','דבורה','ארנבת ישן','ארנבת חדש','שרקן','דגו','צ\'ינצ\'ילה','חמוס','אוגרים','שוגר גליידר','חורף – אוגר סיבירי','גרבילים','עכבר','חולדה','ארנב וצב','מסיבת זוחלים','נחש','חרדון מזוקן','צב','חומט לשון כחולה','איגואנה','שממית מנומרת','איפה אני גר – צב','זיקית תמניה','טרנטולה','תוכי','ציפורי אהבה','צבע מהטבע','תרנגול','תרנגול משי','אפרוחים','שליו','ים – יבשה','ברווז','ברווז חדש','יונת דואר','יונת תור','פורים – יונת טווס','חילזון','דגים – קיץ','וטרינר – שרקן','עקבות בטבע – ארנב','לובסטר','אביב – חרקים','פרפר – זחלי משי','כלב'];
-
-const DB={
-  get(k){try{return JSON.parse(localStorage.getItem('bz2_'+k))||null}catch{return null}},
-  set(k,v){localStorage.setItem('bz2_'+k,JSON.stringify(v))}
-};
-
-function initData(){
-  if(!DB.get('gardens'))DB.set('gardens',['גן חיפושית','גן הפרפרים','גן הדובים','גן הכוכבים','גן הינשוף']);
-  // תמיד מעדכן את רשימת הבע"ח לגרסה העדכנית
-  DB.set('animals', ANIMALS_LIST);
-  if(!DB.get('users'))DB.set('users',[
-    {id:1,name:'אדמין',username:'admin',password:'admin123',role:'admin',gardens:[]},
-    {id:2,name:'יעל כהן',username:'yael',password:'1234',role:'instructor',gardens:['גן חיפושית','גן הפרפרים']},
-    {id:3,name:'נועה לוי',username:'noa',password:'1234',role:'instructor',gardens:['גן הדובים','גן הכוכבים']}
-  ]);
-  if(!DB.get('records'))DB.set('records',[]);
-}
-
-const ANIM_DATA = {
-  'ארנב':{e:'🐰',d:'יונק חברותי ועדין. מופיע בסדנאות: ארנבת ישן, ארנבת חדש, ארנב וצב, עקבות בטבע.',al:['חציר טימותי (עיקר התזונה)','ירקות עלים — חסה, פטרוזיליה, כוסברה','גזר בכמות קטנה','מלפפון ופלפל','תפוח ללא גרעינים (פינוק)'],fo:['שוקולד וממתקים','בצל ושום','אבוקדו','זרעים ואגוזים','לחם ודגנים מעובדים','ענבים וצימוקים'],ha:['לתמוך בגוף ובאחורי הרגליים בהרמה','לא לאחוז באוזניים לעולם','לשבת על הרצפה בזמן האינטראקציה','תנועות איטיות ורגועות — נבהל בקלות','לא לאלץ ארנב שרוצה לרדת'],ti:['לתת להריח את היד לפני נגיעה','ארנבת ישן: להדגיש שארנב ישן בעיניים פתוחות','ארנבת חדש: להציג הרגלי בניית קן','עקבות בטבע: להראות עקבות ופרווה']},
-  'צב':{e:'🐢',d:'זוחל שקט ואיטי. מופיע בסדנאות: צב, ארנב וצב, איפה אני גר.',al:['עלי חסה ורוקט','גזר ודלועת','עגבניה (מעט)','תות בר ופטל','פרחי היביסקוס','דשא טבעי'],fo:['בשר וחלב','תרד (חומצה אוקסלית)','מזון מעובד','ענבים','פטריות','מלח וסוכר'],ha:['לאחוז בצדדי השריון בשתי ידיים','לא להפוך על הגב','לשטוף ידיים — סלמונלה','לא לאפשר נפילה','לא לשים ליד הפה'],ti:['איפה אני גר: להדגיש השריון כבית','ארנב וצב: להשוות מהירות וסגנון חיים','לראות איך הצב מתכנס לשריון']},
-  'שרקן':{e:'🐹',d:'קאוויה (חזיר ים) — חברותי ורועש. מופיע גם בסדנת וטרינר.',al:['תרכיז קאוויה עם ויטמין C','פלפל אדום וירוק','חציר טימותי ללא הגבלה','מלפפון, גזר, חסה','כוסברה ופטרוזיליה'],fo:['תפוח אדמה ירוק','בצל ושום','אבוקדו','שוקולד','לחם ופסטה','מוצרי חלב'],ha:['לשבת על הרצפה — לא אוהב גובה','לתמוך בבטן ורגליים','קול "פרורינג" = שמח','אם קופא — מפוחד, לשים בחזרה'],ti:['מצוינים לגיל הגן','הקולות מרגשים ילדים','בסדנת וטרינר: להדגים בדיקה בסיסית']},
-  'דגו':{e:'🐭',d:'מכרסם חברותי מדרום אמריקה, חכם ופעיל. חי בקבוצות.',al:['תרכיז דגו ייעודי (דל סוכר)','חציר טימותי ללא הגבלה','ירקות ירוקים — עלים, ברוקולי','ענפי עץ ללעיסה'],fo:['סוכר וממתקים — רעיל לדגו!','פירות (סוכר גבוה)','אגוזים ושומנים','מזון מהאדם'],ha:['חי בקבוצות — להביא לפחות שניים','מהיר ופעיל — לא לעזוב ידיים','לא לאחוז בזנב — עלול להישיר','פעיל ביום'],ti:['להדגים תקשורת קולות ביניהם','ילדים מתרגשים מהזנב הייחודי','לספר שמגיעים מהמדבר']},
-  'צ\'ינצ\'ילה':{e:'🐭',d:'מכרסם עם פרווה רכה במיוחד. פעיל בערב.',al:['תרכיז צ\'ינצ\'ילה מיוחד','חציר טימותי ללא הגבלה','ענפי עץ תפוח','שיבולת שועל (נדיר)','עלי ורדים מיובשים'],fo:['פירות ומיצים (סוכר גבוה)','אגוזים שמנים','ירקות לחות גבוהה','חסה','ממתקים'],ha:['מהירה — לא לעזוב ידיים','בשתי ידיים קרוב לגוף','לא לאחוז בזנב','לא להרטיב — פרווה לא מתייבשת'],ti:['מתאימה לגיל 6+','תחושת הפרווה הרכה — חוויה מיוחדת','בבוקר עשויה להיות עייפה']},
-  'חמוס':{e:'🐹',d:'חמסטר — מכרסם קטן ופופולרי. כיס לחי מרגש ילדים.',al:['תערובת זרעים לחמסטרים','גזר, מלפפון, ברוקולי','חסה ועלים ירוקים','אורז ושיבולת שועל מבושלים'],fo:['פירות הדר','בצל ושום','שוקולד','מזון מלוח','חסה אייסברג'],ha:['עלול לנשוך אם מופחד','בשתי כפות ידיים','לא לאחוז חזק','לא להעיר משינה'],ti:['גיל 6+','כיסי הלחי — להסביר ולהראות','סדנה קצרה — 15 דק׳ מספיק']},
-  'אוגר':{e:'🐹',d:'אוגר / אוגר סיבירי — מכרסמים פעילים וסקרנים.',al:['תערובת זרעים לאוגרים','גזר, מלפפון, ברוקולי','שיבולת שועל ואורז מבושל','חרקים (פינוק חלבוני)'],fo:['פירות הדר','בצל ושום','שוקולד','מזון מלוח מאוד'],ha:['האוגר הסיבירי קטן — עדינות מיוחדת','בשתי ידיים','לא לאחוז בזנב','בלילה יותר פעיל'],ti:['חורף – אוגר סיבירי: על הסתגלות לקור','להדגים הכנסת אוכל ללחיים','מתאים לגיל 6+']},
-  'שוגר גליידר':{e:'🦘',d:'פוסום מרחפן — חיה לילית נדירה ומרתקת, מסוגלת לרחף.',al:['BML diet (דבש, ביצים, ויטמינים)','פירות טריים — תפוח, אגס, ענבים','ירקות רכים','חרקים — צרצרים'],fo:['מזון מעובד','חלב פרה','בצל ושום','שוקולד','אבוקדו'],ha:['לילי — בבוקר עצבני','עלול לנשוך אם מופחד','להחזיק ברשת בתחילה','קול ציציציי = אזהרה'],ti:['לספר על יכולת הריחוף','להראות ממברנת הריחוף','אחת החיות הנדירות ביותר בסדנאות']},
-  'גרביל':{e:'🐭',d:'גרבילים — מכרסמים קטנים וחברותיים, חיים בזוגות.',al:['תרכיז גרבילים','חציר וזרעים','גזר ומלפפון','ענפי עץ ללעיסה'],fo:['פירות הדר','שוקולד','בצל','מזון שומני מאוד'],ha:['חיים בזוגות — להביא שניים','מהירים — לא לעזוב ידיים','לא לאחוז בזנב','עדינות מיוחדת'],ti:['להדגים התנהגות חברותית','מתאים לגיל 6+']},
-  'עכבר':{e:'🐭',d:'עכבר ביתי — חכם, מהיר ומסקרן.',al:['תרכיז עכברים','גרעינים וזרעים','גזר, תפוח, מלפפון','דגנים מבושלים'],fo:['שוקולד','בצל','מזון מלוח','ממתקים'],ha:['מהיר מאוד — לא לעזוב ידיים','לתמוך בגוף','לא לאחוז בזנב','לשטוף ידיים'],ti:['להדגים חכמה — עכברים לומדים מסלולים','ילדים אוהבים את הזנב הארוך','לספר על תפקיד העכבר בטבע']},
-  'חולדה':{e:'🐀',d:'חולדה מבויתת — חכמה ומחברת מאוד, מזהה בעלים.',al:['תרכיז חולדות','ירקות מגוונים','פירות (מעט)','ביצה מבושלת, עוף מבושל'],fo:['שוקולד','אבוקדו','בצל','מזון מעובד מלוח','ממתקים'],ha:['ידידותיות מאוד','לתמוך בגוף לאורכו','לאפשר לטפס על הזרוע','לשטוף ידיים'],ti:['לשבור מיתוס: חולדות הן נקיות וחכמות','מזהות שמות ומגיעות כשקוראים','מצוינות לדיון על דעות קדומות']},
-  'נחש':{e:'🐍',d:'נחש בוא — לא ארסי, רגוע ומרתק. מפרק פחדים.',al:['עכברים/עכברושים מוקפאים ומופשרים בלבד','מים נקיים תמיד'],fo:['מזון חי — עלול לפצוע','מזון שלא הופשר כראוי','להאכיל ביד — תמיד עם צבת'],ha:['לתמוך בגוף לאורך כולו','לא לאחוז ליד הראש','48 שעות לפחות אחרי האכלה','להיות שניים בסדנה','לשטוף ידיים'],ti:['להסביר מראש שאינו ארסי','לא לכפות על מי שמפחד','תחושת הקשקשים — בלתי נשכחת']},
-  'חרדון מזוקן':{e:'🦎',d:'דרקון זקן — הלטאה הידידותית ביותר, "כלבלב הלטאות".',al:['צרצרים ודובוני דבש','קייל, ארוגולה, קישוא','פירות כתוספת','תרכיז סידן וויטמין D3'],fo:['חסה אייסברג','חרקים מהטבע','אבוקדו','מזון מהאדם'],ha:['הכי ידידותי ורגוע מכל הזוחלים','לתמוך בבטן ורגליים','אם זקן משחיר — לחץ, לשים בחזרה','לשטוף ידיים — סלמונלה'],ti:['מתאים לכל הגילאים','ילדים מתאהבים בו מיד','מסיבת זוחלים: הכי מומלץ לאינטראקציה']},
-  'חומט':{e:'🦎',d:'סקינק לשון כחולה — זוחל מרהיב עם לשון כחולה ייחודית.',al:['חרקים — צרצרים, תולעי קמח','ירקות ירוקים','פירות ללא גרעינים','ביצה מבושלת'],fo:['חרקים מהטבע','בצל ושום','אבוקדו','מזון שומני מאוד'],ha:['לתמוך בגוף לאורכו','לא לאחוז בזנב','לשטוף ידיים','תנועות איטיות'],ti:['הלשון הכחולה — "וואו מומנט" בטוח','לשאול: "למה לדעתכם הלשון כחולה?"','מסיבת זוחלים: מרתק']},
-  'איגואנה':{e:'🦎',d:'איגואנה ירוקה — זוחל גדול ומרשים.',al:['עלים ירוקים כהים — קייל, עלי חרדל','פירות בכמות קטנה','פרחי מאכל','דלעת וגזר'],fo:['מזון מהחי — איגואנה היא ר\'בניה','חלבון מהחי','בצל ושום','אבוקדו'],ha:['זנב ארוך — יכול לגרד','לתמוך בגוף לאורכו','לא לאחוז בזנב','מדריך מנוסה בלבד','לשטוף ידיים'],ti:['מרתקת בגודלה','לספר שיכולות לגדול עד 2 מטר','מסיבת זוחלים: גיל 7+']},
-  'שממית':{e:'🦎',d:'שממית מנומרת (Leopard Gecko) — עיניים ענקיות ודפוס מנומר.',al:['צרצרים ותולעי קמח','תרכיז סידן','מים טריים'],fo:['חרקים מהטבע','פירות וירקות — שממיות הן בשרניות','מזון גדול מדי'],ha:['לילית — בבוקר איטית','לתמוך בגוף','לא לאחוז בזנב — עלול להישיר','לשטוף ידיים'],ti:['העיניים הגדולות מקסימות','לספר שהזנב מתחדש','מסיבת זוחלים: מתאימה לגיל הגן']},
-  'זיקית':{e:'🦎',d:'זיקית תמניה — משנה צבעים, מרתקת ומיוחדת.',al:['חרקים חיים — צרצרים, זבובים','מים (שותה מטיפות על עלים)'],fo:['מזון מת','מזון גדול מדי','לא להשקות מקערה — עלולה להיטבע'],ha:['עדינה מאוד — מדריך מנוסה בלבד','לא להחזיק יותר ממה שנדרש','לחץ גורם לה להחוויר'],ti:['שינוי הצבעים — הרגע הכי מרתק','לאפשר לילדים לראות, פחות לגעת','צבע = תקשורת, לא הסוואה בלבד']},
-  'טרנטולה':{e:'🕷️',d:'טרנטולה — עכביש גדול ומרשים, מפרק פחדים.',al:['צרצרים ותולעי קמח','עכברים קטנים (לגדולות)','מים בכלי רדוד'],fo:['חרקים מהטבע','מזון גדול מדי'],ha:['מדריך מנוסה בלבד','לא לאחוז ללא הדרכה','נשירת שיער = הגנה — לא לשפשף עיניים','לשטוף ידיים מיד'],ti:['לא לכפות על מי שמפחד','התגברות על פחד','טרנטולות לא אגרסיביות','גיל 8+ בלבד']},
-  'תוכי':{e:'🦜',d:'תוכי — ציפור חכמה ומדברת.',al:['זרעים מיוחדים לתוכים','פירות — תפוח, אגס, בננה','ירקות — גזר, עגבניה','פרחי מאכל טריים'],fo:['אבוקדו — רעיל!','שוקולד וקפה','בצל ושום','גרעיני פירות'],ha:['לא לשים אצבעות ליד המקור','לא לצעוק ליד הציפור','תמיד עם מדריך מנוסה','גישה איטית ורגועה'],ti:['הדגמת קריאת מילים מרתקת','גיל 5+','להסביר שתוכי הוא חבר, לא צעצוע']},
-  'ציפורי אהבה':{e:'🦜',d:'ציפורי אהבה — ציפורים צבעוניות שחיות בזוגות.',al:['זרעים מיוחדים','פירות טריים — תפוח, אגס','ירקות — גזר, תרד','דגנים מבושלים'],fo:['אבוקדו','שוקולד','בצל','מלח'],ha:['לחיות בזוגות — מצוקה בבדידות','לא לאחוז חזק','גישה שקטה','לשטוף ידיים'],ti:['לספר על נאמנות הזוגיות','הצבעים הבהירים מרתקים','להדגיש את הצביטות הקטנות']},
-  'תרנגול':{e:'🐓',d:'תרנגול / תרנגול משי — עופות חצר מרתקים.',al:['מזון עופות מיוחד','גרגרים וזרעים','ירקות וגזר','תירס','תולעים (פינוק)'],fo:['מזון מלוח','שוקולד','בצל','אבוקדו','מזון מעובד'],ha:['עלולים לקפוץ','לא להרים ללא הכנה','לתמוך בכנפיים לגוף','לשטוף ידיים — סלמונלה'],ti:['תרנגול משי: הפרווה הייחודית מרגשת','להדגים קרקור ותקשורת','להסביר על ביצים']},
-  'אפרוח':{e:'🐥',d:'אפרוחים — רכים ועדינים, חוויה ייחודית לילדים.',al:['מזון אפרוחים ייעודי','מים נקיים ונגישים','גרגרים קטנים'],fo:['לחם','מזון בוגרים','ממתקים','ירקות קשים'],ha:['עדינים מאוד — לא ללחוץ','שתי ידיים כפופות — כמו קערה','לשטוף ידיים — סלמונלה','לשמור על חום'],ti:['חוויה רגשית עמוקה','לספר על מחזור הביצה','להדגיש עדינות וטיפול']},
-  'שליו':{e:'🐦',d:'שליו — ציפור קטנה ושקטה, ביצים קטנות ומיוחדות.',al:['זרעים לשליו','ירקות ירוקים','גרגרים קטנים','חרקים קטנים (פינוק)'],fo:['אבוקדו','שוקולד','בצל','מזון מלוח'],ha:['ציפור שקטה','לא לאחוז חזק','גישה שקטה ואיטית','לשטוף ידיים'],ti:['הביצים הקטנות מרתקות','לספר שמקורו ביפן','מתאים לגיל הגן']},
-  'ברווז':{e:'🦆',d:'ברווז — עוף מים מוכר ואהוב.',al:['מזון ברווזים ייעודי','ירקות ירוקים קצוצים','גרגרים','דגנים','חרקים ותולעים'],fo:['לחם — ידוע אך מזיק!','שוקולד','מזון מלוח','ממתקים','בצל'],ha:['לתמוך בגוף','לא לרדוף אחריו','גישה שקטה','לשטוף ידיים'],ti:['לספר שלחם מזיק לברווזים — הפתעה!','ים-יבשה: על חיים ביבשה ובמים']},
-  'יונה':{e:'🕊️',d:'יונת דואר / יונת תור / יונת טווס — ציפורי שלום.',al:['זרעים מיוחדים ליונים','גרגרים ותירס','ירקות ירוקים','מים נקיים תמיד'],fo:['אבוקדו','שוקולד','בצל','מזון מלוח'],ha:['יונים שקטות ורגועות','לתמוך בגוף','לא לאחוז בכנפיים','לשטוף ידיים'],ti:['יונת דואר: על ניווט ביולוגי','יונת תור: ציפור ארץ ישראל','פורים – יונת טווס: על זנב הטווס']},
-  'חילזון':{e:'🐌',d:'חילזון — יצור רך ואיטי, מרתק לגיל הגן.',al:['חסה ועלים ירוקים','גזר ומלפפון','פרחים טריים','לחות'],fo:['מלח — קטלני!','אוכל חריף','הדרים','מזון מעובד'],ha:['לא ללחוץ על הגוף הרך','לא לשים מלח בקרבתו','לשטוף ידיים','לאפשר לזחול על כף היד'],ti:['לשאול "מה הבית שלו?" — מרתק','להדגים קרני גישוש','הוא זוחל על רגל אחת גדולה']},
-  'דגים':{e:'🐟',d:'דגים — ראש השנה ודגים קיץ.',al:['מזון דגים ייעודי','ארטמיה לדגים קטנים','ירקות מבושלים (לדגי ציד)'],fo:['לחם','מזון בשרי לדגי נוי','אוכל ביד — זיהום מים','כמויות גדולות'],ha:['לא להכניס ידיים למים','לא לדפוק על הצנצנת','לשטוף ידיים','לא לאפשר לאחוז בדגים'],ti:['ראש השנה: לקשר לסמל הדגים בחג','קיץ: לדון על חיי ים','דגים לא נלקחים הביתה']},
-  'דבורה':{e:'🐝',d:'דבורה — חרק חיוני, לרוב תצפית ולא מגע.',al:['דבש (שהן מייצרות)','צוף פרחים','אבקת פרחים'],fo:['לא רלוונטי — תצפית בלבד'],ha:['לא לאחוז — עלולה לעקוץ','לעבוד עם כוורת תצפית מוגנת','לבדוק אלרגיות — חשוב מאוד!','להניח בצד בשמים'],ti:['על תפקיד הדבורה בטבע','לספר על ייצור דבש','לקשר לראש השנה — תפוח בדבש']},
-  'לובסטר':{e:'🦞',d:'לובסטר — סרטן ים גדול, חוויה בלתי נשכחת.',al:['דגים ופירות ים','שרימפס','אצות ים'],fo:['מזון יבשה','מזון מעובד','מלח יתר'],ha:['מלציות — לא לאפשר אחיזה בהן','לאחוז בחלק האמצעי','לשמור בקור','לשטוף ידיים'],ti:['ילדים מרותקים','לספר על שריון ומגנה','לדון על חיי הים']},
-  'כלב':{e:'🐕',d:'כלב — בע"ח מבויית ואהוב. דורש הכנה מיוחדת לסדנה.',al:['מזון כלבים ייעודי לפי גיל וגזע','חטיפי הכשרה','גזר ותפוח (ללא גרעינים)','מים נקיים תמיד'],fo:['שוקולד — רעיל מאוד!','ענבים וצימוקים — רעיל!','בצל ושום','אבוקדו','מקלות תירס'],ha:['לבדוק אלרגיות לכלבים מראש!','ילד שמפחד — לא לאלץ','לא לאפשר קפיצה על ילדים','גישה מהצד, לא מלמעלה','לשטוף ידיים'],ti:['לספר על שפת גוף כלבים','לדון על אחריות לבעלי חיים','לא כל כלב ידידותי','זנב מכשכש ≠ בטוח בהכרח']},
-  'פרפר':{e:'🦋',d:'פרפר / זחלי משי — מחזור החיים המלא.',al:['זחלי משי: עלי תות בלבד!','פרפרים: צוף פרחים','מי סוכר (לפרפרים בשבי)'],fo:['זחלים: כל מזון שאינו עלי תות','פרפרים: מזון מוצק'],ha:['עדינות קיצונית — לא לגעת בכנפיים','לאפשר לנחות על כף היד','לא לנשוף עליהם','סביבה מוגנת'],ti:['מחזור גולם-פרפר: הכי מרתק','לאפשר לזחל לטפס','הכנפיים מתקלפות אם נוגעים!']},
-  'חרקים':{e:'🐛',d:'אביב – חרקים — גילוי עולם החרקים.',al:['תלוי בסוג החרק','עלים ופרחים','פירות ריקבון לחיפושיות'],fo:['מזון לא טבעי'],ha:['לשטוף ידיים','לא לאחוז בחרקים עם ארס','לבדוק אלרגיות','צנצנות תצפית לחרקים קטנים'],ti:['על תפקיד החרקים בטבע','לחפש ביחד בגינה','חרקים הם לא מפחידים — הם חשובים']},
-  'צבע מהטבע':{e:'🌿',d:'סדנת יצירה עם צמחים וחומרים טבעיים.',al:['לא רלוונטי — סדנת יצירה'],fo:['לא לאכול שום חומר'],ha:['לבדוק אלרגיות לצמחים','לא לאכול שום חומר טבעי','לשטוף ידיים לאחר'],ti:['להביא: תרד, כורכום, פטל, סלק','לדון על צבעי הטבע','מתאים לכל הגילאים']},
-  'מסיבת זוחלים':{e:'🦎',d:'סדנה עם מגוון זוחלים. בחר זוחל ספציפי לפרטים.',al:['תלוי בזוחל הספציפי'],fo:['תלוי בזוחל הספציפי'],ha:['לשטוף ידיים — סלמונלה לכולם','מדריך מנוסה','לא לכפות מגע'],ti:['מומלצים: חרדון מזוקן + צב + שממית לגיל הגן','לבחור 2-3 זוחלים לסדנה','נחש הוא כוכב הסדנה לגיל גדול יותר']},
-};
-
-const ALIASES = {
-  'ארנבת ישן':'ארנב','ארנבת חדש':'ארנב','ארנב וצב':'ארנב','עקבות בטבע':'ארנב','עקבות בטבע – ארנב':'ארנב',
-  'שרקן':'שרקן','קאוויה':'שרקן','חזיר ים':'שרקן','וטרינר':'שרקן','וטרינר – שרקן':'שרקן',
-  'צ\'ינצ\'ילה':'צ\'ינצ\'ילה','שינשילה':'צ\'ינצ\'ילה','צינצ\'ילה':'צ\'ינצ\'ילה',
-  'חמוס':'חמוס','חמסטר':'חמוס',
-  'אוגר':'אוגר','אוגרים':'אוגר','חורף':'אוגר','אוגר סיבירי':'אוגר','חורף – אוגר סיבירי':'אוגר',
-  'שוגר גליידר':'שוגר גליידר','שוגר':'שוגר גליידר',
-  'גרביל':'גרביל','גרבילים':'גרביל',
-  'נחש בוא':'נחש',
-  'חרדון מזוקן':'חרדון מזוקן','דרקון זקן':'חרדון מזוקן',
-  'חומט':'חומט','חומט לשון כחולה':'חומט','סקינק':'חומט','סקינק לשון כחולה':'חומט',
-  'שממית':'שממית','שממית מנומרת':'שממית',
-  'זיקית':'זיקית','זיקית תמניה':'זיקית',
-  'תרנגול':'תרנגול','תרנגול משי':'תרנגול',
-  'אפרוח':'אפרוח','אפרוחים':'אפרוח',
-  'ברווז חדש':'ברווז','ים – יבשה':'ברווז','ים יבשה':'ברווז',
-  'יונה':'יונה','יונת דואר':'יונה','יונת תור':'יונה','פורים':'יונה','פורים – יונת טווס':'יונה','יונת טווס':'יונה',
-  'דגים – ראש השנה':'דגים','ראש השנה':'דגים','דגים קיץ':'דגים','דגים – קיץ':'דגים',
-  'זחלי משי':'פרפר','פרפר – זחלי משי':'פרפר',
-  'חרקים':'חרקים','אביב':'חרקים','אביב – חרקים':'חרקים',
-  'צב':'צב','איפה אני גר':'צב','איפה אני גר – צב':'צב',
-  'כלב':'כלב',
-};
-
-function findAnimal(q){
-  q=q.trim();const ql=q.toLowerCase();
-  for(const[a,k]of Object.entries(ALIASES)){if(a.toLowerCase()===ql)return{name:a,...ANIM_DATA[k]}}
-  for(const[k,v]of Object.entries(ANIM_DATA)){if(k.toLowerCase()===ql)return{name:k,...v}}
-  for(const[a,k]of Object.entries(ALIASES)){if(a.toLowerCase().includes(ql)||ql.includes(a.toLowerCase()))return{name:a,...ANIM_DATA[k]}}
-  for(const[k,v]of Object.entries(ANIM_DATA)){if(k.toLowerCase().includes(ql)||ql.includes(k.toLowerCase()))return{name:k,...v}}
-  return null;
-}
-
-async function searchWithAPI(q){
-  try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,
-        system:'אתה מומחה לבעלי חיים בסדנאות לילדים. ענה בעברית ובJSON בלבד:\n{"name":"שם","emoji":"אימוג\'י","d":"תיאור","al":["מותר x5"],"fo":["אסור x5"],"ha":["טיפול x4"],"ti":["טיפים x3"]}',
-        messages:[{role:'user',content:`מידע על: ${q}`}]})});
-    const data=await res.json();
-    const txt=data.content.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
-    return JSON.parse(txt);
-  }catch{return null}
-}
-
+const ANIMALS_LIST=['דגים – ראש השנה','דבורה','ארנבת ישן','ארנבת חדש','שרקן','דגו',"צ'ינצ'ילה",'חמוס','אוגרים','שוגר גליידר','חורף – אוגר סיבירי','גרבילים','עכבר','חולדה','ארנב וצב','מסיבת זוחלים','נחש','חרדון מזוקן','צב','חומט לשון כחולה','איגואנה','שממית מנומרת','איפה אני גר – צב','זיקית תמניה','טרנטולה','תוכי','ציפורי אהבה','צבע מהטבע','תרנגול','תרנגול משי','אפרוחים','שליו','ים – יבשה','ברווז','ברווז חדש','יונת דואר','יונת תור','פורים – יונת טווס','חילזון','דגים – קיץ','וטרינר – שרקן','עקבות בטבע – ארנב','לובסטר','אביב – חרקים','פרפר – זחלי משי','כלב'];
+const DB={get(k){try{return JSON.parse(localStorage.getItem('bz3_'+k))||null}catch{return null}},set(k,v){localStorage.setItem('bz3_'+k,JSON.stringify(v))}};
+function initData(){if(!DB.get('gardens'))DB.set('gardens',['גן חיפושית','גן הפרפרים','גן הדובים','גן הכוכבים','גן הינשוף']);DB.set('animals',ANIMALS_LIST);if(!DB.get('users'))DB.set('users',[{id:1,name:'אדמין',username:'admin',password:'admin123',role:'admin',gardens:[]},{id:2,name:'יעל כהן',username:'yael',password:'1234',role:'instructor',gardens:['גן חיפושית','גן הפרפרים']},{id:3,name:'נועה לוי',username:'noa',password:'1234',role:'instructor',gardens:['גן הדובים','גן הכוכבים']}]);if(!DB.get('records'))DB.set('records',[])}
+const AD={'ארנב':{e:'🐰',d:'יונק חברותי ועדין. סדנאות: ארנבת ישן, ארנבת חדש, ארנב וצב, עקבות בטבע.',al:['חציר טימותי (עיקר התזונה)','ירקות עלים — חסה, פטרוזיליה, כוסברה','גזר בכמות קטנה','מלפפון ופלפל','תפוח ללא גרעינים'],fo:['שוקולד וממתקים','בצל ושום','אבוקדו','זרעים ואגוזים','לחם ודגנים מעובדים'],ha:['לתמוך בגוף ובאחורי הרגליים','לא לאחוז באוזניים לעולם','לשבת על הרצפה בזמן האינטראקציה','תנועות איטיות ורגועות'],ti:['לתת להריח את היד לפני נגיעה','ארנבת ישן: ישן בעיניים פתוחות','ארנבת חדש: הרגלי בניית קן']},'צב':{e:'🐢',d:'זוחל שקט ואיטי. סדנאות: צב, ארנב וצב, איפה אני גר.',al:['עלי חסה ורוקט','גזר ודלועת','עגבניה (מעט)','תות בר ופטל','פרחי היביסקוס'],fo:['בשר וחלב','תרד','מזון מעובד','ענבים','מלח וסוכר'],ha:['לאחוז בצדדי השריון בשתי ידיים','לא להפוך על הגב','לשטוף ידיים — סלמונלה','לא לאפשר נפילה'],ti:['איפה אני גר: השריון כבית','ארנב וצב: להשוות מהירות','לראות איך מתכנס לשריון']},'שרקן':{e:'🐹',d:'קאוויה — חברותי ורועש. גם בסדנת וטרינר.',al:['תרכיז קאוויה עם ויטמין C','פלפל אדום וירוק','חציר טימותי','מלפפון, גזר, חסה','כוסברה ופטרוזיליה'],fo:['תפוח אדמה ירוק','בצל ושום','אבוקדו','שוקולד','מוצרי חלב'],ha:['לשבת על הרצפה','לתמוך בבטן ורגליים','"פרורינג" = שמח','אם קופא — מפוחד'],ti:['מצוינים לגיל הגן','הקולות מרגשים ילדים','וטרינר: להדגים בדיקה בסיסית']},'דגו':{e:'🐭',d:'מכרסם חברותי מדרום אמריקה. חי בקבוצות.',al:['תרכיז דגו (דל סוכר)','חציר טימותי','ירקות ירוקים','ענפי עץ ללעיסה'],fo:['סוכר וממתקים — רעיל!','פירות','אגוזים','מזון מהאדם'],ha:['להביא לפחות שניים','מהיר — לא לעזוב ידיים','לא לאחוז בזנב','פעיל ביום'],ti:['להדגים תקשורת קולות','מגיעים מהמדבר']},"צ'ינצ'ילה":{e:'🐭',d:'מכרסם עם פרווה רכה במיוחד. פעיל בערב.',al:["תרכיז צ'ינצ'ילה",'חציר טימותי','ענפי עץ תפוח','שיבולת שועל (נדיר)'],fo:['פירות ומיצים','אגוזים שמנים','חסה','ממתקים'],ha:['מהירה — לא לעזוב ידיים','בשתי ידיים קרוב לגוף','לא לאחוז בזנב','לא להרטיב'],ti:['גיל 6+','תחושת הפרווה — חוויה מיוחדת']},'חמוס':{e:'🐹',d:'חמסטר — מכרסם קטן. כיס לחי מרגש ילדים.',al:['תערובת זרעים לחמסטרים','גזר, מלפפון, ברוקולי','חסה ועלים ירוקים'],fo:['פירות הדר','בצל ושום','שוקולד','מזון מלוח'],ha:['עלול לנשוך אם מופחד','בשתי כפות ידיים','לא לאחוז חזק','לא להעיר משינה'],ti:['גיל 6+','כיסי הלחי מרגשים','15 דק׳ מספיק']},'אוגר':{e:'🐹',d:'אוגר / אוגר סיבירי — מכרסמים פעילים.',al:['תערובת זרעים לאוגרים','גזר, מלפפון, ברוקולי','שיבולת שועל'],fo:['פירות הדר','בצל ושום','שוקולד'],ha:['האוגר הסיבירי קטן — עדינות','בשתי ידיים','לא לאחוז בזנב'],ti:['חורף – על הסתגלות לקור','להדגים הכנסת אוכל ללחיים']},'שוגר גליידר':{e:'🦘',d:'פוסום מרחפן — חיה לילית נדירה ומרתקת.',al:['BML diet (דבש, ביצים, ויטמינים)','פירות טריים','חרקים'],fo:['מזון מעובד','חלב פרה','בצל','שוקולד'],ha:['לילי — בבוקר עצבני','עלול לנשוך','ציציציי = אזהרה'],ti:['לספר על יכולת הריחוף','להראות ממברנת הריחוף']},'גרביל':{e:'🐭',d:'גרבילים — מכרסמים קטנים, חיים בזוגות.',al:['תרכיז גרבילים','חציר וזרעים','גזר ומלפפון'],fo:['פירות הדר','שוקולד','בצל'],ha:['להביא שניים','מהירים — לא לעזוב ידיים','לא לאחוז בזנב'],ti:['להדגים התנהגות חברותית']},'עכבר':{e:'🐭',d:'עכבר ביתי — חכם, מהיר, מסקרן.',al:['תרכיז עכברים','גרעינים וזרעים','גזר, תפוח, מלפפון'],fo:['שוקולד','בצל','מזון מלוח'],ha:['מהיר מאוד — לא לעזוב ידיים','לא לאחוז בזנב','לשטוף ידיים'],ti:['עכברים לומדים מסלולים']},'חולדה':{e:'🐀',d:'חולדה מבויתת — חכמה ומחברת, מזהה בעלים.',al:['תרכיז חולדות','ירקות מגוונים','ביצה מבושלת'],fo:['שוקולד','אבוקדו','בצל'],ha:['ידידותיות מאוד','לתמוך בגוף','לשטוף ידיים'],ti:['חולדות הן נקיות וחכמות!','מזהות שמות']},'נחש':{e:'🐍',d:'נחש בוא — לא ארסי, רגוע. מפרק פחדים.',al:['עכברים מוקפאים ומופשרים בלבד','מים נקיים'],fo:['מזון חי','מזון שלא הופשר'],ha:['לתמוך בגוף לאורך כולו','לא לאחוז ליד הראש','48 שעות אחרי האכלה','להיות שניים'],ti:['להסביר שאינו ארסי','לא לכפות','תחושת הקשקשים — בלתי נשכחת']},'חרדון מזוקן':{e:'🦎',d:'דרקון זקן — הלטאה הידידותית ביותר.',al:['צרצרים ודובוני דבש','קייל, ארוגולה, קישוא','סידן וויטמין D3'],fo:['חסה אייסברג','חרקים מהטבע','אבוקדו'],ha:['הכי ידידותי מכל הזוחלים','לתמוך בבטן ורגליים','זקן משחיר = לחץ','לשטוף ידיים'],ti:['מתאים לכל הגילאים','ילדים מתאהבים בו מיד']},'חומט':{e:'🦎',d:'סקינק לשון כחולה — לשון כחולה ייחודית.',al:['חרקים — צרצרים, תולעי קמח','ירקות ירוקים','ביצה מבושלת'],fo:['חרקים מהטבע','בצל ושום','אבוקדו'],ha:['לתמוך בגוף לאורכו','לא לאחוז בזנב','לשטוף ידיים'],ti:['הלשון הכחולה — "וואו מומנט"','למה הלשון כחולה?']},'איגואנה':{e:'🦎',d:'איגואנה ירוקה — זוחל גדול ומרשים.',al:['עלים ירוקים כהים — קייל','פירות בכמות קטנה','דלעת וגזר'],fo:["איגואנה היא ר'בניה — אין בשר",'בצל ושום','אבוקדו'],ha:['זנב ארוך — יכול לגרד','לתמוך בגוף','מדריך מנוסה בלבד'],ti:['יכולות לגדול עד 2 מטר','גיל 7+ במסיבת זוחלים']},'שממית':{e:'🦎',d:'שממית מנומרת — עיניים ענקיות, דפוס מנומר.',al:['צרצרים ותולעי קמח','תרכיז סידן'],fo:['חרקים מהטבע','פירות וירקות'],ha:['לילית — בבוקר איטית','לא לאחוז בזנב','לשטוף ידיים'],ti:['העיניים הגדולות מקסימות','הזנב מתחדש']},'זיקית':{e:'🦎',d:'זיקית תמניה — משנה צבעים.',al:['חרקים חיים — צרצרים, זבובים'],fo:['מזון מת','לא להשקות מקערה'],ha:['עדינה מאוד — מדריך מנוסה בלבד','לחץ גורם לה להחוויר'],ti:['שינוי צבעים — הרגע הכי מרתק','צבע = תקשורת']},'טרנטולה':{e:'🕷️',d:'טרנטולה — עכביש גדול, מפרק פחדים.',al:['צרצרים ותולעי קמח','מים בכלי רדוד'],fo:['חרקים מהטבע'],ha:['מדריך מנוסה בלבד','נשירת שיער = הגנה','לשטוף ידיים מיד'],ti:['לא לכפות על מי שמפחד','גיל 8+ בלבד']},'תוכי':{e:'🦜',d:'תוכי — ציפור חכמה ומדברת.',al:['זרעים מיוחדים לתוכים','פירות — תפוח, אגס, בננה','ירקות — גזר, עגבניה'],fo:['אבוקדו — רעיל!','שוקולד וקפה','בצל ושום'],ha:['לא לשים אצבעות ליד המקור','לא לצעוק','מדריך מנוסה תמיד'],ti:['קריאת מילים מרתקת','גיל 5+']},'ציפורי אהבה':{e:'🦜',d:'ציפורי אהבה — צבעוניות, חיות בזוגות.',al:['זרעים מיוחדים','פירות טריים','ירקות — גזר, תרד'],fo:['אבוקדו','שוקולד','בצל'],ha:['לחיות בזוגות','לא לאחוז חזק','גישה שקטה'],ti:['נאמנות הזוגיות מרגשת']},'תרנגול':{e:'🐓',d:'תרנגול / תרנגול משי — עופות חצר.',al:['מזון עופות','גרגרים וזרעים','ירקות וגזר','תירס'],fo:['מזון מלוח','שוקולד','בצל','אבוקדו'],ha:['עלולים לקפוץ','לתמוך בכנפיים לגוף','לשטוף ידיים — סלמונלה'],ti:['תרנגול משי: הפרווה הייחודית מרגשת']},'אפרוח':{e:'🐥',d:'אפרוחים — רכים ועדינים, חוויה ייחודית.',al:['מזון אפרוחים ייעודי','מים נקיים','גרגרים קטנים'],fo:['לחם','מזון בוגרים','ממתקים'],ha:['עדינים מאוד — לא ללחוץ','שתי ידיים כפופות כמו קערה','לשטוף ידיים — סלמונלה'],ti:['חוויה רגשית עמוקה','מחזור הביצה']},'שליו':{e:'🐦',d:'שליו — ציפור קטנה, ביצים קטנות ומיוחדות.',al:['זרעים לשליו','ירקות ירוקים'],fo:['אבוקדו','שוקולד','בצל'],ha:['ציפור שקטה','לא לאחוז חזק','גישה שקטה'],ti:['הביצים הקטנות מרתקות']},'ברווז':{e:'🦆',d:'ברווז — עוף מים מוכר ואהוב.',al:['מזון ברווזים ייעודי','ירקות ירוקים קצוצים','גרגרים'],fo:['לחם — מזיק!','שוקולד','ממתקים','בצל'],ha:['לתמוך בגוף','לא לרדוף אחריו','גישה שקטה','לשטוף ידיים'],ti:['לחם מזיק לברווזים — הפתעה!']},'יונה':{e:'🕊️',d:'יונת דואר / יונת תור / יונת טווס.',al:['זרעים ליונים','גרגרים ותירס','ירקות ירוקים'],fo:['אבוקדו','שוקולד','בצל'],ha:['שקטות ורגועות','לתמוך בגוף','לא לאחוז בכנפיים'],ti:['יונת דואר: ניווט ביולוגי','יונת תור: ציפור ארץ ישראל']},'חילזון':{e:'🐌',d:'חילזון — יצור רך ואיטי, מרתק לגיל הגן.',al:['חסה ועלים ירוקים','גזר ומלפפון'],fo:['מלח — קטלני!','אוכל חריף','הדרים'],ha:['לא ללחוץ על הגוף הרך','לא לשים מלח בקרבתו','לשטוף ידיים'],ti:['"מה הבית שלו?" — מרתק','קרני גישוש']},'דגים':{e:'🐟',d:'דגים — ראש השנה ודגים קיץ.',al:['מזון דגים ייעודי','ארטמיה לדגים קטנים'],fo:['לחם','אוכל ביד — זיהום מים'],ha:['לא להכניס ידיים למים','לא לדפוק על הצנצנת','לא לאחוז בדגים'],ti:['ראש השנה: סמל הדגים בחג','קיץ: חיי ים']},'דבורה':{e:'🐝',d:'דבורה — חרק חיוני. תצפית בלבד.',al:['דבש, צוף פרחים, אבקה'],fo:['לא רלוונטי — תצפית'],ha:['לא לאחוז — עלולה לעקוץ','לבדוק אלרגיות!'],ti:['תפקיד הדבורה בטבע','לקשר לראש השנה']},'לובסטר':{e:'🦞',d:'לובסטר — סרטן ים גדול, חוויה בלתי נשכחת.',al:['דגים ופירות ים','אצות ים'],fo:['מזון יבשה','מזון מעובד'],ha:['מלציות — לא לאחוז בהן','לאחוז בחלק האמצעי','לשמור בקור'],ti:['ילדים מרותקים','שריון ומגנה']},'כלב':{e:'🐕',d:'כלב — בע"ח מבויית. דורש הכנה מיוחדת לסדנה.',al:['מזון כלבים ייעודי','חטיפי הכשרה','גזר ותפוח (ללא גרעינים)','מים נקיים'],fo:['שוקולד — רעיל מאוד!','ענבים וצימוקים — רעיל!','בצל ושום','אבוקדו'],ha:['לבדוק אלרגיות לכלבים!','ילד שמפחד — לא לאלץ','לא לאפשר קפיצה','גישה מהצד, לא מלמעלה'],ti:['שפת גוף כלבים','אחריות לבעלי חיים','זנב מכשכש ≠ בטוח בהכרח']},'פרפר':{e:'🦋',d:'פרפר / זחלי משי — מחזור החיים המלא.',al:['זחלי משי: עלי תות בלבד!','פרפרים: צוף פרחים'],fo:['זחלים: כל מזון שאינו עלי תות'],ha:['לא לגעת בכנפיים','לאפשר לנחות על כף היד'],ti:['מחזור גולם-פרפר — הכי מרתק','הכנפיים מתקלפות אם נוגעים!']},'חרקים':{e:'🐛',d:'אביב – חרקים — גילוי עולם החרקים.',al:['עלים ופרחים לרוב החרקים'],fo:['מזון לא טבעי'],ha:['לשטוף ידיים','לבדוק אלרגיות'],ti:['תפקיד החרקים בטבע','חרקים חשובים, לא מפחידים']},'צבע מהטבע':{e:'🌿',d:'סדנת יצירה עם צמחים וחומרים טבעיים.',al:['לא רלוונטי'],fo:['לא לאכול שום חומר'],ha:['לבדוק אלרגיות לצמחים','לשטוף ידיים'],ti:['תרד, כורכום, פטל, סלק']},'מסיבת זוחלים':{e:'🦎',d:'סדנה עם מגוון זוחלים. בחר זוחל ספציפי לפרטים.',al:['תלוי בזוחל הספציפי'],fo:['תלוי בזוחל הספציפי'],ha:['לשטוף ידיים — סלמונלה לכולם','מדריך מנוסה'],ti:['מומלצים: חרדון מזוקן + צב + שממית לגיל הגן']}};
+const AL={'ארנבת ישן':'ארנב','ארנבת חדש':'ארנב','ארנב וצב':'ארנב','עקבות בטבע':'ארנב','עקבות בטבע – ארנב':'ארנב','שרקן':'שרקן','קאוויה':'שרקן','חזיר ים':'שרקן','וטרינר':'שרקן','וטרינר – שרקן':'שרקן',"צ'ינצ'ילה":"צ'ינצ'ילה",'שינשילה':"צ'ינצ'ילה",'חמוס':'חמוס','חמסטר':'חמוס','אוגר':'אוגר','אוגרים':'אוגר','חורף':'אוגר','אוגר סיבירי':'אוגר','חורף – אוגר סיבירי':'אוגר','שוגר גליידר':'שוגר גליידר','שוגר':'שוגר גליידר','גרביל':'גרביל','גרבילים':'גרביל','נחש בוא':'נחש','חרדון מזוקן':'חרדון מזוקן','דרקון זקן':'חרדון מזוקן','חומט':'חומט','חומט לשון כחולה':'חומט','סקינק':'חומט','שממית':'שממית','שממית מנומרת':'שממית','זיקית':'זיקית','זיקית תמניה':'זיקית','תרנגול משי':'תרנגול','אפרוח':'אפרוח','אפרוחים':'אפרוח','ברווז חדש':'ברווז','ים – יבשה':'ברווז','ים יבשה':'ברווז','יונה':'יונה','יונת דואר':'יונה','יונת תור':'יונה','פורים':'יונה','פורים – יונת טווס':'יונה','יונת טווס':'יונה','דגים – ראש השנה':'דגים','ראש השנה':'דגים','דגים קיץ':'דגים','דגים – קיץ':'דגים','זחלי משי':'פרפר','פרפר – זחלי משי':'פרפר','חרקים':'חרקים','אביב':'חרקים','אביב – חרקים':'חרקים','צב':'צב','איפה אני גר':'צב','איפה אני גר – צב':'צב','כלב':'כלב'};
+function findA(q){const ql=q.trim().toLowerCase();for(const[a,k]of Object.entries(AL)){if(a.toLowerCase()===ql)return{name:a,...AD[k]}}for(const[k,v]of Object.entries(AD)){if(k.toLowerCase()===ql)return{name:k,...v}}for(const[a,k]of Object.entries(AL)){if(a.toLowerCase().includes(ql)||ql.includes(a.toLowerCase()))return{name:a,...AD[k]}}for(const[k,v]of Object.entries(AD)){if(k.toLowerCase().includes(ql)||ql.includes(k.toLowerCase()))return{name:k,...v}}return null}
+async function apiA(q){try{const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,system:'מומחה לבעלי חיים בסדנאות לילדים. ענה בעברית ובJSON בלבד:\n{"name":"שם","emoji":"אימוג\'י","d":"תיאור","al":["מותר x5"],"fo":["אסור x5"],"ha":["טיפול x4"],"ti":["טיפים x3"]}',messages:[{role:'user',content:'מידע על: '+q}]})});const data=await r.json();const txt=data.content.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();return JSON.parse(txt)}catch{return null}}
 let cu=null,selDur=null,selCls=[],editId=null;
-
-function doLogin(){
-  const u=document.getElementById('lu').value.trim(),p=document.getElementById('lp').value;
-  const user=(DB.get('users')||[]).find(x=>x.username===u&&x.password===p);
-  if(!user){document.getElementById('lerr').style.display='block';return}
-  cu=user;
-  document.getElementById('login-screen').style.display='none';
-  document.getElementById('app').style.display='block';
-  document.getElementById('hn').textContent=user.name;
-  document.getElementById('hav').textContent=user.name[0];
-  if(user.role==='admin')document.querySelectorAll('.admin-only').forEach(e=>e.style.display='');
-  initApp();
-}
+function doLogin(){const u=document.getElementById('lu').value.trim(),p=document.getElementById('lp').value;const user=(DB.get('users')||[]).find(x=>x.username===u&&x.password===p);if(!user){document.getElementById('lerr').style.display='block';return}cu=user;document.getElementById('login-screen').style.display='none';document.getElementById('app').style.display='flex';document.getElementById('hn').textContent=user.name;document.getElementById('hav').textContent=user.name[0];if(user.role==='admin')document.querySelectorAll('.admin-only').forEach(e=>e.style.display='flex');initApp()}
 function doLogout(){cu=null;document.getElementById('login-screen').style.display='flex';document.getElementById('app').style.display='none';document.getElementById('lu').value='';document.getElementById('lp').value='';document.getElementById('lerr').style.display='none'}
-
-document.querySelectorAll('.nav-tab').forEach(t=>{t.addEventListener('click',()=>{
-  document.querySelectorAll('.nav-tab').forEach(x=>x.classList.remove('active'));
-  document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
-  t.classList.add('active');document.getElementById('s-'+t.dataset.s).classList.add('active');
-  if(t.dataset.s==='his')renderHis();if(t.dataset.s==='adm')renderAdm();
-})});
-document.querySelectorAll('.atab').forEach(t=>{t.addEventListener('click',()=>{
-  document.querySelectorAll('.atab').forEach(x=>x.classList.remove('active'));
-  document.querySelectorAll('.apanel').forEach(x=>x.classList.remove('active'));
-  t.classList.add('active');document.getElementById('p-'+t.dataset.p).classList.add('active');renderAdm();
-})});
-
-function initApp(){
-  document.getElementById('att-d').value=new Date().toISOString().split('T')[0];
-  const gs=cu.role==='admin'?DB.get('gardens'):cu.gardens;
-  const gS=document.getElementById('att-g');gS.innerHTML='<option value="">בחר גן...</option>';
-  (gs||[]).forEach(g=>gS.innerHTML+=`<option value="${g}">${g}</option>`);
-  const aS=document.getElementById('att-an');aS.innerHTML='<option value="">בחר בע"ח...</option>';
-  (DB.get('animals')||[]).forEach(a=>aS.innerHTML+=`<option value="${a}">${a}</option>`);
-  document.querySelectorAll('#dur-pills .pill').forEach(p=>{p.onclick=()=>{document.querySelectorAll('#dur-pills .pill').forEach(x=>x.classList.remove('selected'));p.classList.add('selected');selDur=p.dataset.v}});
-  document.querySelectorAll('#cls-tags .tag').forEach(t=>{t.onclick=()=>{t.classList.toggle('selected');const v=t.dataset.v;if(t.classList.contains('selected'))selCls.push(v);else selCls=selCls.filter(c=>c!==v)}});
-  const now=new Date(),m=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  document.getElementById('hmf').value=m;document.getElementById('rmf').value=m;
-  document.getElementById('hmf').onchange=renderHis;document.getElementById('hgf').onchange=renderHis;
-  document.getElementById('rmf').onchange=renderAdm;document.getElementById('rif').onchange=renderAdm;
-}
-
-function submitAtt(){
-  const g=document.getElementById('att-g').value,d=document.getElementById('att-d').value;
-  if(!g||!d||!selDur){alert('נא למלא: גן, תאריך ומשך פעילות');return}
-  const rec={id:Date.now(),instructorId:cu.id,instructorName:cu.name,garden:g,date:d,
-    timeIn:document.getElementById('att-ti').value,timeOut:document.getElementById('att-to').value,
-    duration:selDur,groups:document.getElementById('att-gr').value||'1',
-    classes:[...selCls],animal:document.getElementById('att-an').value,
-    notes:document.getElementById('att-no').value,createdAt:new Date().toISOString()};
-  const recs=DB.get('records')||[];recs.unshift(rec);DB.set('records',recs);
-  ['att-g','att-ti','att-to','att-gr','att-an','att-no'].forEach(id=>document.getElementById(id).value='');
-  document.querySelectorAll('#dur-pills .pill').forEach(p=>p.classList.remove('selected'));
-  document.querySelectorAll('#cls-tags .tag').forEach(t=>t.classList.remove('selected'));
-  selDur=null;selCls=[];
-  const b=document.getElementById('att-suc');b.style.display='block';setTimeout(()=>b.style.display='none',3000);
-}
-
-function renderHis(){
-  const recs=DB.get('records')||[],mf=document.getElementById('hmf').value,gf=document.getElementById('hgf').value;
-  const gs=cu.role==='admin'?DB.get('gardens'):cu.gardens;
-  const hgf=document.getElementById('hgf'),cur=hgf.value;
-  hgf.innerHTML='<option value="">כל הגנים</option>';
-  (gs||[]).forEach(g=>hgf.innerHTML+=`<option value="${g}"${g===cur?' selected':''}>${g}</option>`);
-  let f=recs.filter(r=>{if(cu.role!=='admin'&&r.instructorId!==cu.id)return false;if(gf&&r.garden!==gf)return false;if(mf&&!r.date.startsWith(mf))return false;return true});
-  document.getElementById('sv').textContent=f.length;
-  document.getElementById('sh').textContent=(f.reduce((s,r)=>s+parseInt(r.duration||0),0)/60).toFixed(1);
-  document.getElementById('sgr').textContent=f.reduce((s,r)=>s+parseInt(r.groups||0),0);
-  const c=document.getElementById('hc');
-  if(!f.length){c.innerHTML='<div class="emp"><div class="ei">📭</div><p>אין ביקורים להצגה</p></div>';return}
-  let h=`<table class="rt"><thead><tr><th>תאריך</th><th>גן</th>${cu.role==='admin'?'<th>מדריך</th>':''}<th>משך</th><th>קבוצות</th><th>כיתות</th><th>בע"ח</th></tr></thead><tbody>`;
-  f.forEach(r=>h+=`<tr><td>${new Date(r.date).toLocaleDateString('he-IL')}</td><td>${r.garden}</td>${cu.role==='admin'?`<td>${r.instructorName}</td>`:''}<td><span class="badge bg">${r.duration} דק׳</span></td><td>${r.groups}</td><td>${(r.classes||[]).join(', ')||'-'}</td><td>${r.animal||'-'}</td></tr>`);
-  h+='</tbody></table>';c.innerHTML=h;
-}
-
-function showResult(info,fromAPI){
-  const el=document.getElementById('ares'),note=document.getElementById('api-note');
-  el.style.display='block';
-  el.innerHTML=`<div class="arh"><div class="aeb">${info.emoji||info.e||'🐾'}</div><div><div class="art">${info.name}</div><div class="ars2">${info.d||''}</div></div></div>
-  <div class="css">
-    <div class="cs al"><h4>✅ מה מותר לאכול</h4><ul>${(info.al||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div>
-    <div class="cs fo"><h4>❌ מה אסור לאכול</h4><ul>${(info.fo||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div>
-    <div class="cs ha"><h4>🤲 הנחיות טיפול ובטיחות</h4><ul>${(info.ha||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div>
-    <div class="cs ti"><h4>💡 טיפים לסדנה</h4><ul>${(info.ti||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div>
-  </div>`;
-  note.style.display=fromAPI?'block':'none';
-  if(fromAPI)note.textContent='🌐 תוצאה מ-AI (לא במאגר המקומי)';
-}
-
-async function searchAnimal(){
-  const q=document.getElementById('asi').value.trim();if(!q)return;
-  const local=findAnimal(q);
-  if(local){showResult(local,false);return}
-  const el=document.getElementById('ares'),note=document.getElementById('api-note');
-  el.style.display='block';note.style.display='none';
-  el.innerHTML=`<div style="text-align:center;padding:20px;color:var(--mut);font-size:13px">"${q}" לא במאגר המקומי — מחפש ב-AI<span class="spinner-inline"></span></div>`;
-  const btn=document.querySelector('.btn-s');btn.disabled=true;
-  const res=await searchWithAPI(q);btn.disabled=false;
-  if(res){showResult({name:q,...res},true);return}
-  el.innerHTML=`<div class="emp"><div class="ei">🔍</div><p>לא נמצא מידע על "<b>${q}</b>"</p><p style="font-size:11px;margin-top:6px">נסה: כלב, ארנב, שרקן, נחש, ברווז...</p></div>`;
-}
-
-// ===== EXPORT EXCEL =====
-function exportExcel(mode){
-  const recs=DB.get('records')||[];
-  const month=document.getElementById('rmf').value;
-  const instId=document.getElementById('rif').value;
-  let data=recs;
-  if(mode==='month'&&month)data=data.filter(r=>r.date.startsWith(month));
-  if(instId)data=data.filter(r=>r.instructorId==instId);
-  if(!data.length){alert('אין נתונים לייצוא');return}
-
-  const rows=data.map(r=>({
-    'תאריך':r.date,
-    'מדריך':r.instructorName,
-    'גן':r.garden,
-    'שעת כניסה':r.timeIn||'',
-    'שעת יציאה':r.timeOut||'',
-    'משך (דקות)':r.duration,
-    'קבוצות':r.groups,
-    'כיתות':(r.classes||[]).join(', '),
-    'בעל חיים':r.animal||'',
-    'הערות':r.notes||''
-  }));
-
-  const ws=XLSX.utils.json_to_sheet(rows,{header:['תאריך','מדריך','גן','שעת כניסה','שעת יציאה','משך (דקות)','קבוצות','כיתות','בעל חיים','הערות']});
-  ws['!cols']=[{wch:12},{wch:16},{wch:16},{wch:12},{wch:12},{wch:14},{wch:10},{wch:20},{wch:16},{wch:24}];
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,'ביקורים');
-  const fname=mode==='month'&&month?`בייביז_${month}.xlsx`:'בייביז_כל_הנתונים.xlsx';
-  XLSX.writeFile(wb,fname);
-}
-
+document.querySelectorAll('.bnt').forEach(t=>{t.addEventListener('click',()=>{document.querySelectorAll('.bnt').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('s-'+t.dataset.s).classList.add('active');document.querySelector('.body').scrollTop=0;if(t.dataset.s==='his')renderHis();if(t.dataset.s==='adm')renderAdm()})});
+document.querySelectorAll('.atab').forEach(t=>{t.addEventListener('click',()=>{document.querySelectorAll('.atab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.apanel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('p-'+t.dataset.p).classList.add('active');renderAdm()})});
+function initApp(){document.getElementById('att-d').value=new Date().toISOString().split('T')[0];const gs=cu.role==='admin'?DB.get('gardens'):cu.gardens;const gS=document.getElementById('att-g');gS.innerHTML='<option value="">בחר גן...</option>';(gs||[]).forEach(g=>gS.innerHTML+=`<option value="${g}">${g}</option>`);const aS=document.getElementById('att-an');aS.innerHTML='<option value="">בחר...</option>';(DB.get('animals')||[]).forEach(a=>aS.innerHTML+=`<option value="${a}">${a}</option>`);document.querySelectorAll('#dur-pills .pill').forEach(p=>{p.onclick=()=>{document.querySelectorAll('#dur-pills .pill').forEach(x=>x.classList.remove('selected'));p.classList.add('selected');selDur=p.dataset.v}});document.querySelectorAll('#cls-tags .tag').forEach(t=>{t.onclick=()=>{t.classList.toggle('selected');const v=t.dataset.v;if(t.classList.contains('selected'))selCls.push(v);else selCls=selCls.filter(c=>c!==v)}});const now=new Date(),m=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;document.getElementById('hmf').value=m;document.getElementById('rmf').value=m;document.getElementById('hmf').onchange=renderHis;document.getElementById('hgf').onchange=renderHis;document.getElementById('rmf').onchange=renderAdm;document.getElementById('rif').onchange=renderAdm}
+function submitAtt(){const g=document.getElementById('att-g').value,d=document.getElementById('att-d').value;if(!g||!d||!selDur){alert('נא למלא: גן, תאריך ומשך פעילות');return}const rec={id:Date.now(),instructorId:cu.id,instructorName:cu.name,garden:g,date:d,timeIn:document.getElementById('att-ti').value,timeOut:document.getElementById('att-to').value,duration:selDur,groups:document.getElementById('att-gr').value||'1',classes:[...selCls],animal:document.getElementById('att-an').value,notes:document.getElementById('att-no').value,createdAt:new Date().toISOString()};const recs=DB.get('records')||[];recs.unshift(rec);DB.set('records',recs);['att-g','att-ti','att-to','att-gr','att-an','att-no'].forEach(id=>document.getElementById(id).value='');document.querySelectorAll('#dur-pills .pill').forEach(p=>p.classList.remove('selected'));document.querySelectorAll('#cls-tags .tag').forEach(t=>t.classList.remove('selected'));selDur=null;selCls=[];const b=document.getElementById('att-suc');b.style.display='block';document.querySelector('.body').scrollTop=0;setTimeout(()=>b.style.display='none',3000)}
+function renderHis(){const recs=DB.get('records')||[],mf=document.getElementById('hmf').value,gf=document.getElementById('hgf').value;const gs=cu.role==='admin'?DB.get('gardens'):cu.gardens;const hgf=document.getElementById('hgf'),cur=hgf.value;hgf.innerHTML='<option value="">כל הגנים</option>';(gs||[]).forEach(g=>hgf.innerHTML+=`<option value="${g}"${g===cur?' selected':''}>${g}</option>`);let f=recs.filter(r=>{if(cu.role!=='admin'&&r.instructorId!==cu.id)return false;if(gf&&r.garden!==gf)return false;if(mf&&!r.date.startsWith(mf))return false;return true});document.getElementById('sv').textContent=f.length;document.getElementById('sh').textContent=(f.reduce((s,r)=>s+parseInt(r.duration||0),0)/60).toFixed(1);document.getElementById('sgr').textContent=f.reduce((s,r)=>s+parseInt(r.groups||0),0);const c=document.getElementById('hc');if(!f.length){c.innerHTML='<div class="emp"><div class="ei">📭</div><p>אין ביקורים להצגה</p></div>';return}let h='<div class="tbl-wrap"><table class="rt"><thead><tr><th>תאריך</th><th>גן</th>'+(cu.role==='admin'?'<th>מדריך</th>':'')+'<th>משך</th><th>קב׳</th><th>בע"ח</th></tr></thead><tbody>';f.forEach(r=>h+=`<tr><td>${new Date(r.date).toLocaleDateString('he-IL')}</td><td>${r.garden}</td>${cu.role==='admin'?`<td>${r.instructorName}</td>`:''}<td><span class="badge">${r.duration}′</span></td><td>${r.groups}</td><td>${r.animal||'-'}</td></tr>`);h+='</tbody></table></div>';c.innerHTML=h}
+function showR(info,fromAPI){const el=document.getElementById('ares'),note=document.getElementById('api-note');el.style.display='block';el.innerHTML=`<div class="arh"><div class="aeb">${info.emoji||info.e||'🐾'}</div><div><div class="art">${info.name}</div><div class="ars2">${info.d||''}</div></div></div><div class="csg"><div class="cs al"><h4>✅ מה מותר לאכול</h4><ul>${(info.al||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div><div class="cs fo"><h4>❌ מה אסור לאכול</h4><ul>${(info.fo||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div><div class="cs ha"><h4>🤲 הנחיות טיפול</h4><ul>${(info.ha||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div><div class="cs ti"><h4>💡 טיפים לסדנה</h4><ul>${(info.ti||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div></div>`;note.style.display=fromAPI?'block':'none';if(fromAPI)note.textContent='🌐 תוצאה מ-AI (לא במאגר המקומי)'}
+async function searchAnimal(){const q=document.getElementById('asi').value.trim();if(!q)return;const local=findA(q);if(local){showR(local,false);return}const el=document.getElementById('ares'),note=document.getElementById('api-note');el.style.display='block';note.style.display='none';el.innerHTML=`<div style="text-align:center;padding:24px;color:var(--mut);font-size:14px;font-weight:500">"${q}" לא במאגר — מחפש ב-AI<span class="spi"></span></div>`;const btn=document.querySelector('.btn-srch');btn.disabled=true;const res=await apiA(q);btn.disabled=false;if(res){showR({name:q,...res},true);return}el.innerHTML=`<div class="emp"><div class="ei">🔍</div><p>לא נמצא מידע על "<b>${q}</b>"</p></div>`}
+function exportExcel(mode){const recs=DB.get('records')||[];const month=document.getElementById('rmf').value;const instId=document.getElementById('rif').value;let data=recs;if(mode==='month'&&month)data=data.filter(r=>r.date.startsWith(month));if(instId)data=data.filter(r=>r.instructorId==instId);if(!data.length){alert('אין נתונים לייצוא');return}const rows=data.map(r=>({'תאריך':r.date,'מדריך':r.instructorName,'גן':r.garden,'שעת כניסה':r.timeIn||'','שעת יציאה':r.timeOut||'','משך (דקות)':r.duration,'קבוצות':r.groups,'כיתות':(r.classes||[]).join(', '),'בעל חיים':r.animal||'','הערות':r.notes||''}));const ws=XLSX.utils.json_to_sheet(rows,{header:['תאריך','מדריך','גן','שעת כניסה','שעת יציאה','משך (דקות)','קבוצות','כיתות','בעל חיים','הערות']});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'ביקורים');XLSX.writeFile(wb,mode==='month'&&month?`בייביז_${month}.xlsx`:'בייביז_כל_הנתונים.xlsx')}
 function renderAdm(){renderInstList();renderGrdList();renderAnmList();renderRepFilter();renderRep()}
-
-function renderInstList(){
-  const users=DB.get('users')||[],gardens=DB.get('gardens')||[];
-  document.getElementById('ni-g').innerHTML=gardens.map(g=>`<div class="gc" onclick="toggleGC(this)" data-g="${g}"><span class="ck">○</span> ${g}</div>`).join('');
-  document.getElementById('irl').innerHTML=users.map(u=>`<div class="ir"><div class="ii"><div class="iav">${u.name[0]}</div><div><div class="in">${u.name}${u.role==='admin'?' <span style="font-size:10px;color:var(--acc)">(אדמין)</span>':''}</div><div class="ig">@${u.username} · ${u.role==='admin'?'כל הגנים':(u.gardens||[]).join(', ')||'אין גנים'}</div></div></div><div>${u.role!=='admin'?`<button class="btn-dn" onclick="delInst(${u.id})">מחק</button>`:''}<button class="btn-ed" onclick="openEdit(${u.id})">עריכה</button></div></div>`).join('');
-}
-function renderGrdList(){const g=DB.get('gardens')||[];document.getElementById('grd-list').innerHTML=g.map((x,i)=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--brd)"><span style="font-size:13px">🌿 ${x}</span><button class="btn-dn" onclick="delGarden(${i})">הסר</button></div>`).join('')||'<p style="font-size:12px;color:var(--mut)">אין גנים</p>'}
-function renderAnmList(){const a=DB.get('animals')||[];document.getElementById('anm-list').innerHTML=a.map((x,i)=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--brd)"><span style="font-size:13px">🐾 ${x}</span><button class="btn-dn" onclick="delAnimal(${i})">הסר</button></div>`).join('')||'<p style="font-size:12px;color:var(--mut)">אין בע"ח</p>'}
+function renderInstList(){const users=DB.get('users')||[],gardens=DB.get('gardens')||[];document.getElementById('ni-g').innerHTML=gardens.map(g=>`<div class="gc" onclick="toggleGC(this)" data-g="${g}"><span class="ck">○ </span>${g}</div>`).join('');document.getElementById('irl').innerHTML=users.map(u=>`<div class="ir"><div class="ii"><div class="iav">${u.name[0]}</div><div><div class="iname">${u.name}${u.role==='admin'?' <span style="font-size:10px;color:var(--acc)">(אדמין)</span>':''}</div><div class="isub">@${u.username} · ${u.role==='admin'?'כל הגנים':(u.gardens||[]).join(', ')||'אין גנים'}</div></div></div><div style="display:flex;align-items:center">${u.role!=='admin'?`<button class="btn-dn" onclick="delInst(${u.id})">מחק</button>`:''}<button class="btn-ed" onclick="openEdit(${u.id})">עריכה</button></div></div>`).join('')}
+function renderGrdList(){const g=DB.get('gardens')||[];document.getElementById('grd-list').innerHTML=g.map((x,i)=>`<div class="litem"><span>🌿 ${x}</span><button class="btn-dn" onclick="delGarden(${i})">הסר</button></div>`).join('')||'<p style="font-size:13px;color:var(--mut);padding:8px 0">אין גנים</p>'}
+function renderAnmList(){const a=DB.get('animals')||[];document.getElementById('anm-list').innerHTML=a.map((x,i)=>`<div class="litem"><span>🐾 ${x}</span><button class="btn-dn" onclick="delAnimal(${i})">הסר</button></div>`).join('')||'<p style="font-size:13px;color:var(--mut);padding:8px 0">אין בע"ח</p>'}
 function renderRepFilter(){const users=DB.get('users')||[],sel=document.getElementById('rif'),cur=sel.value;sel.innerHTML='<option value="">כולם</option>';users.filter(u=>u.role!=='admin').forEach(u=>sel.innerHTML+=`<option value="${u.id}"${u.id==cur?' selected':''}>${u.name}</option>`)}
-function renderRep(){
-  const m=document.getElementById('rmf').value,iid=document.getElementById('rif').value;if(!m)return;
-  const f=(DB.get('records')||[]).filter(r=>r.date.startsWith(m)&&(!iid||r.instructorId==iid));
-  const c=document.getElementById('rc');
-  if(!f.length){c.innerHTML='<div class="emp"><div class="ei">📊</div><p>אין נתונים לתקופה זו</p></div>';return}
-  const tm=f.reduce((s,r)=>s+parseInt(r.duration||0),0),tg=f.reduce((s,r)=>s+parseInt(r.groups||0),0);
-  let h=`<div class="sg" style="margin-bottom:14px"><div class="sc"><div class="sn">${f.length}</div><div class="sl">ביקורים</div></div><div class="sc"><div class="sn">${(tm/60).toFixed(1)}</div><div class="sl">שעות</div></div><div class="sc"><div class="sn">${tg}</div><div class="sl">קבוצות</div></div></div>
-  <table class="rt"><thead><tr><th>תאריך</th><th>מדריך</th><th>גן</th><th>משך</th><th>קבוצות</th><th>בע"ח</th></tr></thead><tbody>`;
-  f.forEach(r=>h+=`<tr><td>${new Date(r.date).toLocaleDateString('he-IL')}</td><td>${r.instructorName}</td><td>${r.garden}</td><td><span class="badge bg">${r.duration} דק׳</span></td><td>${r.groups}</td><td>${r.animal||'-'}</td></tr>`);
-  h+='</tbody></table>';c.innerHTML=h;
-}
-
+function renderRep(){const m=document.getElementById('rmf').value,iid=document.getElementById('rif').value;if(!m)return;const f=(DB.get('records')||[]).filter(r=>r.date.startsWith(m)&&(!iid||r.instructorId==iid));const c=document.getElementById('rc');if(!f.length){c.innerHTML='<div class="emp"><div class="ei">📊</div><p>אין נתונים לתקופה זו</p></div>';return}const tm=f.reduce((s,r)=>s+parseInt(r.duration||0),0),tg=f.reduce((s,r)=>s+parseInt(r.groups||0),0);let h=`<div class="stats" style="margin-bottom:14px"><div class="stat"><div class="stat-n">${f.length}</div><div class="stat-l">ביקורים</div></div><div class="stat"><div class="stat-n">${(tm/60).toFixed(1)}</div><div class="stat-l">שעות</div></div><div class="stat"><div class="stat-n">${tg}</div><div class="stat-l">קבוצות</div></div></div><div class="tbl-wrap"><table class="rt"><thead><tr><th>תאריך</th><th>מדריך</th><th>גן</th><th>משך</th><th>קב׳</th></tr></thead><tbody>`;f.forEach(r=>h+=`<tr><td>${new Date(r.date).toLocaleDateString('he-IL')}</td><td>${r.instructorName}</td><td>${r.garden}</td><td><span class="badge">${r.duration}′</span></td><td>${r.groups}</td></tr>`);h+='</tbody></table></div>';c.innerHTML=h}
 function toggleAddInst(){document.getElementById('aif').classList.toggle('open')}
-function toggleGC(el){el.classList.toggle('checked');el.querySelector('.ck').textContent=el.classList.contains('checked')?'✓':'○'}
+function toggleGC(el){el.classList.toggle('checked');el.querySelector('.ck').textContent=el.classList.contains('checked')?'✓ ':'○ '}
 function getCheckedG(cid){return[...document.querySelectorAll(`#${cid} .gc.checked`)].map(e=>e.dataset.g)}
-function addInst(){
-  const n=document.getElementById('ni-n').value.trim(),u=document.getElementById('ni-u').value.trim(),p=document.getElementById('ni-p').value;
-  if(!n||!u||!p){alert('נא למלא את כל השדות');return}
-  const users=DB.get('users')||[];if(users.find(x=>x.username===u)){alert('שם המשתמש כבר קיים');return}
-  users.push({id:Date.now(),name:n,username:u,password:p,role:'instructor',gardens:getCheckedG('ni-g')});DB.set('users',users);
-  document.getElementById('ni-n').value='';document.getElementById('ni-u').value='';document.getElementById('ni-p').value='';
-  document.getElementById('aif').classList.remove('open');renderAdm();
-}
+function addInst(){const n=document.getElementById('ni-n').value.trim(),u=document.getElementById('ni-u').value.trim(),p=document.getElementById('ni-p').value;if(!n||!u||!p){alert('נא למלא את כל השדות');return}const users=DB.get('users')||[];if(users.find(x=>x.username===u)){alert('שם המשתמש כבר קיים');return}users.push({id:Date.now(),name:n,username:u,password:p,role:'instructor',gardens:getCheckedG('ni-g')});DB.set('users',users);['ni-n','ni-u','ni-p'].forEach(id=>document.getElementById(id).value='');document.getElementById('aif').classList.remove('open');renderAdm()}
 function delInst(id){if(!confirm('למחוק מדריך זה?'))return;DB.set('users',DB.get('users').filter(u=>u.id!==id));renderAdm()}
-function openEdit(id){
-  editId=id;const user=(DB.get('users')||[]).find(u=>u.id===id);if(!user)return;
-  document.getElementById('ei-n').value=user.name;document.getElementById('ei-p').value='';
-  document.getElementById('ei-g').innerHTML=(DB.get('gardens')||[]).map(g=>{const ch=(user.gardens||[]).includes(g);return`<div class="gc${ch?' checked':''}" onclick="toggleGC(this)" data-g="${g}"><span class="ck">${ch?'✓':'○'}</span> ${g}</div>`}).join('');
-  document.getElementById('edit-mo').classList.add('open');
-}
-function saveEdit(){
-  const users=DB.get('users')||[],i=users.findIndex(u=>u.id===editId);if(i===-1)return;
-  const n=document.getElementById('ei-n').value.trim();if(n)users[i].name=n;
-  const p=document.getElementById('ei-p').value;if(p)users[i].password=p;
-  users[i].gardens=getCheckedG('ei-g');DB.set('users',users);closeMo();renderAdm();
-}
+function openEdit(id){editId=id;const user=(DB.get('users')||[]).find(u=>u.id===id);if(!user)return;document.getElementById('ei-n').value=user.name;document.getElementById('ei-p').value='';document.getElementById('ei-g').innerHTML=(DB.get('gardens')||[]).map(g=>{const ch=(user.gardens||[]).includes(g);return`<div class="gc${ch?' checked':''}" onclick="toggleGC(this)" data-g="${g}"><span class="ck">${ch?'✓ ':'○ '}</span>${g}</div>`}).join('');document.getElementById('edit-mo').classList.add('open')}
+function saveEdit(){const users=DB.get('users')||[],i=users.findIndex(u=>u.id===editId);if(i===-1)return;const n=document.getElementById('ei-n').value.trim();if(n)users[i].name=n;const p=document.getElementById('ei-p').value;if(p)users[i].password=p;users[i].gardens=getCheckedG('ei-g');DB.set('users',users);closeMo();renderAdm()}
 function closeMo(){document.getElementById('edit-mo').classList.remove('open');editId=null}
 function addGarden(){const n=document.getElementById('ng').value.trim();if(!n)return;const g=DB.get('gardens')||[];if(g.includes(n)){alert('גן זה כבר קיים');return}g.push(n);DB.set('gardens',g);document.getElementById('ng').value='';renderAdm();initApp()}
-function delGarden(i){if(!confirm('למחוק גן זה?'))return;const g=DB.get('gardens')||[];g.splice(i,1);DB.set('gardens',g);renderAdm();initApp()}
+function delGarden(i){if(!confirm('למחוק?'))return;const g=DB.get('gardens')||[];g.splice(i,1);DB.set('gardens',g);renderAdm();initApp()}
 function addAnimal(){const n=document.getElementById('na').value.trim();if(!n)return;const a=DB.get('animals')||[];if(a.includes(n)){alert('בע"ח זה כבר קיים');return}a.push(n);DB.set('animals',a);document.getElementById('na').value='';renderAdm();initApp()}
-function delAnimal(i){if(!confirm('למחוק בע"ח זה?'))return;const a=DB.get('animals')||[];a.splice(i,1);DB.set('animals',a);renderAdm();initApp()}
-
+function delAnimal(i){if(!confirm('למחוק?'))return;const a=DB.get('animals')||[];a.splice(i,1);DB.set('animals',a);renderAdm();initApp()}
 initData();
 </script>
+</body>
+</html>
