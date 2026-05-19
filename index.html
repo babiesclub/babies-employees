@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#2D6A4F">
 <link rel="manifest" href="manifest.webmanifest">
+<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('OneSignalSDKWorker.js',{scope:'/babies-employees/'}).catch(e=>console.warn('SW reg:',e))}</script>
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" sizes="512x512" href="icon-512.png">
