@@ -530,7 +530,15 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
       <option value="per_child">פר ילד (נעמת / מתנסים)</option>
     </select>
     <div id="eg-paymode-wrap" style="display:none">
-      <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">מודל תשלום למדריכה (לפר ילד בלבד)</label>
+      <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">מודל תשלום למדריכה</label>
+      <div style="background:#E8F4FD;border:1.5px solid #90CDF4;border-radius:var(--rs);padding:10px 12px;margin-bottom:8px;font-size:11px;color:#2C5282;line-height:1.6">
+        <b>למה זה כאן?</b> בגן "פר ילד" הלקוח משלם לפי מספר ילדים — אבל המדריכה לא יכולה להיות משולמת פר ילד (היא לא קובעת מי הגיע). לכן צריך לבחור איך משלמים לה:
+        <ul style="margin:6px 0 0;padding-right:18px">
+          <li><b>לפי זמן</b> — תעריף לפי משך הסשן (למשל 60₪ ל-30 דק׳)</li>
+          <li><b>פר קבוצה</b> — תעריף לפי מספר הקבוצות בדיווח (למשל 30₪ לקבוצה)</li>
+        </ul>
+        תלוי בהסכם הספציפי עם המדריכה לאותו לקוח.
+      </div>
       <select id="eg-paymode" class="md-input" onchange="onGardenBillingModeChange()">
         <option value="time">לפי זמן</option>
         <option value="per_group">פר קבוצה</option>
@@ -549,6 +557,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     </select>
     <details style="margin-bottom:14px;background:#FFF8E1;border:1.5px solid #FFD970;border-radius:var(--rs);padding:10px 14px">
       <summary style="font-size:13px;font-weight:700;color:#7B5C00;cursor:pointer">💰 תעריפים (אדמין בלבד)</summary>
+      <div style="background:#FFEBEE;border:1.5px solid #FFCDD2;border-radius:var(--rs);padding:8px 12px;margin-top:10px;font-size:11px;color:#7F1D1D;line-height:1.5">⚠️ <b>כל התעריפים הם לפני מע"מ.</b> המערכת מוסיפה אוטומטית 18% מע"מ לחיוב הגן (תמיד) ולתשלום המדריכה (רק אם היא עוסק מורשה).</div>
       <div id="eg-charge-wrap" style="margin-top:10px">
         <div style="font-size:12px;font-weight:700;color:#7B5C00;margin-bottom:6px">חיוב הגן</div>
         <div id="eg-time-wrap">
