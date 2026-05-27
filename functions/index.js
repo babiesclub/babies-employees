@@ -62,10 +62,8 @@ exports.sendpushonnotification = onDocumentCreated(
           },
           body: JSON.stringify({
             app_id: ONESIGNAL_APP_ID,
-            include_aliases: {
-              external_id: [String(data.recipientUid)],
-            },
-            target_channel: "push",
+            include_external_user_ids: [String(data.recipientUid)],
+            channel_for_external_user_ids: "push",
             headings: { he: title, en: title },
             contents: { he: body, en: body },
             data: {
