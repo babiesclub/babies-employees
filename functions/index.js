@@ -53,17 +53,19 @@ exports.sendpushonnotification = onDocumentCreated(
 
     try {
       const response = await fetch(
-        "https://onesignal.com/api/v1/notifications",
+        "https://api.onesignal.com/notifications?c=push",
         {
           method: "POST",
           headers: {
-            Authorization: `Basic ${apiKey}`,
+            Authorization: `Key ${apiKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
             app_id: ONESIGNAL_APP_ID,
-            include_external_user_ids: [String(data.recipientUid)],
-            channel_for_external_user_ids: "push",
+            target_channel: "push",
+            include_aliases: {
+              external_id: [String(data.recipientUid)],
+            },
             headings: { he: title, en: title },
             contents: { he: body, en: body },
             data: {
