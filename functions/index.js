@@ -57,7 +57,7 @@ exports.sendpushonnotification = onDocumentCreated(
         {
           method: "POST",
           headers: {
-            Authorization: `Basic ${apiKey}`,
+            Authorization: `Key ${apiKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
