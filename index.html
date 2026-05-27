@@ -262,6 +262,16 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
           <div style="font-size:20px;color:#C2185B">←</div>
         </div>
       </div>
+      <div id="push-banner" style="display:none;background:linear-gradient(135deg,#E1F5FE,#B3E5FC);border:2px solid #0288D1;border-radius:var(--rs);padding:14px;margin-bottom:14px;cursor:pointer" onclick="osEnablePush()">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="font-size:32px">🔔</div>
+          <div style="flex:1">
+            <div style="font-weight:700;color:#01579B;font-size:14px">הפעלי התראות פוש</div>
+            <div id="push-banner-text" style="font-size:11px;color:#01579B;opacity:0.85;margin-top:2px"></div>
+          </div>
+          <div style="font-size:20px;color:#01579B">←</div>
+        </div>
+      </div>
       <div id="unlock-banner" style="display:none;background:linear-gradient(135deg,#F3E5F5,#E1BEE7);border:2px solid #BA68C8;border-radius:var(--rs);padding:14px;margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:12px">
           <div style="font-size:32px">🔓</div>
@@ -841,7 +851,9 @@ function waitForAuthState(){if(!window.fbAuth)return Promise.resolve(null);retur
 function lastReportDate(user){const recs=DB.get('records')||[];const mine=recs.filter(r=>r.instructorUid===user.uid||r.instructorId===user.id);if(!mine.length)return'';const ds=mine.map(r=>r.date).filter(Boolean).sort();return ds[ds.length-1]||''}
 function reportsThisWeek(user){const recs=DB.get('records')||[];const mine=recs.filter(r=>r.instructorUid===user.uid||r.instructorId===user.id);const now=new Date();const ws=new Date(now);ws.setHours(0,0,0,0);ws.setDate(ws.getDate()-ws.getDay());const wsStr=ymd(ws);return mine.filter(r=>r.date&&r.date>=wsStr).length}
 function osWhenReady(fn){if(window.OneSignal&&window._osReady)return fn(window.OneSignal);window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(fn)}
-function osSetUserTags(user){if(!user)return;osWhenReady(async OS=>{try{const newId=String(user.uid||user.id);const curId=OS.User.onesignalId?await Promise.resolve(OS.User.externalId).catch(()=>null):null;try{await OS.logout()}catch(e){}await OS.login(newId);await OS.User.addTags({username:user.username||'',role:user.role||'instructor',last_report_date:lastReportDate(user)||'never',reports_this_week:String(reportsThisWeek(user))});if(user.role==='instructor'&&OS.Notifications.permissionNative==='default'){setTimeout(()=>{try{OS.Slidedown.promptPush()}catch(e){console.warn('prompt:',e)}},2000)}}catch(e){console.error('OneSignal tags failed:',e)}})}
+function osSetUserTags(user){if(!user)return;osWhenReady(async OS=>{try{const newId=String(user.uid||user.id);try{await OS.logout()}catch(e){}await OS.login(newId);await OS.User.addTags({username:user.username||'',role:user.role||'instructor',last_report_date:lastReportDate(user)||'never',reports_this_week:String(reportsThisWeek(user))});const perm=OS.Notifications.permissionNative;if(perm==='granted'){try{await OS.User.PushSubscription.optIn()}catch(e){console.warn('optIn:',e)}}renderPushBanner()}catch(e){console.error('OneSignal tags failed:',e)}})}
+async function osEnablePush(){return new Promise(resolve=>{osWhenReady(async OS=>{try{const perm=OS.Notifications.permissionNative;if(perm==='denied'){alert('⚠️ ההתראות חסומות ברמת הדפדפן.\n\nלהפעלה ידנית:\n1. לחצי על אייקון הנעילה 🔒 או ⓘ ליד שורת הכתובת\n2. חפשי "Notifications" / "התראות"\n3. שני ל-"Allow" / "אפשר"\n4. רענני את האפליקציה');resolve(false);return}if(perm==='default'){await OS.Notifications.requestPermission();await new Promise(r=>setTimeout(r,500))}try{await OS.User.PushSubscription.optIn()}catch(e){console.warn('optIn:',e)}setTimeout(renderPushBanner,800);resolve(true)}catch(e){console.error('enable push:',e);alert('שגיאה: '+(e.message||e));resolve(false)}})})}
+function renderPushBanner(){const banner=document.getElementById('push-banner');if(!banner||!cu)return;osWhenReady(OS=>{try{const perm=OS.Notifications.permissionNative;const subscribed=OS.User&&OS.User.PushSubscription&&OS.User.PushSubscription.optedIn;const ok=perm==='granted'&&subscribed;banner.style.display=ok?'none':'block';const txt=document.getElementById('push-banner-text');if(txt){if(perm==='denied')txt.textContent='ההתראות חסומות בדפדפן - לחצי לפרטים להפעלה';else if(perm==='default')txt.textContent='קבלי התראות גם כשהאפליקציה סגורה - לחצי להפעלה';else txt.textContent='ההרשאה אושרה אבל לא מנוי - לחצי כדי להירשם'}}catch(e){console.warn('render push banner:',e)}})}
 function osClearUser(){osWhenReady(async OS=>{try{await OS.logout()}catch(e){console.error('OneSignal logout failed:',e)}})}
 function compressImage(file,maxDim=1600,quality=0.85){return new Promise((resolve,reject)=>{const img=new Image();const url=URL.createObjectURL(file);img.onload=()=>{URL.revokeObjectURL(url);let{width:w,height:h}=img;if(w>maxDim||h>maxDim){if(w>h){h=Math.round(h*maxDim/w);w=maxDim}else{w=Math.round(w*maxDim/h);h=maxDim}}const c=document.createElement('canvas');c.width=w;c.height=h;const ctx=c.getContext('2d');ctx.filter='contrast(1.08) brightness(1.04) saturate(0.95)';ctx.drawImage(img,0,0,w,h);c.toBlob(b=>b?resolve(b):reject('blob failed'),'image/jpeg',quality)};img.onerror=()=>{URL.revokeObjectURL(url);reject('image load failed')};img.src=url})}
 let _opencvPromise=null,_jscanifyPromise=null,_scanner=null;
