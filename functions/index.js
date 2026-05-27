@@ -77,7 +77,6 @@ exports.sendpushonnotification = onDocumentCreated(
             chrome_web_badge: ICON_URL,
             firefox_icon: ICON_URL,
             web_url: APP_URL,
-            url: APP_URL,
           }),
         }
       );
