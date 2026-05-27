@@ -54,7 +54,8 @@ exports.sendpushonnotification = onDocumentCreated(
     const body = data.body || "";
     const link = data.link || null;
 
-    // Lookup user's username from Firestore (for tag-based targeting)
+    // Lookup user's OneSignal Subscription ID from Firestore
+    let recipientSubId = null;
     let recipientUsername = null;
     try {
       const userDoc = await admin.firestore()
@@ -62,27 +63,41 @@ exports.sendpushonnotification = onDocumentCreated(
         .doc(String(data.recipientUid))
         .get();
       if (userDoc.exists) {
-        recipientUsername = userDoc.data().username || null;
+        const userData = userDoc.data();
+        recipientSubId = userData.oneSignalSubscriptionId || null;
+        recipientUsername = userData.username || null;
       }
     } catch (e) {
       logger.warn("Failed to fetch user:", e.message);
     }
-    logger.info("Targeting", { recipientUid: data.recipientUid, username: recipientUsername });
+    logger.info("Targeting", {
+      recipientUid: data.recipientUid,
+      subscriptionId: recipientSubId,
+      username: recipientUsername,
+    });
 
     try {
-      // Build targeting: prefer username tag (more reliable), fallback to external_id
-      const targeting = recipientUsername
-        ? {
-            filters: [
-              { field: "tag", key: "username", relation: "=", value: recipientUsername },
-            ],
-          }
-        : {
-            include_aliases: {
-              external_id: [String(data.recipientUid)],
-            },
-            target_channel: "push",
-          };
+      // Best: target by Subscription ID directly (most reliable, bypasses user model)
+      // Fallback to tag-by-username, then to external_id
+      let targeting;
+      if (recipientSubId) {
+        targeting = {
+          include_subscription_ids: [recipientSubId],
+        };
+      } else if (recipientUsername) {
+        targeting = {
+          filters: [
+            { field: "tag", key: "username", relation: "=", value: recipientUsername },
+          ],
+        };
+      } else {
+        targeting = {
+          include_aliases: {
+            external_id: [String(data.recipientUid)],
+          },
+          target_channel: "push",
+        };
+      }
 
       const response = await fetch(
         "https://api.onesignal.com/notifications?c=push",
