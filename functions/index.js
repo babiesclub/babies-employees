@@ -13,6 +13,9 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const logger = require("firebase-functions/logger");
+const admin = require("firebase-admin");
+
+admin.initializeApp();
 
 const ONESIGNAL_APP_ID = "8e16a61e-f6b1-4fb2-8fe4-b35741271d00";
 const APP_URL = "https://babiesclub.github.io/babies-employees/";
@@ -51,7 +54,36 @@ exports.sendpushonnotification = onDocumentCreated(
     const body = data.body || "";
     const link = data.link || null;
 
+    // Lookup user's username from Firestore (for tag-based targeting)
+    let recipientUsername = null;
     try {
+      const userDoc = await admin.firestore()
+        .collection("users")
+        .doc(String(data.recipientUid))
+        .get();
+      if (userDoc.exists) {
+        recipientUsername = userDoc.data().username || null;
+      }
+    } catch (e) {
+      logger.warn("Failed to fetch user:", e.message);
+    }
+    logger.info("Targeting", { recipientUid: data.recipientUid, username: recipientUsername });
+
+    try {
+      // Build targeting: prefer username tag (more reliable), fallback to external_id
+      const targeting = recipientUsername
+        ? {
+            filters: [
+              { field: "tag", key: "username", relation: "=", value: recipientUsername },
+            ],
+          }
+        : {
+            include_aliases: {
+              external_id: [String(data.recipientUid)],
+            },
+            target_channel: "push",
+          };
+
       const response = await fetch(
         "https://api.onesignal.com/notifications?c=push",
         {
@@ -62,10 +94,7 @@ exports.sendpushonnotification = onDocumentCreated(
           },
           body: JSON.stringify({
             app_id: ONESIGNAL_APP_ID,
-            target_channel: "push",
-            include_aliases: {
-              external_id: [String(data.recipientUid)],
-            },
+            ...targeting,
             headings: { he: title, en: title },
             contents: { he: body, en: body },
             data: {
