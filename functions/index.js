@@ -140,8 +140,9 @@ exports.sendpushonnotification = onDocumentCreated(
       logger.info("Push sent successfully", {
         recipientUid: data.recipientUid,
         notifId: data.id,
-        recipients: result.recipients,
+        recipients: result.recipients !== undefined ? result.recipients : "undefined",
         oneSignalId: result.id,
+        fullResult: JSON.stringify(result),
       });
     } catch (e) {
       logger.error("Push send failed", { error: e.message, stack: e.stack });
