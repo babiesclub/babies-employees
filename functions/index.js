@@ -54,8 +54,8 @@ exports.sendpushonnotification = onDocumentCreated(
     const body = data.body || "";
     const link = data.link || null;
 
-    // Lookup user's OneSignal Subscription ID from Firestore
-    let recipientSubId = null;
+    // Lookup user's OneSignal Subscription IDs from Firestore (multi-device support)
+    let recipientSubIds = [];
     let recipientUsername = null;
     try {
       const userDoc = await admin.firestore()
@@ -64,7 +64,11 @@ exports.sendpushonnotification = onDocumentCreated(
         .get();
       if (userDoc.exists) {
         const userData = userDoc.data();
-        recipientSubId = userData.oneSignalSubscriptionId || null;
+        if (Array.isArray(userData.oneSignalSubscriptionIds) && userData.oneSignalSubscriptionIds.length) {
+          recipientSubIds = userData.oneSignalSubscriptionIds;
+        } else if (userData.oneSignalSubscriptionId) {
+          recipientSubIds = [userData.oneSignalSubscriptionId];
+        }
         recipientUsername = userData.username || null;
       }
     } catch (e) {
@@ -72,17 +76,18 @@ exports.sendpushonnotification = onDocumentCreated(
     }
     logger.info("Targeting", {
       recipientUid: data.recipientUid,
-      subscriptionId: recipientSubId,
+      subscriptionIds: recipientSubIds,
+      deviceCount: recipientSubIds.length,
       username: recipientUsername,
     });
 
     try {
-      // Best: target by Subscription ID directly (most reliable, bypasses user model)
+      // Best: target by Subscription IDs directly (most reliable, bypasses user model)
       // Fallback to tag-by-username, then to external_id
       let targeting;
-      if (recipientSubId) {
+      if (recipientSubIds.length > 0) {
         targeting = {
-          include_subscription_ids: [recipientSubId],
+          include_subscription_ids: recipientSubIds,
         };
       } else if (recipientUsername) {
         targeting = {
