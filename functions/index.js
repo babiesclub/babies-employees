@@ -254,10 +254,21 @@ exports.wizomonthlyreminder = onSchedule(
 const HE_MONTHS_M = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 
 async function morningAuth(apiKeyId, apiSecret) {
+  // Trim whitespace/newlines from credentials (often added by notepad/copy-paste)
+  const cleanId = String(apiKeyId || "").trim();
+  const cleanSecret = String(apiSecret || "").trim();
+  logger.info("morningAuth: credentials lengths", {
+    idLen: cleanId.length,
+    secretLen: cleanSecret.length,
+    idPreview: cleanId.slice(0, 4) + "..." + cleanId.slice(-4),
+  });
+  if (!cleanId || !cleanSecret) {
+    throw new Error("Morning credentials missing (empty after trim)");
+  }
   const response = await fetch(`${MORNING_API_BASE}/account/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: apiKeyId, secret: apiSecret }),
+    body: JSON.stringify({ id: cleanId, secret: cleanSecret }),
   });
   if (!response.ok) {
     const text = await response.text();
@@ -483,6 +494,7 @@ exports.createmorninginvoice = onCall(
 
       const docNumber = docResult.number || docResult.documentNumber || null;
       const docUrl = docResult.url ? (docResult.url.he || docResult.url.origin || null) : null;
+      const morningActualType = docResult.type != null ? Number(docResult.type) : null;
 
       const invoiceId = Date.now() + Math.floor(Math.random() * 1000);
       const invoiceData = {
@@ -490,6 +502,7 @@ exports.createmorninginvoice = onCall(
         gardenName,
         month,
         docType,
+        morningActualType: morningActualType,
         morningDocId: docResult.id || null,
         morningDocNumber: docNumber,
         morningDocUrl: docUrl,
@@ -507,6 +520,8 @@ exports.createmorninginvoice = onCall(
         success: true,
         docNumber: docNumber,
         docUrl: docUrl,
+        morningActualType: morningActualType,
+        requestedType: docType,
         invoice: invoiceData,
       };
     } catch (err) {
