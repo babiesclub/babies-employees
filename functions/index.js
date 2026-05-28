@@ -304,7 +304,10 @@ function calcChargeBaseServer(record, garden) {
   const dur = record.duration;
   const date = record.date;
   const groups = parseInt(record.groups) || 1;
-  const history = Array.isArray(garden.chargeRatesHistory) ? garden.chargeRatesHistory : [];
+  let history = Array.isArray(garden.chargeRatesHistory) ? garden.chargeRatesHistory : [];
+  if (!history.length && garden.chargeRates && Object.keys(garden.chargeRates).length > 0) {
+    history = [{from: "1970-01-01", rates: garden.chargeRates}];
+  }
   const eligible = history.filter((h) => h.from <= date).sort((a, b) => b.from.localeCompare(a.from));
   if (!eligible.length) return null;
   const rates = eligible[0].rates || {};
@@ -377,12 +380,28 @@ exports.createmorninginvoice = onCall(
     }
 
     let total = 0;
+    let nullCount = 0;
     records.forEach((r) => {
       const b = calcChargeBaseServer(r, garden);
       if (b != null) total += b;
+      else nullCount++;
     });
     if (total <= 0) {
-      throw new HttpsError("failed-precondition", "Total charge is 0");
+      const billingMode = garden.billingMode || "time";
+      const hasHistory = Array.isArray(garden.chargeRatesHistory) && garden.chargeRatesHistory.length > 0;
+      const hasOldRates = garden.chargeRates && Object.keys(garden.chargeRates).length > 0;
+      let reason = "סכום החיוב הוא 0. ";
+      if (!hasHistory && !hasOldRates) {
+        reason += "אין תעריפי חיוב מוגדרים לגן '" + gardenName + "'. ערכי את הגן והגדירי תעריפים.";
+      } else if (billingMode === "per_child") {
+        const month2 = month;
+        const count = (garden.monthlyChildCounts || {})[month2];
+        if (!count) reason += "מודל חיוב 'פר ילד' - לא הוגדר מספר ילדים לחודש " + month2 + " בגן '" + gardenName + "'.";
+        else reason += "מודל חיוב 'פר ילד' - אין תעריף perChild מוגדר.";
+      } else {
+        reason += nullCount + " מתוך " + records.length + " דיווחים ללא תעריף תואם. בדקי שיש תעריף למשך הביקור במודל '" + billingMode + "'.";
+      }
+      throw new HttpsError("failed-precondition", reason);
     }
 
     const existingInvoiceSnap = await admin.firestore()
