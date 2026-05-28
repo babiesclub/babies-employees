@@ -10,6 +10,7 @@
  */
 
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const logger = require("firebase-functions/logger");
@@ -151,6 +152,90 @@ exports.sendpushonnotification = onDocumentCreated(
       });
     } catch (e) {
       logger.error("Push send failed", { error: e.message, stack: e.stack });
+    }
+  }
+);
+
+/**
+ * wizoMonthlyReminder - Scheduled function that runs on the 20th of every month
+ * at 09:00 Israel time. Finds all instructors assigned to gardens containing "ויצו"
+ * in their name, and creates an in-app notification for each (which triggers a push
+ * via the sendpushonnotification function above).
+ */
+exports.wizomonthlyreminder = onSchedule(
+  {
+    schedule: "0 9 20 * *",
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+  },
+  async (event) => {
+    const db = admin.firestore();
+    try {
+      // 1. Find all gardens with "ויצו" in name
+      const metaGardens = await db.collection("meta").doc("gardens").get();
+      const allGardens = metaGardens.exists ? metaGardens.data().items || [] : [];
+      const wizoGardenNames = allGardens
+        .map((g) => (typeof g === "string" ? g : g.name))
+        .filter((n) => n && n.includes("ויצו"));
+
+      if (!wizoGardenNames.length) {
+        logger.info("No WIZO gardens found, skipping reminder");
+        return;
+      }
+      logger.info("WIZO gardens found", { count: wizoGardenNames.length, names: wizoGardenNames });
+
+      // 2. Find all instructors assigned to any WIZO garden
+      const usersSnap = await db.collection("users").get();
+      const wizoInstructors = [];
+      usersSnap.forEach((doc) => {
+        const u = doc.data();
+        if (u.role === "admin") return;
+        const gardens = u.gardens || [];
+        const hasWizo = gardens.some((g) => wizoGardenNames.includes(g));
+        if (hasWizo) {
+          wizoInstructors.push({ uid: doc.id, name: u.name, username: u.username });
+        }
+      });
+
+      if (!wizoInstructors.length) {
+        logger.info("No instructors assigned to WIZO gardens");
+        return;
+      }
+      logger.info("WIZO instructors found", { count: wizoInstructors.length });
+
+      // 3. Get current month for the message
+      const now = new Date();
+      const monthNames = [
+        "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
+        "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר",
+      ];
+      const monthName = monthNames[now.getMonth()];
+
+      // 4. Create a notification for each WIZO instructor
+      // (This triggers sendpushonnotification automatically via Firestore onCreate)
+      const promises = wizoInstructors.map(async (inst) => {
+        const id = Date.now() + Math.floor(Math.random() * 1000);
+        const notif = {
+          id,
+          recipientUid: inst.uid,
+          type: "wizo_reminder",
+          icon: "📋",
+          title: "תזכורת: דוח ויצו לחודש " + monthName,
+          body: "נא למלא את דוח ויצו עד סוף החודש - כל הדיווחים מתחילת החודש ועד סופו.",
+          link: { screen: "his" },
+          createdAt: new Date().toISOString(),
+          createdBy: "system",
+          createdByName: "מערכת בייביז",
+          read: false,
+          readAt: null,
+        };
+        return db.collection("notifications").doc(String(id)).set(notif);
+      });
+
+      await Promise.all(promises);
+      logger.info("WIZO reminders sent", { count: wizoInstructors.length });
+    } catch (e) {
+      logger.error("WIZO reminder failed", { error: e.message, stack: e.stack });
     }
   }
 );
