@@ -22,6 +22,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
 <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
 <script>
 window.OneSignalDeferred=window.OneSignalDeferred||[];
@@ -30,7 +31,7 @@ OneSignalDeferred.push(async function(OneSignal){try{await OneSignal.init({appId
 <script>
 const firebaseConfig={apiKey:"AIzaSyDeH8itkVnfW6KnA2J5i5_7H2aMMgwEFB4",authDomain:"babiez-app.firebaseapp.com",projectId:"babiez-app",storageBucket:"babiez-app.firebasestorage.app",messagingSenderId:"224796690946",appId:"1:224796690946:web:d1b2281bb439d39529751b"};
 window.fbDb=null;window.fbAuth=null;window.fbSecondaryAuth=null;window.fbStorage=null;
-try{if(typeof firebase!=='undefined'){firebase.initializeApp(firebaseConfig);window.fbDb=firebase.firestore();window.fbAuth=firebase.auth();window.fbStorage=firebase.storage();firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(e=>console.warn('persistence:',e));const sec=firebase.initializeApp(firebaseConfig,'secondary');window.fbSecondaryAuth=sec.auth()}}catch(e){console.error('Firebase init failed:',e)}
+try{if(typeof firebase!=='undefined'){firebase.initializeApp(firebaseConfig);window.fbDb=firebase.firestore();window.fbAuth=firebase.auth();window.fbStorage=firebase.storage();window.fbFunctions=firebase.app().functions('us-central1');firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(e=>console.warn('persistence:',e));const sec=firebase.initializeApp(firebaseConfig,'secondary');window.fbSecondaryAuth=sec.auth()}}catch(e){console.error('Firebase init failed:',e)}
 </script>
 <style>
 :root{--p:#2D6A4F;--pl:#52B788;--pxl:#D8F3DC;--acc:#F77F00;--bg:#F2F5F3;--sur:#fff;--brd:#DDE8E2;--txt:#1A2E23;--mut:#7A9B85;--dan:#C0392B;--danl:#FDECEA;--bnav:70px;--hdr:54px;--r:16px;--rs:12px}

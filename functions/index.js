@@ -11,12 +11,18 @@
 
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 
 admin.initializeApp();
+
+const morningApiKeyId = defineSecret("MORNING_API_KEY_ID");
+const morningApiSecret = defineSecret("MORNING_API_SECRET");
+const MORNING_API_BASE = "https://api.greeninvoice.co.il/api/v1";
+const VAT_RATE = 0.18;
 
 const ONESIGNAL_APP_ID = "8e16a61e-f6b1-4fb2-8fe4-b35741271d00";
 const APP_URL = "https://babiesclub.github.io/babies-employees/";
@@ -237,5 +243,218 @@ exports.wizomonthlyreminder = onSchedule(
     } catch (e) {
       logger.error("WIZO reminder failed", { error: e.message, stack: e.stack });
     }
+  }
+);
+
+/**
+ * Morning (Green Invoice) API integration - createmorninginvoice
+ * Called from client to create an invoice in Morning for a specific garden + month
+ */
+
+const HE_MONTHS_M = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+
+async function morningAuth(apiKeyId, apiSecret) {
+  const response = await fetch(`${MORNING_API_BASE}/account/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: apiKeyId, secret: apiSecret }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Morning auth failed: ${response.status} ${text}`);
+  }
+  const data = await response.json();
+  return data.token;
+}
+
+function buildInvoiceDescription(records, garden) {
+  const billingMode = garden.billingMode || "time";
+  const byDate = {};
+  records.forEach((r) => {
+    if (!byDate[r.date]) byDate[r.date] = [];
+    byDate[r.date].push(r);
+  });
+  const lines = [];
+  const sortedDates = Object.keys(byDate).sort();
+  for (const date of sortedDates) {
+    const dateRecs = byDate[date];
+    const parts = date.split("-");
+    const dateStr = parts[2] + "/" + parts[1] + "/" + parts[0];
+    if (billingMode === "per_group") {
+      const totalGroups = dateRecs.reduce((s, r) => s + (parseFloat(r.groups) || 0), 0);
+      lines.push(dateStr + " - " + totalGroups + " קבוצות (פר קבוצה)");
+    } else if (billingMode === "per_child") {
+      const totalReports = dateRecs.length;
+      const month = date.slice(0, 7);
+      const childCount = (garden.monthlyChildCounts || {})[month] || 0;
+      lines.push(dateStr + " - " + totalReports + " פעילות עם " + childCount + " ילדים");
+    } else {
+      for (const r of dateRecs) {
+        const grp = parseInt(r.groups) || 1;
+        const dur = r.duration || "?";
+        lines.push(dateStr + " - " + grp + " פעילות בת " + dur + " דק׳");
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+function calcChargeBaseServer(record, garden) {
+  const billingMode = (garden && garden.billingMode) || "time";
+  const dur = record.duration;
+  const date = record.date;
+  const groups = parseInt(record.groups) || 1;
+  const history = Array.isArray(garden.chargeRatesHistory) ? garden.chargeRatesHistory : [];
+  const eligible = history.filter((h) => h.from <= date).sort((a, b) => b.from.localeCompare(a.from));
+  if (!eligible.length) return null;
+  const rates = eligible[0].rates || {};
+
+  if (billingMode === "per_child") {
+    const rate = rates.perChild;
+    const month = date.slice(0, 7);
+    const count = (garden.monthlyChildCounts || {})[month];
+    if (rate && count) return +(rate * count).toFixed(2);
+    return null;
+  }
+  if (billingMode === "per_group") {
+    const rate = rates.perGroup;
+    if (rate) return +(rate * groups).toFixed(2);
+    return null;
+  }
+  const exact = rates[String(dur)];
+  if (exact != null && Number(exact) > 0) return Number(exact);
+  const validKeys = Object.keys(rates)
+    .filter((k) => !isNaN(Number(k)) && rates[k] && Number(rates[k]) > 0)
+    .sort((a, b) => Number(a) - Number(b));
+  if (!validKeys.length) return null;
+  const baseRate = Number(rates[validKeys[0]]);
+  const ratio = Number(dur) / Number(validKeys[0]);
+  return +(baseRate * ratio).toFixed(2);
+}
+
+exports.createmorninginvoice = onCall(
+  {
+    secrets: [morningApiKeyId, morningApiSecret],
+    region: "us-central1",
+    timeoutSeconds: 60,
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be logged in");
+    }
+    const callerUid = request.auth.uid;
+    const callerDoc = await admin.firestore().collection("users").doc(callerUid).get();
+    if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+
+    const data = request.data || {};
+    const gardenName = data.gardenName;
+    const month = data.month;
+    const docTypeOverride = data.docTypeOverride;
+    if (!gardenName || !month) {
+      throw new HttpsError("invalid-argument", "gardenName and month required");
+    }
+
+    const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
+    const allGardens = gardensDoc.exists ? gardensDoc.data().items || [] : [];
+    const garden = allGardens.find((g) => (typeof g === "string" ? g : g.name) === gardenName);
+    if (!garden || typeof garden !== "object") {
+      throw new HttpsError("not-found", "Garden not found: " + gardenName);
+    }
+    if (!garden.morningClientId) {
+      throw new HttpsError("failed-precondition", "Garden has no Morning Client ID: " + gardenName);
+    }
+
+    const recordsSnap = await admin.firestore().collection("records").where("garden", "==", gardenName).get();
+    const records = [];
+    recordsSnap.forEach((d) => {
+      const r = d.data();
+      if (r.date && r.date.startsWith(month)) records.push(r);
+    });
+    if (!records.length) {
+      throw new HttpsError("not-found", "No records for " + gardenName + " in " + month);
+    }
+
+    let total = 0;
+    records.forEach((r) => {
+      const b = calcChargeBaseServer(r, garden);
+      if (b != null) total += b;
+    });
+    if (total <= 0) {
+      throw new HttpsError("failed-precondition", "Total charge is 0");
+    }
+
+    const existingInvoiceSnap = await admin.firestore()
+      .collection("invoices")
+      .where("gardenName", "==", gardenName)
+      .where("month", "==", month)
+      .where("status", "==", "created")
+      .limit(1)
+      .get();
+    if (!existingInvoiceSnap.empty) {
+      throw new HttpsError("already-exists", "Invoice already exists for " + gardenName + " in " + month);
+    }
+
+    const monthParts = month.split("-");
+    const monthName = HE_MONTHS_M[parseInt(monthParts[1]) - 1];
+    const description = buildInvoiceDescription(records, garden);
+
+    const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
+    const docType = parseInt(docTypeOverride || garden.morningDocType || "305");
+
+    const payload = {
+      type: docType,
+      date: new Date().toISOString().slice(0, 10),
+      lang: "he",
+      currency: "ILS",
+      vatType: 1,
+      client: { id: String(garden.morningClientId) },
+      income: [
+        {
+          description: "חוגי בייביז לחודש " + monthName + " " + monthParts[0] + "\n" + description,
+          quantity: 1,
+          price: total,
+          currency: "ILS",
+          vatType: 1,
+        },
+      ],
+      remarks: "הופק אוטומטית ע\"י אפליקציית בייביז · " + monthName + " " + monthParts[0],
+    };
+
+    const docResponse = await fetch(`${MORNING_API_BASE}/documents`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const docResult = await docResponse.json();
+    if (!docResponse.ok || docResult.errorCode) {
+      logger.error("Morning create doc failed", { status: docResponse.status, result: docResult });
+      throw new HttpsError("internal", "Morning API error: " + (docResult.errorMessage || docResponse.status));
+    }
+
+    const invoiceId = Date.now() + Math.floor(Math.random() * 1000);
+    const invoiceData = {
+      id: invoiceId,
+      gardenName,
+      month,
+      docType,
+      morningDocId: docResult.id || null,
+      morningDocNumber: docResult.number || null,
+      morningDocUrl: docResult.url ? (docResult.url.he || docResult.url.origin || null) : null,
+      totalAmount: total,
+      vatAmount: +(total * VAT_RATE).toFixed(2),
+      recordCount: records.length,
+      createdAt: new Date().toISOString(),
+      createdBy: callerUid,
+      status: "created",
+    };
+    await admin.firestore().collection("invoices").doc(String(invoiceId)).set(invoiceData);
+    logger.info("Morning invoice created", { gardenName, month, morningDocNumber: invoiceData.morningDocNumber });
+
+    return { success: true, invoice: invoiceData };
   }
 );
