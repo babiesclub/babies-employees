@@ -342,138 +342,180 @@ exports.createmorninginvoice = onCall(
     timeoutSeconds: 60,
   },
   async (request) => {
-    if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Must be logged in");
-    }
-    const callerUid = request.auth.uid;
-    const callerDoc = await admin.firestore().collection("users").doc(callerUid).get();
-    if (!callerDoc.exists || callerDoc.data().role !== "admin") {
-      throw new HttpsError("permission-denied", "Admin only");
-    }
-
-    const data = request.data || {};
-    const gardenName = data.gardenName;
-    const month = data.month;
-    const docTypeOverride = data.docTypeOverride;
-    if (!gardenName || !month) {
-      throw new HttpsError("invalid-argument", "gardenName and month required");
-    }
-
-    const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
-    const allGardens = gardensDoc.exists ? gardensDoc.data().items || [] : [];
-    const garden = allGardens.find((g) => (typeof g === "string" ? g : g.name) === gardenName);
-    if (!garden || typeof garden !== "object") {
-      throw new HttpsError("not-found", "Garden not found: " + gardenName);
-    }
-    if (!garden.morningClientId) {
-      throw new HttpsError("failed-precondition", "Garden has no Morning Client ID: " + gardenName);
-    }
-
-    const recordsSnap = await admin.firestore().collection("records").where("garden", "==", gardenName).get();
-    const records = [];
-    recordsSnap.forEach((d) => {
-      const r = d.data();
-      if (r.date && r.date.startsWith(month)) records.push(r);
-    });
-    if (!records.length) {
-      throw new HttpsError("not-found", "No records for " + gardenName + " in " + month);
-    }
-
-    let total = 0;
-    let nullCount = 0;
-    records.forEach((r) => {
-      const b = calcChargeBaseServer(r, garden);
-      if (b != null) total += b;
-      else nullCount++;
-    });
-    if (total <= 0) {
-      const billingMode = garden.billingMode || "time";
-      const hasHistory = Array.isArray(garden.chargeRatesHistory) && garden.chargeRatesHistory.length > 0;
-      const hasOldRates = garden.chargeRates && Object.keys(garden.chargeRates).length > 0;
-      let reason = "סכום החיוב הוא 0. ";
-      if (!hasHistory && !hasOldRates) {
-        reason += "אין תעריפי חיוב מוגדרים לגן '" + gardenName + "'. ערכי את הגן והגדירי תעריפים.";
-      } else if (billingMode === "per_child") {
-        const month2 = month;
-        const count = (garden.monthlyChildCounts || {})[month2];
-        if (!count) reason += "מודל חיוב 'פר ילד' - לא הוגדר מספר ילדים לחודש " + month2 + " בגן '" + gardenName + "'.";
-        else reason += "מודל חיוב 'פר ילד' - אין תעריף perChild מוגדר.";
-      } else {
-        reason += nullCount + " מתוך " + records.length + " דיווחים ללא תעריף תואם. בדקי שיש תעריף למשך הביקור במודל '" + billingMode + "'.";
+    try {
+      logger.info("createmorninginvoice: START", { data: request.data, uid: request.auth && request.auth.uid });
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Must be logged in");
       }
-      throw new HttpsError("failed-precondition", reason);
-    }
+      const callerUid = request.auth.uid;
+      const callerDoc = await admin.firestore().collection("users").doc(callerUid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
 
-    const existingInvoiceSnap = await admin.firestore()
-      .collection("invoices")
-      .where("gardenName", "==", gardenName)
-      .where("month", "==", month)
-      .where("status", "==", "created")
-      .limit(1)
-      .get();
-    if (!existingInvoiceSnap.empty) {
-      throw new HttpsError("already-exists", "Invoice already exists for " + gardenName + " in " + month);
-    }
+      const data = request.data || {};
+      const gardenName = data.gardenName;
+      const month = data.month;
+      const docTypeOverride = data.docTypeOverride;
+      if (!gardenName || !month) {
+        throw new HttpsError("invalid-argument", "gardenName and month required");
+      }
 
-    const monthParts = month.split("-");
-    const monthName = HE_MONTHS_M[parseInt(monthParts[1]) - 1];
-    const description = buildInvoiceDescription(records, garden);
+      const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
+      const allGardens = gardensDoc.exists ? gardensDoc.data().items || [] : [];
+      const garden = allGardens.find((g) => (typeof g === "string" ? g : g.name) === gardenName);
+      if (!garden || typeof garden !== "object") {
+        throw new HttpsError("not-found", "Garden not found: " + gardenName);
+      }
+      logger.info("createmorninginvoice: garden found", {
+        name: garden.name,
+        billingMode: garden.billingMode,
+        hasChargeRatesHistory: Array.isArray(garden.chargeRatesHistory),
+        hasChargeRates: !!garden.chargeRates,
+        morningClientId: garden.morningClientId,
+        morningDocType: garden.morningDocType,
+      });
+      if (!garden.morningClientId) {
+        throw new HttpsError("failed-precondition", "Garden has no Morning Client ID: " + gardenName);
+      }
 
-    const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
-    const docType = parseInt(docTypeOverride || garden.morningDocType || "305");
+      const recordsSnap = await admin.firestore().collection("records").where("garden", "==", gardenName).get();
+      const records = [];
+      recordsSnap.forEach((d) => {
+        const r = d.data();
+        if (r.date && r.date.startsWith(month)) records.push(r);
+      });
+      logger.info("createmorninginvoice: records loaded", { count: records.length, month });
+      if (!records.length) {
+        throw new HttpsError("not-found", "אין דיווחים לגן '" + gardenName + "' לחודש " + month);
+      }
 
-    const payload = {
-      type: docType,
-      date: new Date().toISOString().slice(0, 10),
-      lang: "he",
-      currency: "ILS",
-      vatType: 1,
-      client: { id: String(garden.morningClientId) },
-      income: [
-        {
-          description: "חוגי בייביז לחודש " + monthName + " " + monthParts[0] + "\n" + description,
-          quantity: 1,
-          price: total,
-          currency: "ILS",
-          vatType: 1,
+      let total = 0;
+      let nullCount = 0;
+      records.forEach((r) => {
+        const b = calcChargeBaseServer(r, garden);
+        if (b != null) total += b;
+        else nullCount++;
+      });
+      logger.info("createmorninginvoice: total calculated", { total, nullCount, records: records.length });
+      if (total <= 0) {
+        const billingMode = garden.billingMode || "time";
+        const hasHistory = Array.isArray(garden.chargeRatesHistory) && garden.chargeRatesHistory.length > 0;
+        const hasOldRates = garden.chargeRates && Object.keys(garden.chargeRates).length > 0;
+        let reason = "סכום החיוב הוא 0. ";
+        if (!hasHistory && !hasOldRates) {
+          reason += "אין תעריפי חיוב מוגדרים לגן '" + gardenName + "'. ערכי את הגן והגדירי תעריפים.";
+        } else if (billingMode === "per_child") {
+          const count = (garden.monthlyChildCounts || {})[month];
+          if (!count) reason += "מודל חיוב 'פר ילד' - לא הוגדר מספר ילדים לחודש " + month + " בגן '" + gardenName + "'.";
+          else reason += "מודל חיוב 'פר ילד' - אין תעריף perChild מוגדר.";
+        } else {
+          reason += nullCount + " מתוך " + records.length + " דיווחים ללא תעריף תואם. בדקי שיש תעריף למשך הביקור במודל '" + billingMode + "'.";
+        }
+        throw new HttpsError("failed-precondition", reason);
+      }
+
+      const existingInvoiceSnap = await admin.firestore()
+        .collection("invoices")
+        .where("gardenName", "==", gardenName)
+        .where("month", "==", month)
+        .where("status", "==", "created")
+        .limit(1)
+        .get();
+      if (!existingInvoiceSnap.empty) {
+        const existing = existingInvoiceSnap.docs[0].data();
+        logger.info("createmorninginvoice: returning existing", { id: existing.id });
+        return {
+          success: true,
+          existed: true,
+          docNumber: existing.morningDocNumber || existing.number || "",
+          docUrl: existing.morningDocUrl || "",
+          invoice: existing,
+        };
+      }
+
+      const monthParts = month.split("-");
+      const monthName = HE_MONTHS_M[parseInt(monthParts[1]) - 1];
+      const description = buildInvoiceDescription(records, garden);
+
+      logger.info("createmorninginvoice: calling morningAuth");
+      const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
+      logger.info("createmorninginvoice: morningAuth OK, got token len=" + (token ? token.length : 0));
+
+      const docType = parseInt(docTypeOverride || garden.morningDocType || "305");
+
+      const payload = {
+        type: docType,
+        date: new Date().toISOString().slice(0, 10),
+        lang: "he",
+        currency: "ILS",
+        vatType: 1,
+        client: { id: String(garden.morningClientId) },
+        income: [
+          {
+            description: "חוגי בייביז לחודש " + monthName + " " + monthParts[0] + "\n" + description,
+            quantity: 1,
+            price: total,
+            currency: "ILS",
+            vatType: 1,
+          },
+        ],
+        remarks: "הופק אוטומטית ע\"י אפליקציית בייביז · " + monthName + " " + monthParts[0],
+      };
+      logger.info("createmorninginvoice: posting to Morning", { docType, total, clientId: garden.morningClientId });
+
+      const docResponse = await fetch(`${MORNING_API_BASE}/documents`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-      ],
-      remarks: "הופק אוטומטית ע\"י אפליקציית בייביז · " + monthName + " " + monthParts[0],
-    };
+        body: JSON.stringify(payload),
+      });
+      const docResultText = await docResponse.text();
+      let docResult;
+      try { docResult = JSON.parse(docResultText); } catch (e) { docResult = { raw: docResultText }; }
+      logger.info("createmorninginvoice: Morning response", { status: docResponse.status, result: docResult });
+      if (!docResponse.ok || docResult.errorCode) {
+        const msg = docResult.errorMessage || docResult.message || ("HTTP " + docResponse.status + ": " + docResultText.slice(0, 200));
+        throw new HttpsError("internal", "מורנינג החזירה שגיאה: " + msg);
+      }
 
-    const docResponse = await fetch(`${MORNING_API_BASE}/documents`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const docResult = await docResponse.json();
-    if (!docResponse.ok || docResult.errorCode) {
-      logger.error("Morning create doc failed", { status: docResponse.status, result: docResult });
-      throw new HttpsError("internal", "Morning API error: " + (docResult.errorMessage || docResponse.status));
+      const docNumber = docResult.number || docResult.documentNumber || null;
+      const docUrl = docResult.url ? (docResult.url.he || docResult.url.origin || null) : null;
+
+      const invoiceId = Date.now() + Math.floor(Math.random() * 1000);
+      const invoiceData = {
+        id: invoiceId,
+        gardenName,
+        month,
+        docType,
+        morningDocId: docResult.id || null,
+        morningDocNumber: docNumber,
+        morningDocUrl: docUrl,
+        totalAmount: total,
+        vatAmount: +(total * VAT_RATE).toFixed(2),
+        recordCount: records.length,
+        createdAt: new Date().toISOString(),
+        createdBy: callerUid,
+        status: "created",
+      };
+      await admin.firestore().collection("invoices").doc(String(invoiceId)).set(invoiceData);
+      logger.info("createmorninginvoice: SUCCESS", { gardenName, month, docNumber });
+
+      return {
+        success: true,
+        docNumber: docNumber,
+        docUrl: docUrl,
+        invoice: invoiceData,
+      };
+    } catch (err) {
+      if (err instanceof HttpsError) {
+        logger.warn("createmorninginvoice: HttpsError", { code: err.code, message: err.message });
+        throw err;
+      }
+      logger.error("createmorninginvoice: UNCAUGHT", { message: err.message, stack: err.stack, name: err.name });
+      throw new HttpsError("internal", "שגיאה לא צפויה: " + (err.message || String(err)));
     }
-
-    const invoiceId = Date.now() + Math.floor(Math.random() * 1000);
-    const invoiceData = {
-      id: invoiceId,
-      gardenName,
-      month,
-      docType,
-      morningDocId: docResult.id || null,
-      morningDocNumber: docResult.number || null,
-      morningDocUrl: docResult.url ? (docResult.url.he || docResult.url.origin || null) : null,
-      totalAmount: total,
-      vatAmount: +(total * VAT_RATE).toFixed(2),
-      recordCount: records.length,
-      createdAt: new Date().toISOString(),
-      createdBy: callerUid,
-      status: "created",
-    };
-    await admin.firestore().collection("invoices").doc(String(invoiceId)).set(invoiceData);
-    logger.info("Morning invoice created", { gardenName, month, morningDocNumber: invoiceData.morningDocNumber });
-
-    return { success: true, invoice: invoiceData };
   }
 );
