@@ -534,3 +534,37 @@ exports.createmorninginvoice = onCall(
     }
   }
 );
+
+/**
+ * Delete local invoice record(s) - admin only
+ * Does NOT delete the document in Morning - only our local Firestore tracking record.
+ * Used for testing / re-creating with different doc type.
+ */
+exports.deletelocalinvoice = onCall(
+  { region: "us-central1", timeoutSeconds: 30 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { gardenName, month } = request.data || {};
+      if (!gardenName || !month) throw new HttpsError("invalid-argument", "gardenName and month required");
+      const snap = await admin.firestore().collection("invoices")
+        .where("gardenName", "==", gardenName)
+        .where("month", "==", month)
+        .get();
+      if (snap.empty) return { deleted: 0 };
+      const batch = admin.firestore().batch();
+      snap.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      logger.info("deletelocalinvoice: deleted", { gardenName, month, count: snap.size });
+      return { deleted: snap.size };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("deletelocalinvoice: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
