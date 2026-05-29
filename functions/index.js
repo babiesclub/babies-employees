@@ -453,7 +453,7 @@ exports.createmorninginvoice = onCall(
       const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
       logger.info("createmorninginvoice: morningAuth OK, got token len=" + (token ? token.length : 0));
 
-      const docType = parseInt(docTypeOverride || garden.morningDocType || "305");
+      const docType = parseInt(docTypeOverride || garden.morningDocType || "300");
 
       const payload = {
         type: docType,
