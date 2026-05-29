@@ -536,6 +536,32 @@ exports.createmorninginvoice = onCall(
 );
 
 /**
+ * List invoices for a month (admin only) - returns simplified array for UI display
+ */
+exports.listinvoices = onCall(
+  { region: "us-central1", timeoutSeconds: 30 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { month } = request.data || {};
+      if (!month) throw new HttpsError("invalid-argument", "month required");
+      const snap = await admin.firestore().collection("invoices").where("month", "==", month).get();
+      const invoices = [];
+      snap.forEach((d) => invoices.push(d.data()));
+      return { invoices };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("listinvoices: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
  * Delete local invoice record(s) - admin only
  * Does NOT delete the document in Morning - only our local Firestore tracking record.
  * Used for testing / re-creating with different doc type.
