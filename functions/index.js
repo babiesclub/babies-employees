@@ -456,16 +456,16 @@ exports.createmorninginvoice = onCall(
       const docType = parseInt(docTypeOverride || garden.morningDocType || "300");
 
       // vatType in Morning API:
-      //   0 = INCLUDED (price includes VAT)
+      //   0 = REGULAR (default - VAT 18% added on top of price)
       //   1 = EXEMPT (no VAT - פטור)
-      //   2 = EXCLUDED (price is before VAT - Morning adds 18% on top)
-      // Our `total` is the base amount BEFORE VAT, so we use vatType: 2
+      //   2 = INCLUDED (price already includes VAT)
+      // Our `total` is the base amount BEFORE VAT, so we use vatType: 0
       const payload = {
         type: docType,
         date: new Date().toISOString().slice(0, 10),
         lang: "he",
         currency: "ILS",
-        vatType: 2,
+        vatType: 0,
         client: { id: String(garden.morningClientId) },
         income: [
           {
@@ -473,7 +473,7 @@ exports.createmorninginvoice = onCall(
             quantity: 1,
             price: total,
             currency: "ILS",
-            vatType: 2,
+            vatType: 0,
           },
         ],
         remarks: "הופק אוטומטית ע\"י אפליקציית בייביז · " + monthName + " " + monthParts[0],
