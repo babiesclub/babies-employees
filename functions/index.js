@@ -1070,12 +1070,13 @@ exports.listwhatsappconversations = onCall(
       }
       const snap = await admin.firestore()
         .collection("whatsapp_conversations")
-        .orderBy("lastMessageAt", "desc")
-        .limit(100)
+        .limit(200)
         .get();
       const conversations = [];
       snap.forEach((d) => conversations.push(d.data()));
-      return { conversations };
+      // Sort in memory by lastMessageAt desc
+      conversations.sort((a, b) => Number(b.lastMessageAt || 0) - Number(a.lastMessageAt || 0));
+      return { conversations: conversations.slice(0, 100) };
     } catch (err) {
       if (err instanceof HttpsError) throw err;
       logger.error("listwhatsappconversations: UNCAUGHT", { message: err.message });
@@ -1098,30 +1099,31 @@ exports.getwhatsappmessages = onCall(
       }
       const { phone, limit } = request.data || {};
       if (!phone) throw new HttpsError("invalid-argument", "Missing 'phone'");
+      // Query without orderBy to avoid composite index requirement - sort in memory
       const snap = await admin.firestore()
         .collection("whatsapp_messages")
         .where("conversationPhone", "==", phone)
-        .orderBy("timestamp", "desc")
-        .limit(Math.min(Number(limit || 50), 200))
+        .limit(Math.min(Number(limit || 200), 500))
         .get();
       const messages = [];
       snap.forEach((d) => messages.push(d.data()));
       // Fallback: messages saved before we added conversationPhone field
       if (messages.length === 0) {
         const [inSnap, outSnap] = await Promise.all([
-          admin.firestore().collection("whatsapp_messages").where("from", "==", phone).orderBy("timestamp", "desc").limit(100).get(),
-          admin.firestore().collection("whatsapp_messages").where("to", "==", phone).orderBy("timestamp", "desc").limit(100).get(),
+          admin.firestore().collection("whatsapp_messages").where("from", "==", phone).limit(200).get(),
+          admin.firestore().collection("whatsapp_messages").where("to", "==", phone).limit(200).get(),
         ]);
         inSnap.forEach((d) => messages.push(d.data()));
         outSnap.forEach((d) => messages.push(d.data()));
-        messages.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
       }
+      // Sort by timestamp ascending (oldest first for chat UI)
+      messages.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
       // Mark as read
       await admin.firestore().collection("whatsapp_conversations").doc(phone).set(
         { unreadCount: 0, lastReadAt: new Date().toISOString() },
         { merge: true }
       );
-      return { messages: messages.reverse() }; // oldest first for chat UI
+      return { messages };
     } catch (err) {
       if (err instanceof HttpsError) throw err;
       logger.error("getwhatsappmessages: UNCAUGHT", { message: err.message });
