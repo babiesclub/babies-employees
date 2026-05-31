@@ -1003,6 +1003,7 @@ exports.receivewhatsapp = onRequest(
                 content,
                 timestamp,
                 read: false,
+                starred: false,
                 createdAt: new Date(timestamp).toISOString(),
                 raw: msg,
               };
@@ -1021,6 +1022,37 @@ exports.receivewhatsapp = onRequest(
                 },
                 { merge: true }
               );
+
+              // Create a notification for all admins (triggers OneSignal push automatically)
+              try {
+                const adminsSnap = await admin.firestore().collection("users").where("role", "==", "admin").get();
+                const notifPromises = [];
+                adminsSnap.forEach((adminDoc) => {
+                  const adminData = adminDoc.data();
+                  const notifId = Date.now() + Math.floor(Math.random() * 1000);
+                  const preview = (content.text || content.buttonReply?.title || ("[" + type + "]")).slice(0, 80);
+                  notifPromises.push(
+                    admin.firestore().collection("notifications").doc(String(notifId)).set({
+                      id: notifId,
+                      recipientUid: adminDoc.id,
+                      type: "whatsapp_message",
+                      icon: "💬",
+                      title: "הודעת WhatsApp חדשה: " + (senderName || from),
+                      body: preview,
+                      link: { screen: "wai" },
+                      createdAt: new Date().toISOString(),
+                      createdBy: "system",
+                      createdByName: from,
+                      read: false,
+                      readAt: null,
+                    })
+                  );
+                });
+                await Promise.all(notifPromises);
+              } catch (e) {
+                logger.warn("receivewhatsapp: failed to create admin notification", { error: e.message });
+              }
+
               logger.info("receivewhatsapp: message saved", { from, type, msgId });
             } catch (e) {
               logger.error("receivewhatsapp: failed to process message", { error: e.message, msg });
@@ -1127,6 +1159,93 @@ exports.getwhatsappmessages = onCall(
     } catch (err) {
       if (err instanceof HttpsError) throw err;
       logger.error("getwhatsappmessages: UNCAUGHT", { message: err.message });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * setwapinned - Pin/unpin a conversation (admin only)
+ */
+exports.setwapinned = onCall(
+  { region: "us-central1", timeoutSeconds: 10 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { phone, pinned } = request.data || {};
+      if (!phone) throw new HttpsError("invalid-argument", "Missing phone");
+      await admin.firestore().collection("whatsapp_conversations").doc(phone).set(
+        { pinned: !!pinned, pinnedAt: pinned ? Date.now() : null },
+        { merge: true }
+      );
+      return { success: true };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * setwastarred - Star/unstar a message (admin only)
+ */
+exports.setwastarred = onCall(
+  { region: "us-central1", timeoutSeconds: 10 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { messageId, starred } = request.data || {};
+      if (!messageId) throw new HttpsError("invalid-argument", "Missing messageId");
+      await admin.firestore().collection("whatsapp_messages").doc(messageId).set(
+        { starred: !!starred },
+        { merge: true }
+      );
+      return { success: true };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * getwamediaurl - Get a downloadable URL for a media message from WhatsApp
+ * (Meta provides media via media_id - we need to fetch the URL using the access token)
+ */
+exports.getwamediaurl = onCall(
+  {
+    secrets: [whatsappAccessToken],
+    region: "us-central1",
+    timeoutSeconds: 20,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { mediaId } = request.data || {};
+      if (!mediaId) throw new HttpsError("invalid-argument", "Missing mediaId");
+      const token = String(whatsappAccessToken.value()).trim();
+      const r = await fetch(`${WHATSAPP_API_BASE}/${mediaId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new HttpsError("internal", "Failed to fetch media URL: " + r.status);
+      const data = await r.json();
+      // URL is valid for 5 minutes - client should download immediately
+      return { url: data.url, mimeType: data.mime_type, sha256: data.sha256 };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("getwamediaurl: UNCAUGHT", { message: err.message });
       throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
     }
   }
