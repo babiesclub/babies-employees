@@ -835,6 +835,70 @@ exports.getwhatsappstatus = onCall(
 );
 
 /**
+ * registerwhatsapp - Register the phone number with WhatsApp Cloud API
+ * One-time setup: registers the phone + sets 2FA PIN
+ * Required before sendwhatsapp can work
+ */
+exports.registerwhatsapp = onCall(
+  {
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+    region: "us-central1",
+    timeoutSeconds: 30,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { pin } = request.data || {};
+      if (!pin || !/^\d{6}$/.test(String(pin))) {
+        throw new HttpsError("invalid-argument", "PIN must be exactly 6 digits");
+      }
+
+      const phoneId = String(whatsappPhoneNumberId.value()).trim();
+      const token = String(whatsappAccessToken.value()).trim();
+      const url = `${WHATSAPP_API_BASE}/${phoneId}/register`;
+      logger.info("registerwhatsapp: registering phone", { phoneId });
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          pin: String(pin),
+        }),
+      });
+
+      const respText = await response.text();
+      let result;
+      try { result = JSON.parse(respText); } catch (e) { result = { raw: respText }; }
+      logger.info("registerwhatsapp: response", { status: response.status, result });
+
+      if (!response.ok || result.error) {
+        const errMsg = (result.error && (result.error.message || result.error.error_user_msg)) || ("HTTP " + response.status);
+        throw new HttpsError("internal", "Register failed: " + errMsg);
+      }
+
+      logger.info("registerwhatsapp: SUCCESS", { phoneId });
+      return {
+        success: true,
+        message: "המספר נרשם בהצלחה ב-Cloud API! עכשיו אפשר לשלוח הודעות.",
+        result,
+      };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("registerwhatsapp: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
  * setwhatsappconfig - Update WhatsApp budget config (admin only)
  */
 exports.setwhatsappconfig = onCall(
