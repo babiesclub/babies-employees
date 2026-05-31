@@ -1332,6 +1332,134 @@ exports.replywhatsapp = onCall(
 );
 
 /**
+ * ===========================================================================
+ * Tasks (Project + Per-Conversation)
+ * ===========================================================================
+ * Stored in 'tasks' collection. Project tasks have conversationPhone="".
+ * Per-conversation tasks have conversationPhone set to the phone number.
+ */
+
+exports.listtasks = onCall(
+  { region: "us-central1", timeoutSeconds: 10 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { conversationPhone } = request.data || {};
+      let query = admin.firestore().collection("tasks");
+      if (conversationPhone != null) {
+        query = query.where("conversationPhone", "==", String(conversationPhone || ""));
+      }
+      const snap = await query.limit(500).get();
+      const tasks = [];
+      snap.forEach((d) => tasks.push(d.data()));
+      // Sort: in-progress first, then pending, then completed; within each by priority then createdAt desc
+      const statusOrder = { "in_progress": 0, "pending": 1, "completed": 2 };
+      const priorityOrder = { "high": 0, "normal": 1, "low": 2 };
+      tasks.sort((a, b) => {
+        const sa = statusOrder[a.status] ?? 1;
+        const sb = statusOrder[b.status] ?? 1;
+        if (sa !== sb) return sa - sb;
+        const pa = priorityOrder[a.priority] ?? 1;
+        const pb = priorityOrder[b.priority] ?? 1;
+        if (pa !== pb) return pa - pb;
+        return Number(b.createdAt || 0) - Number(a.createdAt || 0);
+      });
+      return { tasks };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+exports.addtask = onCall(
+  { region: "us-central1", timeoutSeconds: 10 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { title, description, priority, dueDate, conversationPhone } = request.data || {};
+      if (!title || !String(title).trim()) throw new HttpsError("invalid-argument", "Title required");
+      const id = Date.now() + "_" + Math.random().toString(36).slice(2, 9);
+      const task = {
+        id,
+        title: String(title).trim(),
+        description: description ? String(description).trim() : "",
+        priority: priority || "normal",
+        dueDate: dueDate || null,
+        status: "pending",
+        conversationPhone: String(conversationPhone || ""),
+        createdAt: Date.now(),
+        createdBy: request.auth.uid,
+        createdByName: callerDoc.data().name || "",
+        updatedAt: Date.now(),
+      };
+      await admin.firestore().collection("tasks").doc(id).set(task);
+      return { success: true, task };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+exports.updatetask = onCall(
+  { region: "us-central1", timeoutSeconds: 10 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { id, title, description, priority, dueDate, status } = request.data || {};
+      if (!id) throw new HttpsError("invalid-argument", "id required");
+      const update = { updatedAt: Date.now() };
+      if (title != null) update.title = String(title).trim();
+      if (description != null) update.description = String(description).trim();
+      if (priority != null) update.priority = priority;
+      if (dueDate !== undefined) update.dueDate = dueDate;
+      if (status != null) {
+        update.status = status;
+        if (status === "completed") update.completedAt = Date.now();
+      }
+      await admin.firestore().collection("tasks").doc(id).update(update);
+      return { success: true };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+exports.deletetask = onCall(
+  { region: "us-central1", timeoutSeconds: 10 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { id } = request.data || {};
+      if (!id) throw new HttpsError("invalid-argument", "id required");
+      await admin.firestore().collection("tasks").doc(id).delete();
+      return { success: true };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
  * setwhatsappconfig - Update WhatsApp budget config (admin only)
  */
 exports.setwhatsappconfig = onCall(
