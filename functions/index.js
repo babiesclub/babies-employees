@@ -11,7 +11,7 @@
 
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const logger = require("firebase-functions/logger");
@@ -36,6 +36,8 @@ const onesignalApiKey = defineSecret("ONESIGNAL_REST_API_KEY");
 const whatsappAccessToken = defineSecret("WHATSAPP_ACCESS_TOKEN");
 const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
 const whatsappBusinessAccountId = defineSecret("WHATSAPP_BUSINESS_ACCOUNT_ID");
+// Webhook verify token - we choose this string, must match what we configure in Meta
+const whatsappWebhookVerifyToken = defineSecret("WHATSAPP_WEBHOOK_VERIFY_TOKEN");
 const WHATSAPP_API_BASE = "https://graph.facebook.com/v21.0";
 // Cost per utility template message in Israel (USD)
 const WA_COST_PER_MSG_USD = 0.018;
@@ -893,6 +895,316 @@ exports.registerwhatsapp = onCall(
     } catch (err) {
       if (err instanceof HttpsError) throw err;
       logger.error("registerwhatsapp: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * ===========================================================================
+ * WhatsApp Inbox - receive messages + reply
+ * ===========================================================================
+ */
+
+/**
+ * receivewhatsapp - HTTP webhook endpoint for Meta to push incoming messages
+ *
+ * Handles 2 types of requests:
+ *   1. GET - Webhook verification (Meta sends hub.challenge to verify URL ownership)
+ *   2. POST - Incoming messages (text, button click, image, document, etc.)
+ *
+ * Saves messages to Firestore: collection 'whatsapp_messages' with subcollection per conversation
+ */
+exports.receivewhatsapp = onRequest(
+  {
+    secrets: [whatsappWebhookVerifyToken],
+    region: "us-central1",
+    timeoutSeconds: 30,
+    cors: false,
+  },
+  async (req, res) => {
+    try {
+      // ============ GET = Webhook verification by Meta ============
+      if (req.method === "GET") {
+        const mode = req.query["hub.mode"];
+        const token = req.query["hub.verify_token"];
+        const challenge = req.query["hub.challenge"];
+        const expectedToken = String(whatsappWebhookVerifyToken.value()).trim();
+        logger.info("receivewhatsapp: verification request", { mode, hasToken: !!token, hasChallenge: !!challenge });
+        if (mode === "subscribe" && token === expectedToken) {
+          logger.info("receivewhatsapp: verification OK");
+          res.status(200).send(String(challenge || ""));
+          return;
+        }
+        logger.warn("receivewhatsapp: verification FAILED", { mode, tokenMatch: token === expectedToken });
+        res.status(403).send("Verification failed");
+        return;
+      }
+
+      // ============ POST = Incoming event ============
+      if (req.method !== "POST") {
+        res.status(405).send("Method not allowed");
+        return;
+      }
+
+      const body = req.body || {};
+      logger.info("receivewhatsapp: event received", { object: body.object, hasEntry: !!body.entry });
+
+      // Standard Meta webhook structure
+      const entries = body.entry || [];
+      for (const entry of entries) {
+        const changes = entry.changes || [];
+        for (const change of changes) {
+          if (change.field !== "messages") continue;
+          const value = change.value || {};
+          const messages = value.messages || [];
+          const statuses = value.statuses || [];
+          const contacts = value.contacts || [];
+          const metadata = value.metadata || {};
+          const businessPhoneId = metadata.phone_number_id || "";
+
+          // Handle incoming messages
+          for (const msg of messages) {
+            try {
+              const from = msg.from; // sender phone (international format, no +)
+              const msgId = msg.id;
+              const timestamp = msg.timestamp ? Number(msg.timestamp) * 1000 : Date.now();
+              const type = msg.type || "unknown";
+              const contact = contacts.find((c) => c.wa_id === from);
+              const senderName = (contact && contact.profile && contact.profile.name) || "";
+
+              // Extract message content based on type
+              let content = {};
+              if (type === "text") {
+                content = { text: msg.text && msg.text.body };
+              } else if (type === "button") {
+                content = { text: msg.button && msg.button.text, payload: msg.button && msg.button.payload };
+              } else if (type === "interactive") {
+                const i = msg.interactive || {};
+                content = {
+                  type: i.type,
+                  buttonReply: i.button_reply ? { id: i.button_reply.id, title: i.button_reply.title } : undefined,
+                  listReply: i.list_reply ? { id: i.list_reply.id, title: i.list_reply.title } : undefined,
+                };
+              } else if (type === "image" || type === "document" || type === "audio" || type === "video") {
+                content = { mediaId: msg[type] && msg[type].id, caption: msg[type] && msg[type].caption, mimeType: msg[type] && msg[type].mime_type };
+              } else {
+                content = { raw: msg };
+              }
+
+              const doc = {
+                id: msgId,
+                direction: "incoming",
+                from,
+                conversationPhone: from,
+                fromName: senderName,
+                businessPhoneId,
+                type,
+                content,
+                timestamp,
+                read: false,
+                createdAt: new Date(timestamp).toISOString(),
+                raw: msg,
+              };
+
+              // Save to Firestore: messages indexed by ID, conversations grouped by phone
+              await admin.firestore().collection("whatsapp_messages").doc(msgId).set(doc);
+              await admin.firestore().collection("whatsapp_conversations").doc(from).set(
+                {
+                  phone: from,
+                  name: senderName || from,
+                  lastMessageAt: timestamp,
+                  lastMessagePreview: content.text || content.buttonReply?.title || ("[" + type + "]"),
+                  lastMessageDirection: "incoming",
+                  unreadCount: admin.firestore.FieldValue.increment(1),
+                  updatedAt: new Date().toISOString(),
+                },
+                { merge: true }
+              );
+              logger.info("receivewhatsapp: message saved", { from, type, msgId });
+            } catch (e) {
+              logger.error("receivewhatsapp: failed to process message", { error: e.message, msg });
+            }
+          }
+
+          // Handle status updates (sent/delivered/read of our outgoing messages)
+          for (const status of statuses) {
+            try {
+              const msgId = status.id;
+              const statusValue = status.status; // sent / delivered / read / failed
+              const timestamp = status.timestamp ? Number(status.timestamp) * 1000 : Date.now();
+              await admin.firestore().collection("whatsapp_messages").doc(msgId).set(
+                {
+                  [`status_${statusValue}_at`]: new Date(timestamp).toISOString(),
+                  status: statusValue,
+                },
+                { merge: true }
+              );
+              logger.info("receivewhatsapp: status saved", { msgId, status: statusValue });
+            } catch (e) {
+              logger.error("receivewhatsapp: failed to process status", { error: e.message, status });
+            }
+          }
+        }
+      }
+
+      res.status(200).send("OK");
+    } catch (err) {
+      logger.error("receivewhatsapp: UNCAUGHT", { message: err.message, stack: err.stack });
+      res.status(200).send("OK"); // Always 200 to Meta to avoid retries
+    }
+  }
+);
+
+/**
+ * listwhatsappconversations - list all conversations (admin only)
+ */
+exports.listwhatsappconversations = onCall(
+  { region: "us-central1", timeoutSeconds: 15 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const snap = await admin.firestore()
+        .collection("whatsapp_conversations")
+        .orderBy("lastMessageAt", "desc")
+        .limit(100)
+        .get();
+      const conversations = [];
+      snap.forEach((d) => conversations.push(d.data()));
+      return { conversations };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("listwhatsappconversations: UNCAUGHT", { message: err.message });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * getwhatsappmessages - get messages of a specific conversation (admin only)
+ */
+exports.getwhatsappmessages = onCall(
+  { region: "us-central1", timeoutSeconds: 15 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { phone, limit } = request.data || {};
+      if (!phone) throw new HttpsError("invalid-argument", "Missing 'phone'");
+      const snap = await admin.firestore()
+        .collection("whatsapp_messages")
+        .where("conversationPhone", "==", phone)
+        .orderBy("timestamp", "desc")
+        .limit(Math.min(Number(limit || 50), 200))
+        .get();
+      const messages = [];
+      snap.forEach((d) => messages.push(d.data()));
+      // Fallback: messages saved before we added conversationPhone field
+      if (messages.length === 0) {
+        const [inSnap, outSnap] = await Promise.all([
+          admin.firestore().collection("whatsapp_messages").where("from", "==", phone).orderBy("timestamp", "desc").limit(100).get(),
+          admin.firestore().collection("whatsapp_messages").where("to", "==", phone).orderBy("timestamp", "desc").limit(100).get(),
+        ]);
+        inSnap.forEach((d) => messages.push(d.data()));
+        outSnap.forEach((d) => messages.push(d.data()));
+        messages.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+      }
+      // Mark as read
+      await admin.firestore().collection("whatsapp_conversations").doc(phone).set(
+        { unreadCount: 0, lastReadAt: new Date().toISOString() },
+        { merge: true }
+      );
+      return { messages: messages.reverse() }; // oldest first for chat UI
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("getwhatsappmessages: UNCAUGHT", { message: err.message });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * replywhatsapp - send a free-form text reply to a customer (within 24h window only)
+ */
+exports.replywhatsapp = onCall(
+  {
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+    region: "us-central1",
+    timeoutSeconds: 30,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { phone, text } = request.data || {};
+      if (!phone || !text) throw new HttpsError("invalid-argument", "Missing phone or text");
+      const cleanPhone = normalizePhoneIntl(phone);
+
+      const phoneId = String(whatsappPhoneNumberId.value()).trim();
+      const token = String(whatsappAccessToken.value()).trim();
+      const url = `${WHATSAPP_API_BASE}/${phoneId}/messages`;
+
+      const payload = {
+        messaging_product: "whatsapp",
+        to: cleanPhone,
+        type: "text",
+        text: { body: String(text), preview_url: true },
+      };
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      const respText = await response.text();
+      let result;
+      try { result = JSON.parse(respText); } catch (e) { result = { raw: respText }; }
+
+      if (!response.ok || result.error) {
+        const errMsg = (result.error && result.error.message) || ("HTTP " + response.status);
+        throw new HttpsError("internal", "Reply failed: " + errMsg);
+      }
+
+      const msgId = result.messages && result.messages[0] && result.messages[0].id;
+      const now = Date.now();
+      const outDoc = {
+        id: msgId,
+        direction: "outgoing",
+        to: cleanPhone,
+        conversationPhone: cleanPhone,
+        type: "text",
+        content: { text: String(text) },
+        timestamp: now,
+        sentBy: request.auth.uid,
+        sentByName: callerDoc.data().name || "",
+        createdAt: new Date(now).toISOString(),
+        status: "sent",
+      };
+      await admin.firestore().collection("whatsapp_messages").doc(msgId).set(outDoc);
+      await admin.firestore().collection("whatsapp_conversations").doc(cleanPhone).set(
+        {
+          phone: cleanPhone,
+          lastMessageAt: now,
+          lastMessagePreview: String(text).slice(0, 100),
+          lastMessageDirection: "outgoing",
+          updatedAt: new Date(now).toISOString(),
+        },
+        { merge: true }
+      );
+      return { success: true, messageId: msgId };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("replywhatsapp: UNCAUGHT", { message: err.message });
       throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
     }
   }
