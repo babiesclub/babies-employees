@@ -32,6 +32,16 @@ const ICON_URL = APP_URL + "icon-192.png";
 //   firebase functions:secrets:set ONESIGNAL_REST_API_KEY
 const onesignalApiKey = defineSecret("ONESIGNAL_REST_API_KEY");
 
+// WhatsApp Cloud API secrets
+const whatsappAccessToken = defineSecret("WHATSAPP_ACCESS_TOKEN");
+const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
+const whatsappBusinessAccountId = defineSecret("WHATSAPP_BUSINESS_ACCOUNT_ID");
+const WHATSAPP_API_BASE = "https://graph.facebook.com/v21.0";
+// Cost per utility template message in Israel (USD)
+const WA_COST_PER_MSG_USD = 0.018;
+// Default monthly budget (USD) - admin can override via Firestore meta/whatsapp_config
+const WA_DEFAULT_MONTHLY_BUDGET_USD = 50;
+
 setGlobalOptions({ region: "us-central1", maxInstances: 10 });
 
 exports.sendpushonnotification = onDocumentCreated(
@@ -595,6 +605,261 @@ exports.deletelocalinvoice = onCall(
     } catch (err) {
       if (err instanceof HttpsError) throw err;
       logger.error("deletelocalinvoice: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * ============================================================================
+ * WhatsApp Cloud API Integration
+ * ============================================================================
+ */
+
+// Normalize phone to international format (without +)
+function normalizePhoneIntl(phone) {
+  if (!phone) return "";
+  let p = String(phone).replace(/[^\d+]/g, "");
+  if (p.startsWith("+")) return p.slice(1);
+  if (p.startsWith("00")) return p.slice(2);
+  if (p.startsWith("972")) return p;
+  if (p.startsWith("0")) return "972" + p.slice(1);
+  return p;
+}
+
+// Get current month bucket: "2026-05"
+function currentMonthKey() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+
+// Get WhatsApp budget config (defaults if not set)
+async function getWaConfig() {
+  const doc = await admin.firestore().collection("meta").doc("whatsapp_config").get();
+  const data = doc.exists ? doc.data() : {};
+  return {
+    monthlyBudgetUsd: Number(data.monthlyBudgetUsd || WA_DEFAULT_MONTHLY_BUDGET_USD),
+    costPerMsgUsd: Number(data.costPerMsgUsd || WA_COST_PER_MSG_USD),
+    enabled: data.enabled !== false,
+    blockOnExceed: data.blockOnExceed !== false,
+  };
+}
+
+// Increment usage counter for current month and return updated state
+async function trackWaUsage(monthKey, incrementBy = 1) {
+  const ref = admin.firestore().collection("whatsapp_usage").doc(monthKey);
+  await ref.set(
+    { count: admin.firestore.FieldValue.increment(incrementBy), lastUpdated: new Date().toISOString() },
+    { merge: true }
+  );
+}
+
+// Get current monthly usage
+async function getWaUsage(monthKey) {
+  const doc = await admin.firestore().collection("whatsapp_usage").doc(monthKey).get();
+  return doc.exists ? Number(doc.data().count || 0) : 0;
+}
+
+/**
+ * sendwhatsapp - Send a WhatsApp message via Cloud API
+ *
+ * Supports two modes:
+ *   1. template - send an approved template (for first contact / outside 24h window)
+ *   2. text - send plain text (only valid within 24h of customer message)
+ *
+ * For now, defaults to "hello_world" template (pre-approved by Meta)
+ * Once we have invoice template approved, will support templateName="invoice_notification" with parameters
+ */
+exports.sendwhatsapp = onCall(
+  {
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId, whatsappBusinessAccountId],
+    region: "us-central1",
+    timeoutSeconds: 30,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+
+      const { to, mode, templateName, languageCode, parameters, text, mediaUrl, mediaCaption } = request.data || {};
+      if (!to) throw new HttpsError("invalid-argument", "Missing 'to' phone number");
+
+      const phone = normalizePhoneIntl(to);
+      if (!phone) throw new HttpsError("invalid-argument", "Invalid phone number: " + to);
+
+      // Budget check
+      const config = await getWaConfig();
+      if (!config.enabled) {
+        throw new HttpsError("failed-precondition", "שליחת WhatsApp מושבתת. ניתן להפעיל בהגדרות.");
+      }
+      const monthKey = currentMonthKey();
+      const usage = await getWaUsage(monthKey);
+      const projectedCost = (usage + 1) * config.costPerMsgUsd;
+      if (config.blockOnExceed && projectedCost > config.monthlyBudgetUsd) {
+        throw new HttpsError(
+          "resource-exhausted",
+          `חרגנו מתקציב חודשי: ${usage} הודעות נשלחו (~$${(usage * config.costPerMsgUsd).toFixed(2)}). תקציב: $${config.monthlyBudgetUsd}. ניתן להעלות בהגדרות.`
+        );
+      }
+
+      // Build payload based on mode
+      const sendMode = mode || "template";
+      let payload;
+      if (sendMode === "template") {
+        const name = templateName || "hello_world";
+        const lang = languageCode || (name === "hello_world" ? "en_US" : "he");
+        payload = {
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "template",
+          template: {
+            name: name,
+            language: { code: lang },
+          },
+        };
+        // Add header media (image/document) if provided
+        if (mediaUrl) {
+          payload.template.components = payload.template.components || [];
+          payload.template.components.push({
+            type: "header",
+            parameters: [{
+              type: "document",
+              document: { link: mediaUrl, filename: mediaCaption || "document.pdf" },
+            }],
+          });
+        }
+        // Add body parameters if provided
+        if (Array.isArray(parameters) && parameters.length) {
+          payload.template.components = payload.template.components || [];
+          payload.template.components.push({
+            type: "body",
+            parameters: parameters.map((p) => ({ type: "text", text: String(p) })),
+          });
+        }
+      } else if (sendMode === "text") {
+        if (!text) throw new HttpsError("invalid-argument", "Missing 'text' for text mode");
+        payload = {
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "text",
+          text: { body: String(text), preview_url: true },
+        };
+      } else {
+        throw new HttpsError("invalid-argument", "Unknown mode: " + sendMode);
+      }
+
+      const phoneId = String(whatsappPhoneNumberId.value()).trim();
+      const token = String(whatsappAccessToken.value()).trim();
+      const url = `${WHATSAPP_API_BASE}/${phoneId}/messages`;
+      logger.info("sendwhatsapp: posting", { mode: sendMode, to: phone, templateName: payload.template && payload.template.name });
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const respText = await response.text();
+      let result;
+      try { result = JSON.parse(respText); } catch (e) { result = { raw: respText }; }
+      logger.info("sendwhatsapp: WhatsApp response", { status: response.status, result });
+      if (!response.ok || result.error) {
+        const errMsg = (result.error && (result.error.message || result.error.error_user_msg)) || ("HTTP " + response.status);
+        throw new HttpsError("internal", "WhatsApp שגיאה: " + errMsg);
+      }
+
+      // Track usage
+      await trackWaUsage(monthKey);
+      const newUsage = usage + 1;
+      const newCost = +(newUsage * config.costPerMsgUsd).toFixed(2);
+      const budgetUsedPct = Math.round((newCost / config.monthlyBudgetUsd) * 100);
+
+      logger.info("sendwhatsapp: SUCCESS", { to: phone, monthKey, count: newUsage, costUsd: newCost });
+      return {
+        success: true,
+        messageId: result.messages && result.messages[0] && result.messages[0].id,
+        usage: { month: monthKey, count: newUsage, costUsd: newCost, budgetUsd: config.monthlyBudgetUsd, budgetUsedPct },
+      };
+    } catch (err) {
+      if (err instanceof HttpsError) {
+        logger.warn("sendwhatsapp: HttpsError", { code: err.code, message: err.message });
+        throw err;
+      }
+      logger.error("sendwhatsapp: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה לא צפויה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * getwhatsappstatus - Get current WhatsApp budget status + usage (admin only)
+ */
+exports.getwhatsappstatus = onCall(
+  { region: "us-central1", timeoutSeconds: 15 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const monthKey = currentMonthKey();
+      const config = await getWaConfig();
+      const usage = await getWaUsage(monthKey);
+      const costUsd = +(usage * config.costPerMsgUsd).toFixed(2);
+      const budgetUsedPct = Math.round((costUsd / config.monthlyBudgetUsd) * 100);
+      // Get last 6 months for chart
+      const history = [];
+      for (let i = 0; i < 6; i++) {
+        const d = new Date();
+        d.setMonth(d.getMonth() - i);
+        const mk = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+        const c = await getWaUsage(mk);
+        history.unshift({ month: mk, count: c, costUsd: +(c * config.costPerMsgUsd).toFixed(2) });
+      }
+      return {
+        currentMonth: { month: monthKey, count: usage, costUsd, budgetUsd: config.monthlyBudgetUsd, budgetUsedPct },
+        config,
+        history,
+      };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("getwhatsappstatus: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * setwhatsappconfig - Update WhatsApp budget config (admin only)
+ */
+exports.setwhatsappconfig = onCall(
+  { region: "us-central1", timeoutSeconds: 15 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { monthlyBudgetUsd, costPerMsgUsd, enabled, blockOnExceed } = request.data || {};
+      const update = {};
+      if (monthlyBudgetUsd != null) update.monthlyBudgetUsd = Number(monthlyBudgetUsd);
+      if (costPerMsgUsd != null) update.costPerMsgUsd = Number(costPerMsgUsd);
+      if (enabled != null) update.enabled = !!enabled;
+      if (blockOnExceed != null) update.blockOnExceed = !!blockOnExceed;
+      update.updatedAt = new Date().toISOString();
+      update.updatedBy = request.auth.uid;
+      await admin.firestore().collection("meta").doc("whatsapp_config").set(update, { merge: true });
+      logger.info("setwhatsappconfig: updated", update);
+      return { success: true, config: await getWaConfig() };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("setwhatsappconfig: UNCAUGHT", { message: err.message, stack: err.stack });
       throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
     }
   }
