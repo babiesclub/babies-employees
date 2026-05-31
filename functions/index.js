@@ -1332,6 +1332,230 @@ exports.replywhatsapp = onCall(
 );
 
 /**
+ * markinvoicepaid - Mark invoice as paid, optionally create receipt in Morning
+ * and auto-send via WhatsApp.
+ *
+ * Input: { invoiceId, paidDate (YYYY-MM-DD), paidAmount?, note?, createReceipt?, sendWhatsApp? }
+ *
+ * Flow:
+ *   1. Update invoice doc with payment details
+ *   2. If createReceipt → call Morning API to create חשבונית מס/קבלה (320)
+ *      linked to original invoice
+ *   3. If sendWhatsApp → invoke sendwhatsapp with the receipt PDF
+ */
+exports.markinvoicepaid = onCall(
+  {
+    secrets: [morningApiKeyId, morningApiSecret, whatsappAccessToken, whatsappPhoneNumberId],
+    region: "us-central1",
+    timeoutSeconds: 60,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { invoiceId, paidDate, paidAmount, note, createReceipt, sendWhatsApp } = request.data || {};
+      if (!invoiceId) throw new HttpsError("invalid-argument", "invoiceId required");
+      if (!paidDate) throw new HttpsError("invalid-argument", "paidDate required");
+
+      const invoiceRef = admin.firestore().collection("invoices").doc(String(invoiceId));
+      const invoiceSnap = await invoiceRef.get();
+      if (!invoiceSnap.exists) throw new HttpsError("not-found", "Invoice not found");
+      const invoice = invoiceSnap.data();
+
+      const finalAmount = paidAmount != null ? Number(paidAmount) : Number(invoice.totalAmount || 0);
+
+      // Step 1 - Update invoice as paid
+      const updateData = {
+        paymentStatus: "paid",
+        paidDate,
+        paidAmount: finalAmount,
+        paymentNote: note || "",
+        paymentMarkedAt: new Date().toISOString(),
+        paymentMarkedBy: request.auth.uid,
+      };
+      await invoiceRef.set(updateData, { merge: true });
+      logger.info("markinvoicepaid: marked", { invoiceId, finalAmount, paidDate });
+
+      let receipt = null;
+
+      // Step 2 - Create receipt in Morning if requested
+      if (createReceipt) {
+        if (!invoice.gardenName) throw new HttpsError("failed-precondition", "Invoice missing gardenName");
+        const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
+        const allGardens = gardensDoc.exists ? gardensDoc.data().items || [] : [];
+        const garden = allGardens.find((g) => (typeof g === "string" ? g : g.name) === invoice.gardenName);
+        if (!garden || !garden.morningClientId) {
+          throw new HttpsError("failed-precondition", "Garden missing Morning client ID");
+        }
+
+        const monthParts = String(invoice.month || "").split("-");
+        const monthName = monthParts.length === 2 ? HE_MONTHS_M[parseInt(monthParts[1]) - 1] : "";
+        const description = "תשלום עבור חשבונית מס׳ " + (invoice.morningDocNumber || invoice.id) +
+          " - חוגי בייביז לחודש " + monthName + " " + (monthParts[0] || "");
+
+        const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
+
+        const payload = {
+          type: 320, // חשבונית מס/קבלה
+          date: paidDate,
+          lang: "he",
+          currency: "ILS",
+          vatType: 0,
+          client: { id: String(garden.morningClientId) },
+          income: [
+            {
+              description,
+              quantity: 1,
+              price: Number(invoice.totalAmount || finalAmount),
+              currency: "ILS",
+              vatType: 0,
+            },
+          ],
+          payment: [
+            {
+              date: paidDate,
+              price: finalAmount,
+              type: 4, // bank transfer
+            },
+          ],
+          remarks: "מבוסס על חשבון עסקה מס׳ " + (invoice.morningDocNumber || "") +
+            (note ? " | " + note : ""),
+        };
+
+        const response = await fetch(`${MORNING_API_BASE}/documents`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        const respText = await response.text();
+        let result;
+        try { result = JSON.parse(respText); } catch (e) { result = { raw: respText }; }
+
+        if (!response.ok || result.errorCode) {
+          const errMsg = result.errorMessage || result.message || "HTTP " + response.status;
+          throw new HttpsError("internal", "Morning שגיאה ביצירת קבלה: " + errMsg);
+        }
+
+        receipt = {
+          id: result.id || null,
+          number: result.number || result.documentNumber || null,
+          type: result.type != null ? Number(result.type) : 320,
+          url: result.url ? (result.url.he || result.url.origin || null) : null,
+        };
+
+        await invoiceRef.set({
+          receiptCreated: true,
+          receiptId: receipt.id,
+          receiptDocNumber: receipt.number,
+          receiptDocType: receipt.type,
+          receiptDocUrl: receipt.url,
+          receiptCreatedAt: new Date().toISOString(),
+        }, { merge: true });
+
+        logger.info("markinvoicepaid: receipt created", { invoiceId, receiptNumber: receipt.number });
+      }
+
+      // Step 3 - Send via WhatsApp if requested
+      let whatsappResult = null;
+      if (sendWhatsApp && receipt && receipt.url) {
+        try {
+          const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
+          const allGardens = gardensDoc.exists ? gardensDoc.data().items || [] : [];
+          const garden = allGardens.find((g) => (typeof g === "string" ? g : g.name) === invoice.gardenName);
+          if (garden && garden.phone) {
+            const phone = normalizePhoneIntl(garden.phone);
+            const monthParts = String(invoice.month || "").split("-");
+            const monthNames = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+            const monthName = monthParts.length === 2 ? monthNames[parseInt(monthParts[1]) - 1] + " " + monthParts[0] : "";
+
+            const phoneId = String(whatsappPhoneNumberId.value()).trim();
+            const token = String(whatsappAccessToken.value()).trim();
+            const payload = {
+              messaging_product: "whatsapp",
+              to: phone,
+              type: "template",
+              template: {
+                name: "invoice_notification",
+                language: { code: "he" },
+                components: [
+                  {
+                    type: "header",
+                    parameters: [{
+                      type: "document",
+                      document: { link: receipt.url, filename: "קבלה_" + receipt.number + ".pdf" },
+                    }],
+                  },
+                  {
+                    type: "body",
+                    parameters: [
+                      { type: "text", text: invoice.gardenName },
+                      { type: "text", text: "חשבונית מס/קבלה" },
+                      { type: "text", text: String(receipt.number || "") },
+                      { type: "text", text: monthName },
+                      { type: "text", text: String(invoice.totalAmount || finalAmount) },
+                    ],
+                  },
+                ],
+              },
+            };
+
+            const waUrl = `${WHATSAPP_API_BASE}/${phoneId}/messages`;
+            const waResp = await fetch(waUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify(payload),
+            });
+            const waText = await waResp.text();
+            let waJson;
+            try { waJson = JSON.parse(waText); } catch (e) { waJson = { raw: waText }; }
+
+            if (waResp.ok && !waJson.error) {
+              const msgId = waJson.messages && waJson.messages[0] && waJson.messages[0].id;
+              await trackWaUsage(currentMonthKey());
+              await invoiceRef.set({
+                receiptWhatsappSent: true,
+                receiptWhatsappSentAt: new Date().toISOString(),
+                receiptWhatsappMessageId: msgId,
+              }, { merge: true });
+              whatsappResult = { success: true, messageId: msgId };
+            } else {
+              whatsappResult = { success: false, error: (waJson.error && waJson.error.message) || "Failed" };
+              logger.warn("markinvoicepaid: whatsapp send failed", whatsappResult);
+            }
+          } else {
+            whatsappResult = { success: false, error: "אין טלפון לגן" };
+          }
+        } catch (e) {
+          logger.error("markinvoicepaid: whatsapp send error", { error: e.message });
+          whatsappResult = { success: false, error: e.message };
+        }
+      }
+
+      return {
+        success: true,
+        invoiceId,
+        paid: true,
+        receipt,
+        whatsapp: whatsappResult,
+      };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("markinvoicepaid: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
  * ===========================================================================
  * Tasks (Project + Per-Conversation)
  * ===========================================================================
