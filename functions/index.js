@@ -290,8 +290,60 @@ async function morningAuth(apiKeyId, apiSecret) {
   return data.token;
 }
 
-function buildInvoiceDescription(records, garden) {
+function buildInvoiceDescription(records, garden, networkBranches) {
   const billingMode = garden.billingMode || "time";
+  const isNetwork = Array.isArray(networkBranches) && networkBranches.length > 1;
+
+  // For networks: group by branch name; within each branch, by date
+  if (isNetwork) {
+    const lines = [];
+    // Group records by garden (branch)
+    const byBranch = {};
+    records.forEach((r) => {
+      const branchKey = r.garden || "(ללא סניף)";
+      if (!byBranch[branchKey]) byBranch[branchKey] = [];
+      byBranch[branchKey].push(r);
+    });
+    const sortedBranches = Object.keys(byBranch).sort((a, b) => a.localeCompare(b, "he"));
+    for (const branchName of sortedBranches) {
+      const branchObj = networkBranches.find((g) => g.name === branchName);
+      const displayName = (branchObj && branchObj.branchName) || branchName;
+      const branchRecs = byBranch[branchName];
+      lines.push("📍 סניף " + displayName + ":");
+      // Group this branch's records by date
+      const byDate = {};
+      branchRecs.forEach((r) => {
+        if (!byDate[r.date]) byDate[r.date] = [];
+        byDate[r.date].push(r);
+      });
+      const sortedDates = Object.keys(byDate).sort();
+      for (const date of sortedDates) {
+        const dateRecs = byDate[date];
+        const parts = date.split("-");
+        const dateStr = parts[2] + "/" + parts[1] + "/" + parts[0];
+        const bMode = (branchObj && branchObj.billingMode) || billingMode;
+        if (bMode === "per_group") {
+          const totalGroups = dateRecs.reduce((s, r) => s + (parseFloat(r.groups) || 0), 0);
+          lines.push("   " + dateStr + " - " + totalGroups + " קבוצות");
+        } else if (bMode === "per_child") {
+          const totalReports = dateRecs.length;
+          const month = date.slice(0, 7);
+          const childCount = ((branchObj && branchObj.monthlyChildCounts) || {})[month] || 0;
+          lines.push("   " + dateStr + " - " + totalReports + " פעילות עם " + childCount + " ילדים");
+        } else {
+          for (const r of dateRecs) {
+            const grp = parseInt(r.groups) || 1;
+            const dur = r.duration || "?";
+            lines.push("   " + dateStr + " - " + grp + " פעילות בת " + dur + " דק׳");
+          }
+        }
+      }
+      lines.push("");
+    }
+    return lines.join("\n").trim();
+  }
+
+  // Non-network: original logic
   const byDate = {};
   records.forEach((r) => {
     if (!byDate[r.date]) byDate[r.date] = [];
@@ -397,26 +449,52 @@ exports.createmorninginvoice = onCall(
         hasChargeRates: !!garden.chargeRates,
         morningClientId: garden.morningClientId,
         morningDocType: garden.morningDocType,
+        networkName: garden.networkName,
       });
       if (!garden.morningClientId) {
         throw new HttpsError("failed-precondition", "Garden has no Morning Client ID: " + gardenName);
       }
 
-      const recordsSnap = await admin.firestore().collection("records").where("garden", "==", gardenName).get();
-      const records = [];
-      recordsSnap.forEach((d) => {
-        const r = d.data();
-        if (r.date && r.date.startsWith(month)) records.push(r);
+      // Network handling: if this garden is part of a network, find all sibling branches
+      // (same networkName), and treat them as one invoice. Use this garden as the "lead"
+      // for billing settings, but aggregate records from all branches.
+      const networkBranches = garden.networkName
+        ? allGardens.filter((g) => typeof g === "object" && g.networkName === garden.networkName)
+        : [garden];
+      const allBranchNames = networkBranches.map((g) => g.name);
+      const isNetwork = networkBranches.length > 1;
+      logger.info("createmorninginvoice: network aggregation", {
+        isNetwork,
+        networkName: garden.networkName || null,
+        branchCount: networkBranches.length,
+        branchNames: allBranchNames,
       });
+
+      // Fetch records for ALL branches (Firestore 'in' supports up to 30 values; use chunks if needed)
+      const records = [];
+      const chunkSize = 30;
+      for (let i = 0; i < allBranchNames.length; i += chunkSize) {
+        const chunk = allBranchNames.slice(i, i + chunkSize);
+        const chunkSnap = await admin.firestore().collection("records").where("garden", "in", chunk).get();
+        chunkSnap.forEach((d) => {
+          const r = d.data();
+          if (r.date && r.date.startsWith(month)) records.push(r);
+        });
+      }
       logger.info("createmorninginvoice: records loaded", { count: records.length, month });
       if (!records.length) {
-        throw new HttpsError("not-found", "אין דיווחים לגן '" + gardenName + "' לחודש " + month);
+        const errLabel = isNetwork ? ("רשת '" + garden.networkName + "'") : ("גן '" + gardenName + "'");
+        throw new HttpsError("not-found", "אין דיווחים ל" + errLabel + " לחודש " + month);
       }
 
+      // Calculate total - each record uses its own branch's rates
+      const gardenByName = new Map();
+      networkBranches.forEach((g) => gardenByName.set(g.name, g));
       let total = 0;
       let nullCount = 0;
       records.forEach((r) => {
-        const b = calcChargeBaseServer(r, garden);
+        const recordGarden = gardenByName.get(r.garden) || garden;
+        const b = calcChargeBaseServer(r, recordGarden);
         if (b != null) total += b;
         else nullCount++;
       });
@@ -459,7 +537,7 @@ exports.createmorninginvoice = onCall(
 
       const monthParts = month.split("-");
       const monthName = HE_MONTHS_M[parseInt(monthParts[1]) - 1];
-      const description = buildInvoiceDescription(records, garden);
+      const description = buildInvoiceDescription(records, garden, networkBranches);
 
       logger.info("createmorninginvoice: calling morningAuth");
       const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
@@ -529,6 +607,10 @@ exports.createmorninginvoice = onCall(
         createdAt: new Date().toISOString(),
         createdBy: callerUid,
         status: "created",
+        // Network metadata
+        isNetwork,
+        networkName: garden.networkName || null,
+        branchNames: isNetwork ? allBranchNames : null,
       };
       await admin.firestore().collection("invoices").doc(String(invoiceId)).set(invoiceData);
       logger.info("createmorninginvoice: SUCCESS", { gardenName, month, docNumber });
