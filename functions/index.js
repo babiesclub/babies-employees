@@ -550,13 +550,17 @@ exports.createmorninginvoice = onCall(
       //   1 = EXEMPT (no VAT - פטור)
       //   2 = INCLUDED (price already includes VAT)
       // Our `total` is the base amount BEFORE VAT, so we use vatType: 0
+      const clientObj = { id: String(garden.morningClientId) };
+      if (garden.email && /@/.test(garden.email)) {
+        clientObj.emails = [garden.email];
+      }
       const payload = {
         type: docType,
         date: new Date().toISOString().slice(0, 10),
         lang: "he",
         currency: "ILS",
         vatType: 0,
-        client: { id: String(garden.morningClientId) },
+        client: clientObj,
         income: [
           {
             description: "חוגי בייביז לחודש " + monthName + " " + monthParts[0] + "\n" + description,
@@ -568,7 +572,7 @@ exports.createmorninginvoice = onCall(
         ],
         remarks: "הופק אוטומטית ע\"י אפליקציית בייביז · " + monthName + " " + monthParts[0],
       };
-      logger.info("createmorninginvoice: posting to Morning", { docType, total, clientId: garden.morningClientId });
+      logger.info("createmorninginvoice: posting to Morning", { docType, total, clientId: garden.morningClientId, willEmail: !!garden.email });
 
       const docResponse = await fetch(`${MORNING_API_BASE}/documents`, {
         method: "POST",
@@ -590,6 +594,29 @@ exports.createmorninginvoice = onCall(
       const docNumber = docResult.number || docResult.documentNumber || null;
       const docUrl = docResult.url ? (docResult.url.he || docResult.url.origin || null) : null;
       const morningActualType = docResult.type != null ? Number(docResult.type) : null;
+      let emailedTo = null;
+      if (garden.email && /@/.test(garden.email) && docResult.id) {
+        try {
+          const distResponse = await fetch(`${MORNING_API_BASE}/documents/${docResult.id}/distribute`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+              to: [garden.email],
+              subject: "חשבונית חוגי בייביז - " + gardenName + " - " + monthName + " " + monthParts[0],
+              body: "שלום,\n\nמצורפת חשבונית עבור " + gardenName + " לחודש " + monthName + " " + monthParts[0] + ".\n\nבברכה,\nבייביז קלאב",
+            }),
+          });
+          if (distResponse.ok) {
+            emailedTo = garden.email;
+            logger.info("createmorninginvoice: email sent successfully to " + garden.email);
+          } else {
+            const distText = await distResponse.text();
+            logger.warn("createmorninginvoice: email distribution failed", { status: distResponse.status, body: distText.slice(0, 200) });
+          }
+        } catch (e) {
+          logger.warn("createmorninginvoice: email distribution error", { error: String(e && e.message || e) });
+        }
+      }
 
       const invoiceId = Date.now() + Math.floor(Math.random() * 1000);
       const invoiceData = {
@@ -606,6 +633,7 @@ exports.createmorninginvoice = onCall(
         recordCount: records.length,
         createdAt: new Date().toISOString(),
         createdBy: callerUid,
+        emailedTo,
         status: "created",
         // Network metadata
         isNetwork,
@@ -1480,13 +1508,17 @@ exports.markinvoicepaid = onCall(
 
         const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
 
+        const receiptClientObj = { id: String(garden.morningClientId) };
+        if (garden.email && /@/.test(garden.email)) {
+          receiptClientObj.emails = [garden.email];
+        }
         const payload = {
           type: 320, // חשבונית מס/קבלה
           date: paidDate,
           lang: "he",
           currency: "ILS",
           vatType: 0,
-          client: { id: String(garden.morningClientId) },
+          client: receiptClientObj,
           income: [
             {
               description,
@@ -1524,11 +1556,36 @@ exports.markinvoicepaid = onCall(
           throw new HttpsError("internal", "Morning שגיאה ביצירת קבלה: " + errMsg);
         }
 
+        let receiptEmailedTo = null;
+        if (garden.email && /@/.test(garden.email) && result.id) {
+          try {
+            const distResponse = await fetch(`${MORNING_API_BASE}/documents/${result.id}/distribute`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({
+                to: [garden.email],
+                subject: "חשבונית מס/קבלה - " + invoice.gardenName + " - " + monthName + " " + (monthParts[0] || ""),
+                body: "שלום,\n\nמצורפת חשבונית מס/קבלה עבור " + invoice.gardenName + " לחודש " + monthName + " " + (monthParts[0] || "") + ".\n\nבברכה,\nבייביז קלאב",
+              }),
+            });
+            if (distResponse.ok) {
+              receiptEmailedTo = garden.email;
+              logger.info("markinvoicepaid: receipt email sent to " + garden.email);
+            } else {
+              const t = await distResponse.text();
+              logger.warn("markinvoicepaid: receipt email failed", { status: distResponse.status, body: t.slice(0, 200) });
+            }
+          } catch (e) {
+            logger.warn("markinvoicepaid: receipt email error", { error: String(e && e.message || e) });
+          }
+        }
+
         receipt = {
           id: result.id || null,
           number: result.number || result.documentNumber || null,
           type: result.type != null ? Number(result.type) : 320,
           url: result.url ? (result.url.he || result.url.origin || null) : null,
+          emailedTo: receiptEmailedTo,
         };
 
         await invoiceRef.set({
