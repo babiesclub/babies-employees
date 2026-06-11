@@ -1863,3 +1863,197 @@ exports.setwhatsappconfig = onCall(
     }
   }
 );
+
+/**
+ * sendweeklytogardenscron - scheduled WhatsApp blast to all gardens with their
+ * weekly visit info (animal + PDF). Runs Sundays 13:00 Asia/Jerusalem by default.
+ * Skips if settings/weeklySend.enabled is false.
+ */
+function isoSundayOf(date) {
+  const d = new Date(date);
+  const day = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - day);
+  return d.toISOString().slice(0, 10);
+}
+
+async function sendOneTemplateMessage({ to, templateName, languageCode, parameters, mediaUrl, mediaCaption, token, phoneId }) {
+  const phone = normalizePhoneIntl(to);
+  if (!phone) throw new Error("Invalid phone: " + to);
+  const payload = {
+    messaging_product: "whatsapp",
+    to: phone,
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: languageCode || "he" },
+      components: [],
+    },
+  };
+  if (mediaUrl) {
+    payload.template.components.push({
+      type: "header",
+      parameters: [{
+        type: "document",
+        document: { link: mediaUrl, filename: mediaCaption || "document.pdf" },
+      }],
+    });
+  }
+  if (Array.isArray(parameters) && parameters.length) {
+    payload.template.components.push({
+      type: "body",
+      parameters: parameters.map((p) => ({ type: "text", text: String(p) })),
+    });
+  }
+  const url = `${WHATSAPP_API_BASE}/${phoneId}/messages`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  const respText = await response.text();
+  let result;
+  try { result = JSON.parse(respText); } catch (e) { result = { raw: respText }; }
+  if (!response.ok || result.error) {
+    const errMsg = (result.error && (result.error.message || result.error.error_user_msg)) || ("HTTP " + response.status);
+    throw new Error(errMsg);
+  }
+  return result;
+}
+
+exports.sendweeklytogardenscron = onSchedule(
+  {
+    schedule: "0 13 * * 0", // Sundays 13:00 Israel
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+    timeoutSeconds: 540, // 9 minutes
+  },
+  async (event) => {
+    const db = admin.firestore();
+    logger.info("sendweeklytogardenscron: starting");
+    try {
+      const settingsDoc = await db.collection("settings").doc("weeklySend").get();
+      const settings = settingsDoc.exists ? settingsDoc.data() : null;
+      if (!settings || !settings.enabled) {
+        logger.info("sendweeklytogardenscron: disabled, skipping");
+        return null;
+      }
+      const templateName = settings.templateName || "gan_weekly_visit";
+      const languageCode = settings.templateLanguage || "he";
+
+      // Find current Sunday in Israel time
+      const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+      const sunday = new Date(nowIsrael);
+      sunday.setHours(0, 0, 0, 0);
+      sunday.setDate(sunday.getDate() - sunday.getDay());
+      const yyyy = sunday.getFullYear();
+      const mm = String(sunday.getMonth() + 1).padStart(2, "0");
+      const dd = String(sunday.getDate()).padStart(2, "0");
+      const weekId = `${yyyy}-${mm}-${dd}`;
+      logger.info("sendweeklytogardenscron: weekId", { weekId });
+
+      const scheduleDoc = await db.collection("weeklySchedule").doc(weekId).get();
+      if (!scheduleDoc.exists) {
+        logger.warn("sendweeklytogardenscron: no schedule for week, skipping", { weekId });
+        await db.collection("settings").doc("weeklySend").set({
+          lastRun: Date.now(),
+          lastRunStats: { sent: 0, failed: 0, skipped: 0, reason: "no schedule" },
+        }, { merge: true });
+        return null;
+      }
+      const assignments = scheduleDoc.data().assignments || {};
+      const uids = Object.keys(assignments);
+      logger.info("sendweeklytogardenscron: assignments", { count: uids.length });
+
+      // Load gardens + users + materials (small enough to load in full)
+      const [gardensSnap, usersSnap, materialsSnap] = await Promise.all([
+        db.collection("meta").doc("gardens").get(),
+        db.collection("users").get(),
+        db.collection("materials").get(),
+      ]);
+      const allGardens = gardensSnap.exists ? (gardensSnap.data().items || []) : [];
+      const gardenByName = {};
+      allGardens.forEach((g) => { if (typeof g === "object" && g.name) gardenByName[g.name] = g; });
+      const userById = {};
+      usersSnap.forEach((d) => {
+        const u = d.data();
+        userById[d.id] = u;
+        if (u.id) userById[String(u.id)] = u;
+      });
+      const matById = {};
+      materialsSnap.forEach((d) => { matById[d.id] = d.data(); });
+
+      const token = String(whatsappAccessToken.value()).trim();
+      const phoneId = String(whatsappPhoneNumberId.value()).trim();
+
+      let sent = 0, failed = 0, skipped = 0;
+      const errors = [];
+      const sendLogRoot = db.collection("sendLog").doc("weekly").collection(weekId);
+
+      for (const uid of uids) {
+        const matId = assignments[uid];
+        const mat = matById[matId];
+        const user = userById[uid];
+        if (!mat || !user) { skipped++; continue; }
+        const gardens = user.gardens || [];
+        for (const gName of gardens) {
+          const garden = gardenByName[gName];
+          if (!garden || !garden.phone) { skipped++; continue; }
+          try {
+            await sendOneTemplateMessage({
+              to: garden.phone,
+              templateName,
+              languageCode,
+              parameters: [mat.animalName || mat.name, mat.summary || ""],
+              mediaUrl: mat.gardenPdfUrl,
+              mediaCaption: mat.gardenPdfName || "מי בא לבקר.pdf",
+              token,
+              phoneId,
+            });
+            sent++;
+            await sendLogRoot.add({
+              type: "garden",
+              instructorUid: uid,
+              instructorName: user.name || "",
+              gardenName: gName,
+              gardenPhone: garden.phone,
+              materialId: matId,
+              materialName: mat.name,
+              status: "sent",
+              sentAt: Date.now(),
+            });
+          } catch (e) {
+            failed++;
+            errors.push({ garden: gName, error: e.message || String(e) });
+            await sendLogRoot.add({
+              type: "garden",
+              instructorUid: uid,
+              instructorName: user.name || "",
+              gardenName: gName,
+              gardenPhone: garden.phone,
+              materialId: matId,
+              materialName: mat.name,
+              status: "failed",
+              error: e.message || String(e),
+              sentAt: Date.now(),
+            });
+            logger.warn("sendweeklytogardenscron: send failed", { garden: gName, error: e.message });
+          }
+          // Small delay to be gentle on the WhatsApp API
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
+
+      await db.collection("settings").doc("weeklySend").set({
+        lastRun: Date.now(),
+        lastRunStats: { sent, failed, skipped, weekId },
+      }, { merge: true });
+
+      logger.info("sendweeklytogardenscron: done", { sent, failed, skipped, errors: errors.length });
+      return null;
+    } catch (e) {
+      logger.error("sendweeklytogardenscron: UNCAUGHT", { message: e.message, stack: e.stack });
+      throw e;
+    }
+  }
+);
