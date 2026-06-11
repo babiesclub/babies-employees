@@ -32,6 +32,10 @@ const ICON_URL = APP_URL + "icon-192.png";
 //   firebase functions:secrets:set ONESIGNAL_REST_API_KEY
 const onesignalApiKey = defineSecret("ONESIGNAL_REST_API_KEY");
 
+// Gmail SMTP for backup emails (set via: firebase functions:secrets:set GMAIL_USER / GMAIL_APP_PASSWORD)
+const gmailUser = defineSecret("GMAIL_USER");
+const gmailAppPassword = defineSecret("GMAIL_APP_PASSWORD");
+
 // WhatsApp Cloud API secrets
 const whatsappAccessToken = defineSecret("WHATSAPP_ACCESS_TOKEN");
 const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
@@ -2399,6 +2403,307 @@ exports.notifyinstructorsweeklynow = onCall(
     } catch (e) {
       logger.error("notifyinstructorsweeklynow: UNCAUGHT", { message: e.message, stack: e.stack });
       throw new HttpsError("internal", e.message || String(e));
+    }
+  }
+);
+
+/* ========================================================================
+   BACKUP & DISASTER RECOVERY
+   ========================================================================
+   - backupfirestoredaily: scheduled native Firestore export to GCS
+   - exportbackupjson: on-demand JSON dump of all collections
+   - listbackups: returns recent backup log entries
+   - weeklybackupemail: scheduled email with JSON attachment off-platform
+   ======================================================================== */
+
+const firestoreV1 = require("@google-cloud/firestore").v1;
+const firestoreAdminClient = new firestoreV1.FirestoreAdminClient();
+const STORAGE_BUCKET = "babiez-app.firebasestorage.app";
+
+// Recursively dump a Firestore collection (including subcollections, up to maxDepth)
+async function dumpCollectionTree(collRef, depth, maxDepth) {
+  const out = {};
+  const snap = await collRef.get();
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    const entry = { _data: data };
+    if (depth < maxDepth) {
+      const subColls = await doc.ref.listCollections();
+      if (subColls.length) {
+        entry._sub = {};
+        for (const sub of subColls) {
+          entry._sub[sub.id] = await dumpCollectionTree(sub, depth + 1, maxDepth);
+        }
+      }
+    }
+    out[doc.id] = entry;
+  }
+  return out;
+}
+
+async function buildFullJsonBackup() {
+  const db = admin.firestore();
+  const topColls = await db.listCollections();
+  const dump = {
+    exportedAt: new Date().toISOString(),
+    project: process.env.GCLOUD_PROJECT || "babiez-app",
+    schemaVersion: 1,
+    collections: {},
+  };
+  let docCount = 0;
+  for (const coll of topColls) {
+    dump.collections[coll.id] = await dumpCollectionTree(coll, 0, 4);
+    const countTree = (node) => {
+      let c = 0;
+      for (const id of Object.keys(node)) {
+        c++;
+        if (node[id]._sub) {
+          for (const sub of Object.keys(node[id]._sub)) {
+            c += countTree(node[id]._sub[sub]);
+          }
+        }
+      }
+      return c;
+    };
+    docCount += countTree(dump.collections[coll.id]);
+  }
+  return { dump, docCount, collectionsCount: Object.keys(dump.collections).length };
+}
+
+// ========== Layer 1: Daily native Firestore export ==========
+exports.backupfirestoredaily = onSchedule(
+  {
+    schedule: "0 2 * * *", // Every day at 02:00 Israel
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    timeoutSeconds: 540,
+  },
+  async (event) => {
+    const projectId = process.env.GCLOUD_PROJECT || "babiez-app";
+    const db = admin.firestore();
+    const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+    const datestr = `${nowIsrael.getFullYear()}-${String(nowIsrael.getMonth() + 1).padStart(2, "0")}-${String(nowIsrael.getDate()).padStart(2, "0")}`;
+    const outputPath = `gs://${STORAGE_BUCKET}/backups/firestore/${datestr}`;
+    const databaseName = firestoreAdminClient.databasePath(projectId, "(default)");
+    logger.info("backupfirestoredaily: starting", { outputPath });
+    try {
+      const [operation] = await firestoreAdminClient.exportDocuments({
+        name: databaseName,
+        outputUriPrefix: outputPath,
+        collectionIds: [],
+      });
+      await db.collection("backupLog").add({
+        type: "daily-native",
+        startedAt: Date.now(),
+        date: datestr,
+        path: outputPath,
+        operationName: operation.name,
+        status: "started",
+      });
+      logger.info("backupfirestoredaily: export operation started", { operation: operation.name });
+      return null;
+    } catch (e) {
+      logger.error("backupfirestoredaily: FAILED", { error: e.message });
+      await db.collection("backupLog").add({
+        type: "daily-native",
+        startedAt: Date.now(),
+        date: datestr,
+        status: "failed",
+        error: e.message || String(e),
+      });
+      throw e;
+    }
+  }
+);
+
+// ========== Layer 3a: Manual JSON download (on-demand) ==========
+exports.exportbackupjson = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 540,
+    memory: "1GiB",
+  },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const db = admin.firestore();
+    logger.info("exportbackupjson: starting", { by: req.auth.uid });
+    const startedAt = Date.now();
+    try {
+      const { dump, docCount, collectionsCount } = await buildFullJsonBackup();
+      const json = JSON.stringify(dump);
+      const fileName = `backups/manual/backup-${startedAt}.json`;
+      const bucket = admin.storage().bucket(STORAGE_BUCKET);
+      await bucket.file(fileName).save(json, {
+        contentType: "application/json",
+        metadata: {
+          metadata: {
+            createdBy: req.auth.uid,
+            type: "manual-download",
+            docCount: String(docCount),
+            collectionsCount: String(collectionsCount),
+          },
+        },
+      });
+      const [url] = await bucket.file(fileName).getSignedUrl({
+        action: "read",
+        expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+      });
+      await db.collection("backupLog").add({
+        type: "manual-json",
+        startedAt,
+        finishedAt: Date.now(),
+        status: "success",
+        path: `gs://${STORAGE_BUCKET}/${fileName}`,
+        docCount,
+        collectionsCount,
+        sizeBytes: json.length,
+        by: req.auth.uid,
+      });
+      logger.info("exportbackupjson: done", { docCount, sizeBytes: json.length });
+      return {
+        success: true,
+        url,
+        fileName,
+        sizeBytes: json.length,
+        docCount,
+        collectionsCount,
+      };
+    } catch (e) {
+      logger.error("exportbackupjson: FAILED", { error: e.message });
+      await db.collection("backupLog").add({
+        type: "manual-json",
+        startedAt,
+        finishedAt: Date.now(),
+        status: "failed",
+        error: e.message || String(e),
+        by: req.auth.uid,
+      });
+      throw new HttpsError("internal", e.message || String(e));
+    }
+  }
+);
+
+// ========== Layer 3b: List recent backups ==========
+exports.listbackups = onCall(
+  { region: "us-central1", timeoutSeconds: 30 },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const db = admin.firestore();
+    const snap = await db.collection("backupLog").orderBy("startedAt", "desc").limit(60).get();
+    const items = [];
+    snap.forEach((d) => items.push({ id: d.id, ...d.data() }));
+    return { items };
+  }
+);
+
+// ========== Layer 2: Weekly backup to admin email ==========
+exports.weeklybackupemail = onSchedule(
+  {
+    schedule: "0 14 * * 5", // Fridays 14:00 Israel
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    secrets: [gmailUser, gmailAppPassword],
+    timeoutSeconds: 540,
+    memory: "1GiB",
+  },
+  async (event) => {
+    const db = admin.firestore();
+    logger.info("weeklybackupemail: starting");
+    try {
+      const settingsDoc = await db.collection("settings").doc("backup").get();
+      const settings = settingsDoc.exists ? settingsDoc.data() : {};
+      const recipient = settings.recipientEmail;
+      if (!recipient) {
+        logger.warn("weeklybackupemail: no recipientEmail in settings/backup, skipping");
+        return null;
+      }
+      if (settings.emailEnabled === false) {
+        logger.info("weeklybackupemail: emailEnabled=false, skipping");
+        return null;
+      }
+
+      const startedAt = Date.now();
+      const { dump, docCount, collectionsCount } = await buildFullJsonBackup();
+      const json = JSON.stringify(dump);
+      const datestr = new Date().toISOString().slice(0, 10);
+      const fileName = `backups/weekly/backup-${datestr}.json`;
+
+      const bucket = admin.storage().bucket(STORAGE_BUCKET);
+      await bucket.file(fileName).save(json, { contentType: "application/json" });
+
+      // Try to attach if <20MB, else send link only
+      const nodemailer = require("nodemailer");
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: gmailUser.value(), pass: gmailAppPassword.value() },
+      });
+      const attachInline = json.length < 20 * 1024 * 1024;
+      const [url] = await bucket.file(fileName).getSignedUrl({
+        action: "read",
+        expires: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
+      });
+      const prettySize = json.length > 1024 * 1024
+        ? (json.length / 1024 / 1024).toFixed(1) + " MB"
+        : (json.length / 1024).toFixed(1) + " KB";
+
+      const mailOptions = {
+        from: gmailUser.value(),
+        to: recipient,
+        subject: `🔐 גיבוי שבועי בייביז קלאב — ${datestr}`,
+        text: [
+          "שלום שיר 💜",
+          "",
+          "הגיבוי השבועי של בייביז קלאב מצורף.",
+          "",
+          `📊 סטטיסטיקה:`,
+          `   • ${docCount.toLocaleString("he-IL")} מסמכים`,
+          `   • ${collectionsCount} collections`,
+          `   • גודל: ${prettySize}`,
+          "",
+          attachInline
+            ? "📎 הקובץ מצורף ישירות לאימייל."
+            : "📦 הקובץ גדול מדי לצירוף - השתמשי בקישור:",
+          "",
+          `🔗 קישור הורדה (תקף 30 ימים):`,
+          url,
+          "",
+          "💡 מומלץ לשמור את הקובץ במחשב או בענן אחר (Drive, Dropbox) כגיבוי חיצוני.",
+          "",
+          "בהצלחה!",
+          "מערכת בייביז 🐾",
+        ].join("\n"),
+        attachments: attachInline ? [{
+          filename: `babiez-backup-${datestr}.json`,
+          content: json,
+          contentType: "application/json",
+        }] : [],
+      };
+      await transporter.sendMail(mailOptions);
+
+      await db.collection("backupLog").add({
+        type: "weekly-email",
+        startedAt,
+        finishedAt: Date.now(),
+        status: "success",
+        date: datestr,
+        path: `gs://${STORAGE_BUCKET}/${fileName}`,
+        docCount,
+        collectionsCount,
+        sizeBytes: json.length,
+        recipient,
+        attached: attachInline,
+      });
+      logger.info("weeklybackupemail: done", { recipient, sizeBytes: json.length });
+      return null;
+    } catch (e) {
+      logger.error("weeklybackupemail: FAILED", { error: e.message, stack: e.stack });
+      await db.collection("backupLog").add({
+        type: "weekly-email",
+        startedAt: Date.now(),
+        status: "failed",
+        error: e.message || String(e),
+      });
+      throw e;
     }
   }
 );
