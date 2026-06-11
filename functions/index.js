@@ -2057,3 +2057,124 @@ exports.sendweeklytogardenscron = onSchedule(
     }
   }
 );
+
+/**
+ * notifyinstructorsweeklycron - scheduled in-app push to instructors letting them know
+ * their weekly material is live. Runs Fridays 16:00 Asia/Jerusalem.
+ *
+ * Writes a notification doc per assigned instructor; the existing
+ * sendpushonnotification function then fires the OneSignal push automatically.
+ * Skips silently if settings/weeklySend.notifyInstructors is false.
+ */
+exports.notifyinstructorsweeklycron = onSchedule(
+  {
+    schedule: "0 16 * * 5", // Fridays 16:00 Israel
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    timeoutSeconds: 300,
+  },
+  async (event) => {
+    const db = admin.firestore();
+    logger.info("notifyinstructorsweeklycron: starting");
+    try {
+      const settingsDoc = await db.collection("settings").doc("weeklySend").get();
+      const settings = settingsDoc.exists ? settingsDoc.data() : {};
+      // Default ON for instructor notifications (separate toggle from garden send)
+      if (settings.notifyInstructors === false) {
+        logger.info("notifyinstructorsweeklycron: disabled, skipping");
+        return null;
+      }
+
+      // Find next Sunday in Israel time (today is Friday, so +2 days)
+      const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+      const nextSunday = new Date(nowIsrael);
+      nextSunday.setHours(0, 0, 0, 0);
+      const daysUntilSunday = (7 - nextSunday.getDay()) % 7 || 7;
+      nextSunday.setDate(nextSunday.getDate() + daysUntilSunday);
+      const yyyy = nextSunday.getFullYear();
+      const mm = String(nextSunday.getMonth() + 1).padStart(2, "0");
+      const dd = String(nextSunday.getDate()).padStart(2, "0");
+      const weekId = `${yyyy}-${mm}-${dd}`;
+      logger.info("notifyinstructorsweeklycron: weekId", { weekId });
+
+      const scheduleDoc = await db.collection("weeklySchedule").doc(weekId).get();
+      if (!scheduleDoc.exists) {
+        logger.warn("notifyinstructorsweeklycron: no schedule for next week, skipping", { weekId });
+        await db.collection("settings").doc("weeklySend").set({
+          lastInstructorRun: Date.now(),
+          lastInstructorRunStats: { notified: 0, skipped: 0, reason: "no schedule" },
+        }, { merge: true });
+        return null;
+      }
+      const assignments = scheduleDoc.data().assignments || {};
+      const uids = Object.keys(assignments);
+      logger.info("notifyinstructorsweeklycron: assignments", { count: uids.length });
+
+      const [usersSnap, materialsSnap] = await Promise.all([
+        db.collection("users").get(),
+        db.collection("materials").get(),
+      ]);
+      const userById = {};
+      usersSnap.forEach((d) => {
+        const u = d.data();
+        userById[d.id] = u;
+        if (u.id) userById[String(u.id)] = u;
+      });
+      const matById = {};
+      materialsSnap.forEach((d) => { matById[d.id] = d.data(); });
+
+      // Hebrew date pretty-print for the notification body
+      const dayNames = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
+      const monthNames = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
+        "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+      const weekLabel = `יום ${dayNames[nextSunday.getDay()]} ${nextSunday.getDate()} ב${monthNames[nextSunday.getMonth()]}`;
+
+      let notified = 0, skipped = 0;
+      const writes = [];
+
+      for (const uid of uids) {
+        const matId = assignments[uid];
+        const mat = matById[matId];
+        const user = userById[uid];
+        if (!mat || !user) { skipped++; continue; }
+
+        // recipientUid must match Firebase Auth UID (key in /users collection).
+        // userById is indexed by both d.id and u.id - we need the Auth uid here.
+        // Look it up: the schedule key uid IS the users doc id in our model.
+        const animalName = mat.animalName || mat.name || "החיה השבועית";
+        const id = Date.now() + Math.floor(Math.random() * 10000);
+        const notif = {
+          id,
+          recipientUid: uid,
+          type: "weekly_material",
+          icon: "🐾",
+          title: `המערך השבועי שלך עלה! ${animalName}`,
+          body: `החל מ${weekLabel} – המערך החדש זמין באפליקציה עם כל הקבצים. 🎯`,
+          link: { screen: "att" }, // attendance screen has the "my weekly" card
+          createdAt: new Date().toISOString(),
+          createdBy: "system",
+          createdByName: "מערכת בייביז",
+          read: false,
+          readAt: null,
+          materialId: matId,
+          weekId,
+        };
+        writes.push(db.collection("notifications").doc(String(id)).set(notif));
+        notified++;
+      }
+
+      await Promise.all(writes);
+
+      await db.collection("settings").doc("weeklySend").set({
+        lastInstructorRun: Date.now(),
+        lastInstructorRunStats: { notified, skipped, weekId },
+      }, { merge: true });
+
+      logger.info("notifyinstructorsweeklycron: done", { notified, skipped, weekId });
+      return null;
+    } catch (e) {
+      logger.error("notifyinstructorsweeklycron: UNCAUGHT", { message: e.message, stack: e.stack });
+      throw e;
+    }
+  }
+);
