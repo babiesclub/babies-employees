@@ -1,0 +1,10 @@
+{
+  "name": "babies-scripts",
+  "private": true,
+  "scripts": {
+    "upload": "node upload-materials.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  }
+}
