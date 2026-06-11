@@ -2178,3 +2178,227 @@ exports.notifyinstructorsweeklycron = onSchedule(
     }
   }
 );
+
+/**
+ * Manual on-demand triggers for both weekly flows.
+ * Admin clicks "send now" in the UI -> these onCall functions run immediately,
+ * bypassing the scheduled crons. Same internals; different entry point.
+ */
+async function requireAdmin(auth) {
+  if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign in required");
+  const db = admin.firestore();
+  const u = await db.collection("users").doc(auth.uid).get();
+  if (!u.exists || u.data().role !== "admin") {
+    throw new HttpsError("permission-denied", "Admin only");
+  }
+}
+
+exports.sendweeklytogardensnow = onCall(
+  {
+    region: "us-central1",
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+    timeoutSeconds: 540,
+  },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const db = admin.firestore();
+    const weekId = (req.data && req.data.weekId) || null;
+    logger.info("sendweeklytogardensnow: starting", { weekId, by: req.auth.uid });
+    try {
+      const settingsDoc = await db.collection("settings").doc("weeklySend").get();
+      const settings = settingsDoc.exists ? settingsDoc.data() : {};
+      const templateName = settings.templateName || "gan_weekly_visit";
+      const languageCode = settings.templateLanguage || "he";
+
+      // Use the requested weekId, or fall back to "current Sunday in Israel"
+      let resolvedWeekId = weekId;
+      if (!resolvedWeekId) {
+        const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+        const sunday = new Date(nowIsrael);
+        sunday.setHours(0, 0, 0, 0);
+        sunday.setDate(sunday.getDate() - sunday.getDay());
+        resolvedWeekId = `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, "0")}-${String(sunday.getDate()).padStart(2, "0")}`;
+      }
+
+      const scheduleDoc = await db.collection("weeklySchedule").doc(resolvedWeekId).get();
+      if (!scheduleDoc.exists) {
+        return { success: false, error: `אין שיבוץ לשבוע ${resolvedWeekId}` };
+      }
+      const assignments = scheduleDoc.data().assignments || {};
+      const uids = Object.keys(assignments);
+
+      const [gardensSnap, usersSnap, materialsSnap] = await Promise.all([
+        db.collection("meta").doc("gardens").get(),
+        db.collection("users").get(),
+        db.collection("materials").get(),
+      ]);
+      const allGardens = gardensSnap.exists ? (gardensSnap.data().items || []) : [];
+      const gardenByName = {};
+      allGardens.forEach((g) => { if (typeof g === "object" && g.name) gardenByName[g.name] = g; });
+      const userById = {};
+      usersSnap.forEach((d) => {
+        const u = d.data();
+        userById[d.id] = u;
+        if (u.id) userById[String(u.id)] = u;
+      });
+      const matById = {};
+      materialsSnap.forEach((d) => { matById[d.id] = d.data(); });
+
+      const token = String(whatsappAccessToken.value()).trim();
+      const phoneId = String(whatsappPhoneNumberId.value()).trim();
+
+      let sent = 0, failed = 0, skipped = 0;
+      const errors = [];
+      const sendLogRoot = db.collection("sendLog").doc("weekly").collection(resolvedWeekId);
+
+      for (const uid of uids) {
+        const matId = assignments[uid];
+        const mat = matById[matId];
+        const user = userById[uid];
+        if (!mat || !user) { skipped++; continue; }
+        const gardens = user.gardens || [];
+        for (const gName of gardens) {
+          const garden = gardenByName[gName];
+          if (!garden || !garden.phone) { skipped++; continue; }
+          try {
+            await sendOneTemplateMessage({
+              to: garden.phone,
+              templateName,
+              languageCode,
+              parameters: [mat.animalName || mat.name, mat.summary || ""],
+              mediaUrl: mat.gardenPdfUrl,
+              mediaCaption: mat.gardenPdfName || "מי בא לבקר.pdf",
+              token,
+              phoneId,
+            });
+            sent++;
+            await sendLogRoot.add({
+              type: "garden", trigger: "manual",
+              instructorUid: uid, instructorName: user.name || "",
+              gardenName: gName, gardenPhone: garden.phone,
+              materialId: matId, materialName: mat.name,
+              status: "sent", sentAt: Date.now(),
+              triggeredBy: req.auth.uid,
+            });
+          } catch (e) {
+            failed++;
+            errors.push({ garden: gName, error: e.message || String(e) });
+            await sendLogRoot.add({
+              type: "garden", trigger: "manual",
+              instructorUid: uid, instructorName: user.name || "",
+              gardenName: gName, gardenPhone: garden.phone,
+              materialId: matId, materialName: mat.name,
+              status: "failed", error: e.message || String(e), sentAt: Date.now(),
+              triggeredBy: req.auth.uid,
+            });
+          }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
+
+      await db.collection("settings").doc("weeklySend").set({
+        lastManualRun: Date.now(),
+        lastManualRunStats: { sent, failed, skipped, weekId: resolvedWeekId, by: req.auth.uid },
+      }, { merge: true });
+
+      logger.info("sendweeklytogardensnow: done", { sent, failed, skipped });
+      return { success: true, sent, failed, skipped, weekId: resolvedWeekId, errors: errors.slice(0, 10) };
+    } catch (e) {
+      logger.error("sendweeklytogardensnow: UNCAUGHT", { message: e.message, stack: e.stack });
+      throw new HttpsError("internal", e.message || String(e));
+    }
+  }
+);
+
+exports.notifyinstructorsweeklynow = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 120,
+  },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const db = admin.firestore();
+    const weekId = (req.data && req.data.weekId) || null;
+    logger.info("notifyinstructorsweeklynow: starting", { weekId, by: req.auth.uid });
+    try {
+      // Default to "next Sunday in Israel" if no weekId passed
+      let resolvedWeekId = weekId;
+      if (!resolvedWeekId) {
+        const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+        const nextSunday = new Date(nowIsrael);
+        nextSunday.setHours(0, 0, 0, 0);
+        // If today is already Sunday, use today; else jump to next Sunday
+        const day = nextSunday.getDay();
+        if (day !== 0) nextSunday.setDate(nextSunday.getDate() + (7 - day));
+        resolvedWeekId = `${nextSunday.getFullYear()}-${String(nextSunday.getMonth() + 1).padStart(2, "0")}-${String(nextSunday.getDate()).padStart(2, "0")}`;
+      }
+
+      const scheduleDoc = await db.collection("weeklySchedule").doc(resolvedWeekId).get();
+      if (!scheduleDoc.exists) {
+        return { success: false, error: `אין שיבוץ לשבוע ${resolvedWeekId}` };
+      }
+      const assignments = scheduleDoc.data().assignments || {};
+      const uids = Object.keys(assignments);
+
+      const [usersSnap, materialsSnap] = await Promise.all([
+        db.collection("users").get(),
+        db.collection("materials").get(),
+      ]);
+      const userById = {};
+      usersSnap.forEach((d) => {
+        const u = d.data();
+        userById[d.id] = u;
+        if (u.id) userById[String(u.id)] = u;
+      });
+      const matById = {};
+      materialsSnap.forEach((d) => { matById[d.id] = d.data(); });
+
+      const sundayDate = new Date(resolvedWeekId + "T00:00:00");
+      const dayNames = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
+      const monthNames = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
+        "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+      const weekLabel = `יום ${dayNames[sundayDate.getDay()]} ${sundayDate.getDate()} ב${monthNames[sundayDate.getMonth()]}`;
+
+      let notified = 0, skipped = 0;
+      const writes = [];
+      for (const uid of uids) {
+        const matId = assignments[uid];
+        const mat = matById[matId];
+        const user = userById[uid];
+        if (!mat || !user) { skipped++; continue; }
+        const animalName = mat.animalName || mat.name || "החיה השבועית";
+        const id = Date.now() + Math.floor(Math.random() * 10000);
+        const notif = {
+          id,
+          recipientUid: uid,
+          type: "weekly_material",
+          icon: "🐾",
+          title: `המערך השבועי שלך עלה! ${animalName}`,
+          body: `החל מ${weekLabel} – המערך החדש זמין באפליקציה עם כל הקבצים. 🎯`,
+          link: { screen: "att" },
+          createdAt: new Date().toISOString(),
+          createdBy: "system",
+          createdByName: `מערכת בייביז (שליחה ידנית)`,
+          read: false,
+          readAt: null,
+          materialId: matId,
+          weekId: resolvedWeekId,
+        };
+        writes.push(db.collection("notifications").doc(String(id)).set(notif));
+        notified++;
+      }
+      await Promise.all(writes);
+
+      await db.collection("settings").doc("weeklySend").set({
+        lastManualInstructorRun: Date.now(),
+        lastManualInstructorRunStats: { notified, skipped, weekId: resolvedWeekId, by: req.auth.uid },
+      }, { merge: true });
+
+      logger.info("notifyinstructorsweeklynow: done", { notified, skipped, weekId: resolvedWeekId });
+      return { success: true, notified, skipped, weekId: resolvedWeekId };
+    } catch (e) {
+      logger.error("notifyinstructorsweeklynow: UNCAUGHT", { message: e.message, stack: e.stack });
+      throw new HttpsError("internal", e.message || String(e));
+    }
+  }
+);
