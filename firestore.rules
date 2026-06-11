@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: is the calling user an admin?
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Helper: is the user signed in?
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Users: each user reads/writes own profile, admin reads/writes everyone
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // Gardens: all read, admin writes
+    match /gardens/{gardenId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Attendance records: all auth users
+    match /records/{recordId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Invoices: admin only
+    match /invoices/{invoiceId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Contracts: all auth users
+    match /contracts/{contractId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Personal docs: all auth users (server enforces ownership via uid in path)
+    match /personalDocs/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Tasks
+    match /tasks/{taskId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Notifications
+    match /notifications/{notifId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // WhatsApp conversations + messages: admin only
+    match /waConversations/{convId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+    match /waMessages/{msgId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Materials (lesson plans): all read, admin writes
+    match /materials/{matId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Weekly schedule
+    match /weeklySchedule/{weekId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Animal info
+    match /animals/{animalId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Catch-all: signed-in users have full access to anything else
+    // (safety net so we don't break collections we forgot to list)
+    match /{document=**} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}
