@@ -2517,6 +2517,8 @@ exports.backupfirestoredaily = onSchedule(
 );
 
 // ========== Layer 3a: Manual JSON download (on-demand) ==========
+// Returns JSON directly in the response so the browser can download it.
+// Also saves a copy to Storage for archival (no signed URL needed).
 exports.exportbackupjson = onCall(
   {
     region: "us-central1",
@@ -2531,23 +2533,22 @@ exports.exportbackupjson = onCall(
     try {
       const { dump, docCount, collectionsCount } = await buildFullJsonBackup();
       const json = JSON.stringify(dump);
+
+      // Archive copy to Storage (best-effort, don't fail the download if it errors)
       const fileName = `backups/manual/backup-${startedAt}.json`;
-      const bucket = admin.storage().bucket(STORAGE_BUCKET);
-      await bucket.file(fileName).save(json, {
-        contentType: "application/json",
-        metadata: {
-          metadata: {
-            createdBy: req.auth.uid,
-            type: "manual-download",
-            docCount: String(docCount),
-            collectionsCount: String(collectionsCount),
-          },
-        },
-      });
-      const [url] = await bucket.file(fileName).getSignedUrl({
-        action: "read",
-        expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
-      });
+      try {
+        const bucket = admin.storage().bucket(STORAGE_BUCKET);
+        await bucket.file(fileName).save(json, {
+          contentType: "application/json",
+          metadata: { metadata: {
+            createdBy: req.auth.uid, type: "manual-download",
+            docCount: String(docCount), collectionsCount: String(collectionsCount),
+          }},
+        });
+      } catch (storageErr) {
+        logger.warn("exportbackupjson: storage archive failed (download still works)", { error: storageErr.message });
+      }
+
       await db.collection("backupLog").add({
         type: "manual-json",
         startedAt,
@@ -2562,8 +2563,8 @@ exports.exportbackupjson = onCall(
       logger.info("exportbackupjson: done", { docCount, sizeBytes: json.length });
       return {
         success: true,
-        url,
-        fileName,
+        json,              // ← The actual JSON content for client to download
+        fileName: `babiez-backup-${new Date().toISOString().slice(0,10)}.json`,
         sizeBytes: json.length,
         docCount,
         collectionsCount,
@@ -2628,24 +2629,25 @@ exports.weeklybackupemail = onSchedule(
       const datestr = new Date().toISOString().slice(0, 10);
       const fileName = `backups/weekly/backup-${datestr}.json`;
 
-      const bucket = admin.storage().bucket(STORAGE_BUCKET);
-      await bucket.file(fileName).save(json, { contentType: "application/json" });
+      // Archive to Storage (best-effort)
+      try {
+        const bucket = admin.storage().bucket(STORAGE_BUCKET);
+        await bucket.file(fileName).save(json, { contentType: "application/json" });
+      } catch (storageErr) {
+        logger.warn("weeklybackupemail: storage archive failed (email still sends)", { error: storageErr.message });
+      }
 
-      // Try to attach if <20MB, else send link only
       const nodemailer = require("nodemailer");
       const transporter = nodemailer.createTransport({
         service: "gmail",
         auth: { user: gmailUser.value(), pass: gmailAppPassword.value() },
       });
-      const attachInline = json.length < 20 * 1024 * 1024;
-      const [url] = await bucket.file(fileName).getSignedUrl({
-        action: "read",
-        expires: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
-      });
       const prettySize = json.length > 1024 * 1024
         ? (json.length / 1024 / 1024).toFixed(1) + " MB"
         : (json.length / 1024).toFixed(1) + " KB";
 
+      // Gmail attachment limit is 25MB. If we exceed, the email will fail loudly -
+      // that's a good signal that the user's data has grown and we need a different strategy.
       const mailOptions = {
         from: gmailUser.value(),
         to: recipient,
@@ -2660,23 +2662,18 @@ exports.weeklybackupemail = onSchedule(
           `   • ${collectionsCount} collections`,
           `   • גודל: ${prettySize}`,
           "",
-          attachInline
-            ? "📎 הקובץ מצורף ישירות לאימייל."
-            : "📦 הקובץ גדול מדי לצירוף - השתמשי בקישור:",
-          "",
-          `🔗 קישור הורדה (תקף 30 ימים):`,
-          url,
+          "📎 הקובץ מצורף ישירות לאימייל.",
           "",
           "💡 מומלץ לשמור את הקובץ במחשב או בענן אחר (Drive, Dropbox) כגיבוי חיצוני.",
           "",
           "בהצלחה!",
           "מערכת בייביז 🐾",
         ].join("\n"),
-        attachments: attachInline ? [{
+        attachments: [{
           filename: `babiez-backup-${datestr}.json`,
           content: json,
           contentType: "application/json",
-        }] : [],
+        }],
       };
       await transporter.sendMail(mailOptions);
 
@@ -2691,7 +2688,7 @@ exports.weeklybackupemail = onSchedule(
         collectionsCount,
         sizeBytes: json.length,
         recipient,
-        attached: attachInline,
+        attached: true,
       });
       logger.info("weeklybackupemail: done", { recipient, sizeBytes: json.length });
       return null;
