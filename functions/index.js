@@ -2584,6 +2584,92 @@ exports.exportbackupjson = onCall(
   }
 );
 
+// ========== Manual trigger: test the weekly email NOW ==========
+exports.testweeklybackupemail = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 540,
+    memory: "1GiB",
+    secrets: [gmailUser, gmailAppPassword],
+  },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const db = admin.firestore();
+    logger.info("testweeklybackupemail: starting", { by: req.auth.uid });
+    try {
+      const settingsDoc = await db.collection("settings").doc("backup").get();
+      const settings = settingsDoc.exists ? settingsDoc.data() : {};
+      const recipient = settings.recipientEmail;
+      if (!recipient) {
+        return { success: false, error: "לא הוגדר אימייל. לכי להגדרות מייל ושמרי כתובת." };
+      }
+
+      const startedAt = Date.now();
+      const { dump, docCount, collectionsCount } = await buildFullJsonBackup();
+      const json = JSON.stringify(dump);
+      const datestr = new Date().toISOString().slice(0, 10);
+
+      const nodemailer = require("nodemailer");
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: gmailUser.value(), pass: gmailAppPassword.value() },
+      });
+      const prettySize = json.length > 1024 * 1024
+        ? (json.length / 1024 / 1024).toFixed(1) + " MB"
+        : (json.length / 1024).toFixed(1) + " KB";
+
+      await transporter.sendMail({
+        from: gmailUser.value(),
+        to: recipient,
+        subject: `🧪 בדיקת גיבוי בייביז קלאב — ${datestr}`,
+        text: [
+          "שלום שיר! 🧪",
+          "",
+          "זוהי הודעת בדיקה שביצעת ידנית מהאפליקציה.",
+          "אם את רואה את ההודעה הזו — הגיבוי השבועי האוטומטי יעבוד בכל יום שישי 14:00.",
+          "",
+          `📊 ${docCount.toLocaleString("he-IL")} מסמכים · ${collectionsCount} collections · ${prettySize}`,
+          "",
+          "📎 קובץ JSON של כל הנתונים מצורף.",
+          "",
+          "🎉 ברכות — את מוגנת!",
+          "מערכת בייביז 🐾",
+        ].join("\n"),
+        attachments: [{
+          filename: `babiez-test-backup-${datestr}.json`,
+          content: json,
+          contentType: "application/json",
+        }],
+      });
+
+      await db.collection("backupLog").add({
+        type: "test-email",
+        startedAt,
+        finishedAt: Date.now(),
+        status: "success",
+        recipient,
+        docCount,
+        collectionsCount,
+        sizeBytes: json.length,
+        by: req.auth.uid,
+      });
+
+      logger.info("testweeklybackupemail: done", { recipient });
+      return { success: true, recipient, docCount, collectionsCount, sizeBytes: json.length };
+    } catch (e) {
+      logger.error("testweeklybackupemail: FAILED", { error: e.message });
+      await db.collection("backupLog").add({
+        type: "test-email",
+        startedAt: Date.now(),
+        status: "failed",
+        error: e.message || String(e),
+        by: req.auth.uid,
+      });
+      throw new HttpsError("internal", e.message || String(e));
+    }
+  }
+);
+
 // ========== Layer 3b: List recent backups ==========
 exports.listbackups = onCall(
   { region: "us-central1", timeoutSeconds: 30 },
