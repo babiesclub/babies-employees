@@ -1880,6 +1880,38 @@ function isoSundayOf(date) {
   return d.toISOString().slice(0, 10);
 }
 
+// Israeli holiday weeks - keep in sync with index.html ISRAELI_HOLIDAYS.
+// fullWeek=true means skip the auto-sends entirely for that week.
+const ISRAELI_HOLIDAYS = {
+  '2026-09-13': { name: 'ראש השנה', fullWeek: true },
+  '2026-09-27': { name: 'סוכות', fullWeek: true },
+  '2027-04-04': { name: 'פסח', fullWeek: true },
+  '2027-04-11': { name: 'חול המועד פסח', fullWeek: true },
+  '2027-07-04': { name: 'תחילת חופשת קיץ', fullWeek: true },
+  '2027-07-11': { name: 'חופשת קיץ', fullWeek: true },
+  '2027-07-18': { name: 'חופשת קיץ', fullWeek: true },
+  '2027-07-25': { name: 'חופשת קיץ', fullWeek: true },
+  '2027-08-01': { name: 'חופשת קיץ', fullWeek: true },
+  '2027-08-08': { name: 'חופשת קיץ', fullWeek: true },
+  '2027-08-15': { name: 'חופשת קיץ', fullWeek: true },
+  '2027-08-22': { name: 'חופשת קיץ', fullWeek: true },
+};
+
+// Returns {name, fullWeek} if week is a holiday (and full-week), else null.
+// Respects per-week override stored in the schedule doc.
+function getHolidayForWeek(weekId, scheduleDoc) {
+  const override = scheduleDoc && scheduleDoc.holidayOverride;
+  // Admin explicitly cancelled the holiday this week
+  if (override === false) return null;
+  // Admin set a custom holiday
+  if (override && override.name) {
+    return { name: override.name, fullWeek: override.fullWeek !== false };
+  }
+  const builtin = ISRAELI_HOLIDAYS[weekId];
+  if (builtin && builtin.fullWeek) return builtin;
+  return null;
+}
+
 async function sendOneTemplateMessage({ to, templateName, languageCode, parameters, mediaUrl, mediaCaption, token, phoneId }) {
   const phone = normalizePhoneIntl(to);
   if (!phone) throw new Error("Invalid phone: " + to);
@@ -1962,6 +1994,15 @@ exports.sendweeklytogardenscron = onSchedule(
         await db.collection("settings").doc("weeklySend").set({
           lastRun: Date.now(),
           lastRunStats: { sent: 0, failed: 0, skipped: 0, reason: "no schedule" },
+        }, { merge: true });
+        return null;
+      }
+      const holiday = getHolidayForWeek(weekId, scheduleDoc.data());
+      if (holiday) {
+        logger.info("sendweeklytogardenscron: holiday week, skipping", { weekId, holiday: holiday.name });
+        await db.collection("settings").doc("weeklySend").set({
+          lastRun: Date.now(),
+          lastRunStats: { sent: 0, failed: 0, skipped: 0, reason: "holiday: " + holiday.name, weekId },
         }, { merge: true });
         return null;
       }
@@ -2110,6 +2151,15 @@ exports.notifyinstructorsweeklycron = onSchedule(
         }, { merge: true });
         return null;
       }
+      const holiday = getHolidayForWeek(weekId, scheduleDoc.data());
+      if (holiday) {
+        logger.info("notifyinstructorsweeklycron: holiday week, skipping", { weekId, holiday: holiday.name });
+        await db.collection("settings").doc("weeklySend").set({
+          lastInstructorRun: Date.now(),
+          lastInstructorRunStats: { notified: 0, skipped: 0, reason: "holiday: " + holiday.name, weekId },
+        }, { merge: true });
+        return null;
+      }
       const assignments = scheduleDoc.data().assignments || {};
       const uids = Object.keys(assignments);
       logger.info("notifyinstructorsweeklycron: assignments", { count: uids.length });
@@ -2228,6 +2278,10 @@ exports.sendweeklytogardensnow = onCall(
       if (!scheduleDoc.exists) {
         return { success: false, error: `אין שיבוץ לשבוע ${resolvedWeekId}` };
       }
+      const holiday = getHolidayForWeek(resolvedWeekId, scheduleDoc.data());
+      if (holiday) {
+        return { success: false, error: `שבוע ${resolvedWeekId} מסומן כחופשה (${holiday.name}). אם רוצה לשלוח בכל זאת — בטלי את סימון החופשה בלוח השיבוצים.` };
+      }
       const assignments = scheduleDoc.data().assignments || {};
       const uids = Object.keys(assignments);
 
@@ -2340,6 +2394,10 @@ exports.notifyinstructorsweeklynow = onCall(
       const scheduleDoc = await db.collection("weeklySchedule").doc(resolvedWeekId).get();
       if (!scheduleDoc.exists) {
         return { success: false, error: `אין שיבוץ לשבוע ${resolvedWeekId}` };
+      }
+      const holiday = getHolidayForWeek(resolvedWeekId, scheduleDoc.data());
+      if (holiday) {
+        return { success: false, error: `שבוע ${resolvedWeekId} מסומן כחופשה (${holiday.name}). בטלי את סימון החופשה אם בכל זאת רוצה לשלוח.` };
       }
       const assignments = scheduleDoc.data().assignments || {};
       const uids = Object.keys(assignments);
