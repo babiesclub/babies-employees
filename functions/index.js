@@ -1880,22 +1880,11 @@ function isoSundayOf(date) {
   return d.toISOString().slice(0, 10);
 }
 
-// Israeli holiday weeks - keep in sync with index.html ISRAELI_HOLIDAYS.
-// fullWeek=true means skip the auto-sends entirely for that week.
-const ISRAELI_HOLIDAYS = {
-  '2026-09-13': { name: 'ראש השנה', fullWeek: true },
-  '2026-09-27': { name: 'סוכות', fullWeek: true },
-  '2027-04-04': { name: 'פסח', fullWeek: true },
-  '2027-04-11': { name: 'חול המועד פסח', fullWeek: true },
-  '2027-07-04': { name: 'תחילת חופשת קיץ', fullWeek: true },
-  '2027-07-11': { name: 'חופשת קיץ', fullWeek: true },
-  '2027-07-18': { name: 'חופשת קיץ', fullWeek: true },
-  '2027-07-25': { name: 'חופשת קיץ', fullWeek: true },
-  '2027-08-01': { name: 'חופשת קיץ', fullWeek: true },
-  '2027-08-08': { name: 'חופשת קיץ', fullWeek: true },
-  '2027-08-15': { name: 'חופשת קיץ', fullWeek: true },
-  '2027-08-22': { name: 'חופשת קיץ', fullWeek: true },
-};
+// Holiday calendar - empty until admin uploads the real garden vacation schedule.
+// When ready, populate with: 'YYYY-MM-DD' (must be a Sunday): {name, fullWeek}
+// Keep in sync with index.html ISRAELI_HOLIDAYS.
+// Admin can override per-week via the schedule UI (holidayOverride in schedule doc).
+const ISRAELI_HOLIDAYS = {};
 
 // Returns {name, fullWeek} if week is a holiday (and full-week), else null.
 // Respects per-week override stored in the schedule doc.

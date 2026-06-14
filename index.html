@@ -1197,31 +1197,11 @@ function inferInstructorRegion(u){if(!u||u.role==='admin')return null;if(u.regio
 const MAT_COLORS=['#FF6B6B','#4ECDC4','#FFD93D','#6BCB77','#4D96FF','#C780FA','#FF8C42','#06D6A0','#118AB2','#EF476F','#FFC857','#A1E887','#7B68EE','#F9A828','#FF6B9D','#00C9A7','#845EC2','#FFC75F','#52B788','#E63946','#48BFE3','#B5179E','#F4845F','#43AA8B','#577590','#F94144','#90BE6D','#9D4EDD','#FFB400','#00B4D8','#E84855','#73C2FB','#F77F00','#7FB069','#D62246','#5E548E','#FFAFCC','#3A86FF','#FB5607','#06A77D','#A0572D','#22577A','#D9ED92','#FF477E','#80ED99','#FFB997','#9381FF','#FF477E','#00B2CA','#D8A47F','#BC4749','#386641','#588157','#A98467','#6D597A','#FFCBF2','#5390D9','#F39237','#0EAD69','#FF5400'];
 let _matColorMap=null;
 function rebuildMatColorMap(){const mats=getMaterials();const sorted=[...mats].sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));_matColorMap={};sorted.forEach((m,idx)=>{_matColorMap[m.id]=MAT_COLORS[idx%MAT_COLORS.length]})}
-// Israeli holidays / school-vacation periods, indexed by Sunday-of-week.
-// Edit yearly. Admin can also override per-week via the schedule UI.
-// fullWeek=true means the entire week is off; false=partial (e.g. just 1 day).
-const ISRAELI_HOLIDAYS={
-  '2026-09-13':{name:'ראש השנה',fullWeek:true},
-  '2026-09-20':{name:'יום כיפור',fullWeek:false},
-  '2026-09-27':{name:'סוכות',fullWeek:true},
-  '2026-10-04':{name:'שמחת תורה',fullWeek:false},
-  '2026-12-06':{name:'חנוכה',fullWeek:false},
-  '2027-02-28':{name:'שבוע פורים',fullWeek:false},
-  '2027-03-28':{name:'ערב פסח',fullWeek:false},
-  '2027-04-04':{name:'פסח',fullWeek:true},
-  '2027-04-11':{name:'חול המועד פסח',fullWeek:true},
-  '2027-04-18':{name:'יום השואה',fullWeek:false},
-  '2027-04-25':{name:'יום הזיכרון + העצמאות',fullWeek:false},
-  '2027-05-30':{name:'שבועות',fullWeek:false},
-  '2027-07-04':{name:'תחילת חופשת קיץ',fullWeek:true},
-  '2027-07-11':{name:'חופשת קיץ',fullWeek:true},
-  '2027-07-18':{name:'חופשת קיץ',fullWeek:true},
-  '2027-07-25':{name:'חופשת קיץ',fullWeek:true},
-  '2027-08-01':{name:'חופשת קיץ',fullWeek:true},
-  '2027-08-08':{name:'חופשת קיץ',fullWeek:true},
-  '2027-08-15':{name:'חופשת קיץ',fullWeek:true},
-  '2027-08-22':{name:'חופשת קיץ',fullWeek:true}
-};
+// Holiday calendar - empty until admin uploads the real garden vacation schedule.
+// When ready, populate with: 'YYYY-MM-DD' (must be a Sunday): {name, fullWeek}
+// fullWeek=true means the entire week is off; false=partial (visual badge only).
+// Admin can also override per-week manually via the "+ סמני חופשה" link in the schedule grid.
+const ISRAELI_HOLIDAYS={};
 function getHolidayForWeek(weekId){const builtin=ISRAELI_HOLIDAYS[weekId];const schedule=getWeeklySchedule();const override=schedule[weekId]&&schedule[weekId].holidayOverride;if(override===false)return null;if(override&&override.name)return{name:override.name,fullWeek:override.fullWeek!==false,custom:true};return builtin||null}
 async function toggleWeekHoliday(weekId){const schedule=getWeeklySchedule();const builtin=ISRAELI_HOLIDAYS[weekId];const current=schedule[weekId]||{weekStart:weekId,assignments:{}};const currentEffective=getHolidayForWeek(weekId);if(currentEffective){if(!confirm(`לבטל סימון חופשה לשבוע ${weekId} (${currentEffective.name})?\n\nהשליחה האוטומטית תרוץ בשבוע זה כרגיל.`))return;current.holidayOverride=false}else{const name=prompt('סיבת החופשה / החג:','חופשה');if(!name||!name.trim())return;current.holidayOverride={name:name.trim(),fullWeek:true}}if(!schedule[weekId])schedule[weekId]=current;else Object.assign(schedule[weekId],current);schedule[weekId].lastUpdated=Date.now();schedule[weekId].lastUpdatedBy=cu.uid||cu.username;localStorage.setItem('bz3_weeklySchedule',JSON.stringify(schedule));try{await fbDb.collection('weeklySchedule').doc(weekId).set(schedule[weekId])}catch(e){console.error('save holiday toggle failed:',e);alert('שגיאה בשמירה: '+e.message)}renderWschGrid()}
 function switchWschRegion(r){_wschRegion=r;renderWschGrid()}
