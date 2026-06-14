@@ -2470,43 +2470,55 @@ async function buildFullJsonBackup() {
   return { dump, docCount, collectionsCount: Object.keys(dump.collections).length };
 }
 
-// ========== Layer 1: Daily native Firestore export ==========
+// ========== Layer 1: Daily JSON backup to GCS ==========
+// Was: native Firestore export (PERMISSION_DENIED, needed datastore.importExportAdmin role)
+// Now: JSON dump via buildFullJsonBackup() - same approach as weekly email, no IAM gymnastics
 exports.backupfirestoredaily = onSchedule(
   {
     schedule: "0 2 * * *", // Every day at 02:00 Israel
     timeZone: "Asia/Jerusalem",
     region: "us-central1",
     timeoutSeconds: 540,
+    memory: "1GiB",
   },
   async (event) => {
-    const projectId = process.env.GCLOUD_PROJECT || "babiez-app";
     const db = admin.firestore();
     const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
     const datestr = `${nowIsrael.getFullYear()}-${String(nowIsrael.getMonth() + 1).padStart(2, "0")}-${String(nowIsrael.getDate()).padStart(2, "0")}`;
-    const outputPath = `gs://${STORAGE_BUCKET}/backups/firestore/${datestr}`;
-    const databaseName = firestoreAdminClient.databasePath(projectId, "(default)");
-    logger.info("backupfirestoredaily: starting", { outputPath });
+    const fileName = `backups/daily/backup-${datestr}.json`;
+    const startedAt = Date.now();
+    logger.info("backupfirestoredaily: starting", { fileName });
     try {
-      const [operation] = await firestoreAdminClient.exportDocuments({
-        name: databaseName,
-        outputUriPrefix: outputPath,
-        collectionIds: [],
+      const { dump, docCount, collectionsCount } = await buildFullJsonBackup();
+      const json = JSON.stringify(dump);
+      const bucket = admin.storage().bucket(STORAGE_BUCKET);
+      await bucket.file(fileName).save(json, {
+        contentType: "application/json",
+        metadata: { metadata: {
+          type: "daily-auto",
+          docCount: String(docCount),
+          collectionsCount: String(collectionsCount),
+          date: datestr,
+        }},
       });
       await db.collection("backupLog").add({
-        type: "daily-native",
-        startedAt: Date.now(),
+        type: "daily-json",
+        startedAt,
+        finishedAt: Date.now(),
         date: datestr,
-        path: outputPath,
-        operationName: operation.name,
-        status: "started",
+        path: `gs://${STORAGE_BUCKET}/${fileName}`,
+        docCount,
+        collectionsCount,
+        sizeBytes: json.length,
+        status: "success",
       });
-      logger.info("backupfirestoredaily: export operation started", { operation: operation.name });
+      logger.info("backupfirestoredaily: done", { docCount, sizeBytes: json.length, date: datestr });
       return null;
     } catch (e) {
-      logger.error("backupfirestoredaily: FAILED", { error: e.message });
+      logger.error("backupfirestoredaily: FAILED", { error: e.message, stack: e.stack });
       await db.collection("backupLog").add({
-        type: "daily-native",
-        startedAt: Date.now(),
+        type: "daily-json",
+        startedAt,
         date: datestr,
         status: "failed",
         error: e.message || String(e),
