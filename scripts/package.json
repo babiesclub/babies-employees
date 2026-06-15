@@ -5,6 +5,8 @@
     "upload": "node upload-materials.js"
   },
   "dependencies": {
-    "firebase-admin": "^12.6.0"
+    "firebase-admin": "^12.6.0",
+    "mupdf": "^1.27.0",
+    "node-fetch": "^2.7.0"
   }
 }
