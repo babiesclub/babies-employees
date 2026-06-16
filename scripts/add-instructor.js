@@ -8,7 +8,10 @@
 //   node add-instructor.js --name "..." --username "..." --phone 050-1234567
 
 const admin = require('firebase-admin');
+const fs = require('fs');
+const path = require('path');
 const serviceAccount = require('./service-account.json');
+const { MSG_TEMPLATE } = require('./welcome-template');
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 const auth = admin.auth();
@@ -90,6 +93,13 @@ const usernameToEmail = (u) => u + '@babiez.local';
   await db.collection('users').doc(uid).set(userDoc);
   console.log(`✓ Firestore doc created`);
 
+  // Build the welcome message and append to welcome-messages.txt
+  const welcome = MSG_TEMPLATE(NAME, USERNAME, password);
+  const block = `\n${'='.repeat(50)}\n${NAME}  (@${USERNAME})\nסיסמא: ${password}\n${'='.repeat(50)}\n${welcome}\n`;
+  const outPath = path.join(__dirname, 'welcome-messages.txt');
+  fs.appendFileSync(outPath, block, 'utf8');
+  console.log(`✓ הודעת ברוכה הבאה צורפה ל-${path.basename(outPath)}`);
+
   console.log('\n' + '='.repeat(50));
   console.log('✅ מדריכה נוצרה בהצלחה!');
   console.log('='.repeat(50));
@@ -100,9 +110,12 @@ const usernameToEmail = (u) => u + '@babiez.local';
   console.log(`UID:       ${uid}`);
   console.log(`חודש פתוח: ${curMonth} (לדיווח רטרו)`);
   console.log('='.repeat(50));
-  console.log('\n💡 הצעדים הבאים:');
+  console.log('\n📝 הודעת ברוכה הבאה (להעתקה ל-WhatsApp):\n');
+  console.log(welcome);
+  console.log('\n' + '='.repeat(50));
+  console.log('💡 הצעדים הבאים:');
   console.log('   1. שייכי לה גנים דרך אדמין → מדריכים → עריכה');
-  console.log('   2. שלחי לה את ההודעה המלאה (welcome-messages.js)');
+  console.log('   2. ההודעה למעלה — או מהקובץ welcome-messages.txt');
   console.log('');
   process.exit(0);
 })().catch(e => {
