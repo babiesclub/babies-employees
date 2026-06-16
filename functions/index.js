@@ -2849,3 +2849,44 @@ exports.weeklybackupemail = onSchedule(
     }
   }
 );
+
+/**
+ * One-time deadline: removes '2026-06' from every instructor's unlockedMonths
+ * at exactly 19/6/2026 16:00 Israel time. After this, the regular Friday-16:00
+ * weekly lock kicks in for any June dates.
+ *
+ * Cron fires every June 19 at 16:00 - subsequent years are no-ops (no one
+ * will have 2026-06 anymore), so it's safe to leave deployed.
+ */
+exports.expirejuneunlockcron = onSchedule(
+  {
+    schedule: "0 16 19 6 *",
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    timeoutSeconds: 300,
+  },
+  async (event) => {
+    const db = admin.firestore();
+    const MONTH_TO_EXPIRE = "2026-06";
+    logger.info("expirejuneunlockcron: starting", { month: MONTH_TO_EXPIRE });
+    try {
+      const snap = await db.collection("users").where("role", "==", "instructor").get();
+      let updated = 0, skipped = 0;
+      const updates = [];
+      snap.forEach(d => {
+        const data = d.data();
+        const cur = Array.isArray(data.unlockedMonths) ? data.unlockedMonths : [];
+        if (!cur.includes(MONTH_TO_EXPIRE)) { skipped++; return; }
+        const next = cur.filter(m => m !== MONTH_TO_EXPIRE);
+        updates.push(d.ref.update({ unlockedMonths: next }));
+        updated++;
+      });
+      await Promise.all(updates);
+      logger.info("expirejuneunlockcron: done", { updated, skipped, month: MONTH_TO_EXPIRE });
+      return null;
+    } catch (e) {
+      logger.error("expirejuneunlockcron: FAILED", { error: e.message, stack: e.stack });
+      throw e;
+    }
+  }
+);
