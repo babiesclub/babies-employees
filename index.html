@@ -681,7 +681,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">חודש החשבונית</label>
     <input type="month" id="rcp-up-month" class="md-input">
     <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">בחרי תמונה</label>
-    <input type="file" id="rcp-up-file" accept="image/*" capture="environment" class="md-input" onchange="previewReceipt(event)">
+    <input type="file" id="rcp-up-file" accept="image/*" class="md-input" onchange="previewReceipt(event)">
     <div id="rcp-preview" style="display:none;margin-bottom:14px;text-align:center"></div>
     <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">הערה (אופציונלי)</label>
     <textarea id="rcp-up-note" rows="2" class="md-input" placeholder="לדוגמה: שכר אפריל 2026"></textarea>
@@ -708,7 +708,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">💵 סכום ששילמת (₪) *</label>
     <input type="number" id="rcp-park-amount" class="md-input" step="0.01" min="0.01" placeholder="לדוגמה: 25.50" inputmode="decimal">
     <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">📸 בחרי תמונה של הקבלה *</label>
-    <input type="file" id="rcp-park-file" accept="image/*" capture="environment" class="md-input" onchange="previewParkingReceipt(event)">
+    <input type="file" id="rcp-park-file" accept="image/*" class="md-input" onchange="previewParkingReceipt(event)">
     <div id="rcp-park-preview" style="display:none;margin-bottom:14px;text-align:center"></div>
     <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">הערה (אופציונלי)</label>
     <textarea id="rcp-park-note" rows="2" class="md-input" placeholder="לדוגמה: חניה ברעננה במהלך ביקור בגן השמש"></textarea>
