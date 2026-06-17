@@ -2851,6 +2851,77 @@ exports.weeklybackupemail = onSchedule(
 );
 
 /**
+ * Send a pre-built PDF (assembled client-side from receipts + parking)
+ * to the accountant via Gmail SMTP. Admin only.
+ */
+exports.sendreceiptstoaccountant = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 540,
+    memory: "1GiB",
+    secrets: [gmailUser, gmailAppPassword],
+  },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const { pdfBase64, recipientEmail, subject, months, instructorName, parkingCount, regularCount } = req.data || {};
+    if (!pdfBase64) throw new HttpsError("invalid-argument", "missing pdfBase64");
+    if (!recipientEmail) throw new HttpsError("invalid-argument", "missing recipientEmail");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipientEmail)) {
+      throw new HttpsError("invalid-argument", "invalid recipient email");
+    }
+    const pdfBuffer = Buffer.from(pdfBase64, "base64");
+    const sizeMB = (pdfBuffer.length / 1024 / 1024).toFixed(2);
+    const monthsLabel = (months && months.length) ? months.join(", ") : "(כל החודשים)";
+    const datestr = new Date().toISOString().slice(0, 10);
+    const filename = `babiez-receipts-${(months || ["all"]).join("_")}.pdf`;
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: gmailUser.value(), pass: gmailAppPassword.value() },
+    });
+    const body = [
+      "שלום,",
+      "",
+      `מצורף קובץ PDF עם החשבוניות${parkingCount ? " וקבלות החניה" : ""} של בייביז קלאב.`,
+      "",
+      `📅 חודשים: ${monthsLabel}`,
+      instructorName ? `👤 מדריכה: ${instructorName}` : "👥 כל המדריכות",
+      `📄 ${regularCount || 0} חשבוניות${parkingCount ? `  ·  🅿 ${parkingCount} קבלות חניה` : ""}`,
+      `📦 גודל הקובץ: ${sizeMB} MB`,
+      "",
+      "בברכה,",
+      "מערכת בייביז 🐾",
+    ].filter(Boolean).join("\n");
+    try {
+      await transporter.sendMail({
+        from: gmailUser.value(),
+        to: recipientEmail,
+        subject: subject || `חשבוניות בייביז קלאב — ${monthsLabel}`,
+        text: body,
+        attachments: [{ filename, content: pdfBuffer, contentType: "application/pdf" }],
+      });
+      await admin.firestore().collection("backupLog").add({
+        type: "accountant-email",
+        sentAt: Date.now(),
+        recipient: recipientEmail,
+        months: months || [],
+        instructorName: instructorName || null,
+        parkingCount: parkingCount || 0,
+        regularCount: regularCount || 0,
+        sizeBytes: pdfBuffer.length,
+        by: req.auth.uid,
+        date: datestr,
+      });
+      logger.info("sendreceiptstoaccountant: done", { recipient: recipientEmail, sizeBytes: pdfBuffer.length });
+      return { success: true, sizeBytes: pdfBuffer.length, recipient: recipientEmail };
+    } catch (e) {
+      logger.error("sendreceiptstoaccountant: FAILED", { error: e.message });
+      throw new HttpsError("internal", e.message || String(e));
+    }
+  }
+);
+
+/**
  * One-time deadline: removes '2026-06' from every instructor's unlockedMonths
  * at exactly 19/6/2026 16:00 Israel time. After this, the regular Friday-16:00
  * weekly lock kicks in for any June dates.
