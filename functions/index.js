@@ -36,6 +36,9 @@ const onesignalApiKey = defineSecret("ONESIGNAL_REST_API_KEY");
 const gmailUser = defineSecret("GMAIL_USER");
 const gmailAppPassword = defineSecret("GMAIL_APP_PASSWORD");
 
+// Anthropic API key for AI Assistant
+const anthropicApiKey = defineSecret("ANTHROPIC_API_KEY");
+
 // WhatsApp Cloud API secrets
 const whatsappAccessToken = defineSecret("WHATSAPP_ACCESS_TOKEN");
 const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
@@ -2959,5 +2962,217 @@ exports.expirejuneunlockcron = onSchedule(
       logger.error("expirejuneunlockcron: FAILED", { error: e.message, stack: e.stack });
       throw e;
     }
+  }
+);
+
+/* ========================================================================
+   AI ASSISTANT (Anthropic Claude)
+   ======================================================================== */
+
+function buildAssistantTools() {
+  return [
+    { name: "query_visits", description: "שולף דיווחי ביקור (records) לפי סינון. החזרת רשימה עם date, garden, instructorName, duration, groups, animal, classes, notes",
+      input_schema: { type: "object", properties: {
+        startDate: { type: "string", description: "YYYY-MM-DD - תאריך התחלה (כולל)" },
+        endDate: { type: "string", description: "YYYY-MM-DD - תאריך סיום (כולל)" },
+        instructorName: { type: "string", description: "שם מדריכה (חלקי - יתבצע contains)" },
+        garden: { type: "string", description: "שם גן (חלקי)" },
+        animal: { type: "string", description: "שם בעל חיים / מערך (חלקי)" },
+        limit: { type: "number", description: "מקסימום תוצאות, default 200" }
+      }}},
+    { name: "query_users", description: "שולף משתמשים. החזרת רשימה עם name, username, role, gardens, specialty, phone, vatStatus",
+      input_schema: { type: "object", properties: {
+        role: { type: "string", enum: ["instructor", "admin"] },
+        specialty: { type: "string", enum: ["animals","develop","dog","training"] },
+        nameContains: { type: "string", description: "סינון לפי שם (חלקי)" }
+      }}},
+    { name: "query_gardens", description: "שולף גנים. החזרת רשימה עם name, address, phone, email, networkName, region, paymentTerms",
+      input_schema: { type: "object", properties: {
+        nameContains: { type: "string" },
+        region: { type: "string" },
+        networkName: { type: "string" }
+      }}},
+    { name: "query_receipts", description: "שולף חשבוניות וקבלות. החזרת רשימה עם month, instructorName, type, amount, storageUrl, note",
+      input_schema: { type: "object", properties: {
+        month: { type: "string", description: "YYYY-MM" },
+        startMonth: { type: "string", description: "YYYY-MM (כולל)" },
+        endMonth: { type: "string", description: "YYYY-MM (כולל)" },
+        instructorName: { type: "string" },
+        type: { type: "string", enum: ["regular", "parking"] }
+      }}},
+    { name: "query_materials", description: "שולף מערכים שבועיים. החזרת רשימה עם name, animalName, category, seasonality, summary",
+      input_schema: { type: "object", properties: {
+        category: { type: "string", enum: ["rodent","bird","chick","reptile","insect","generic"] },
+        nameContains: { type: "string" }
+      }}},
+    { name: "export_excel", description: "מייצר קובץ אקסל מנתונים שהתקבלו. למשתמש יוצג ככפתור הורדה. יש להעביר sheets - מערך של גיליונות, כל אחד עם name + rows (מערך של אובייקטים).",
+      input_schema: { type: "object", properties: {
+        filename: { type: "string", description: "שם הקובץ (בלי .xlsx)" },
+        sheets: { type: "array", description: "גיליונות. כל גיליון: { name: 'שם', rows: [{col1: val, col2: val}, ...] }",
+          items: { type: "object", properties: { name: { type: "string" }, rows: { type: "array" } }, required: ["name", "rows"] }
+        }
+      }, required: ["filename", "sheets"] }
+    }
+  ];
+}
+
+async function execAssistantTool(toolName, toolInput, db, filesAccumulator) {
+  if (toolName === "query_visits") {
+    const snap = await db.collection("records").get();
+    let recs = []; snap.forEach(d => recs.push(d.data()));
+    if (toolInput.startDate) recs = recs.filter(r => (r.date||"") >= toolInput.startDate);
+    if (toolInput.endDate) recs = recs.filter(r => (r.date||"") <= toolInput.endDate);
+    if (toolInput.instructorName) { const q = toolInput.instructorName.toLowerCase(); recs = recs.filter(r => (r.instructorName||"").toLowerCase().includes(q)); }
+    if (toolInput.garden) { const q = toolInput.garden.toLowerCase(); recs = recs.filter(r => (r.garden||"").toLowerCase().includes(q)); }
+    if (toolInput.animal) { const q = toolInput.animal.toLowerCase(); recs = recs.filter(r => (r.animal||"").toLowerCase().includes(q)); }
+    recs.sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    const limit = Math.min(toolInput.limit || 200, 500);
+    return { totalMatching: recs.length, returned: Math.min(recs.length, limit), results: recs.slice(0, limit).map(r => ({
+      date: r.date, garden: r.garden, instructorName: r.instructorName, duration: r.duration, groups: r.groups,
+      animal: r.animal, classes: r.classes, notes: r.notes, timeIn: r.timeIn, signed: !!r.signature
+    })) };
+  }
+  if (toolName === "query_users") {
+    const snap = await db.collection("users").get();
+    let users = []; snap.forEach(d => users.push(d.data()));
+    if (toolInput.role) users = users.filter(u => u.role === toolInput.role);
+    if (toolInput.specialty) users = users.filter(u => u.specialty === toolInput.specialty);
+    if (toolInput.nameContains) { const q = toolInput.nameContains.toLowerCase(); users = users.filter(u => (u.name||"").toLowerCase().includes(q)); }
+    return { count: users.length, results: users.map(u => ({
+      name: u.name, username: u.username, role: u.role, specialty: u.specialty,
+      gardens: u.gardens || [], phone: u.phone, vatStatus: u.vatStatus, region: u.region,
+      gardenLimits: u.gardenLimits || {}
+    })) };
+  }
+  if (toolName === "query_gardens") {
+    const doc = await db.collection("meta").doc("gardens").get();
+    let gardens = doc.exists ? (doc.data().items || []) : [];
+    gardens = gardens.map(g => typeof g === "string" ? { name: g } : g);
+    if (toolInput.nameContains) { const q = toolInput.nameContains.toLowerCase(); gardens = gardens.filter(g => (g.name||"").toLowerCase().includes(q)); }
+    if (toolInput.region) gardens = gardens.filter(g => g.region === toolInput.region);
+    if (toolInput.networkName) gardens = gardens.filter(g => g.networkName === toolInput.networkName);
+    return { count: gardens.length, results: gardens };
+  }
+  if (toolName === "query_receipts") {
+    const snap = await db.collection("receipts").get();
+    let recs = []; snap.forEach(d => recs.push(d.data()));
+    if (toolInput.month) recs = recs.filter(r => r.month === toolInput.month);
+    if (toolInput.startMonth) recs = recs.filter(r => (r.month||"") >= toolInput.startMonth);
+    if (toolInput.endMonth) recs = recs.filter(r => (r.month||"") <= toolInput.endMonth);
+    if (toolInput.instructorName) { const q = toolInput.instructorName.toLowerCase(); recs = recs.filter(r => (r.instructorName||"").toLowerCase().includes(q)); }
+    if (toolInput.type === "parking") recs = recs.filter(r => r.type === "parking");
+    if (toolInput.type === "regular") recs = recs.filter(r => r.type !== "parking");
+    return { count: recs.length, results: recs.map(r => ({
+      month: r.month, instructorName: r.instructorName, type: r.type || "regular",
+      amount: r.amount, uploadedAt: r.uploadedAt, note: r.note, storageUrl: r.storageUrl
+    })) };
+  }
+  if (toolName === "query_materials") {
+    const snap = await db.collection("materials").get();
+    let mats = []; snap.forEach(d => mats.push(d.data()));
+    if (toolInput.category) mats = mats.filter(m => m.category === toolInput.category);
+    if (toolInput.nameContains) { const q = toolInput.nameContains.toLowerCase(); mats = mats.filter(m => (m.name||"").toLowerCase().includes(q)); }
+    return { count: mats.length, results: mats.map(m => ({
+      name: m.name, animalName: m.animalName, category: m.category, seasonality: m.seasonality,
+      summary: m.summary, hasInstructorPdf: !!m.instructorPdfUrl, hasGardenPdf: !!m.gardenPdfUrl,
+      audioCount: (m.audioFiles||[]).length
+    })) };
+  }
+  if (toolName === "export_excel") {
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    (toolInput.sheets || []).forEach(sh => {
+      const rows = sh.rows || [];
+      const ws = rows.length ? XLSX.utils.json_to_sheet(rows) : XLSX.utils.aoa_to_sheet([["(אין נתונים)"]]);
+      const safeName = (sh.name || "Sheet").slice(0, 30).replace(/[\\\/\[\]\*\?:]/g, "");
+      XLSX.utils.book_append_sheet(wb, ws, safeName || "Sheet");
+    });
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    const base64 = Buffer.from(buf).toString("base64");
+    const filename = (toolInput.filename || "export") + ".xlsx";
+    filesAccumulator.push({ filename, base64, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", sizeBytes: buf.length });
+    return { success: true, filename, sizeBytes: buf.length, message: "הקובץ נוצר. למשתמש יוצג כפתור הורדה." };
+  }
+  return { error: "unknown tool: " + toolName };
+}
+
+exports.askassistant = onCall(
+  { region: "us-central1", timeoutSeconds: 180, memory: "1GiB", secrets: [anthropicApiKey] },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const { question, history } = req.data || {};
+    if (!question || !String(question).trim()) throw new HttpsError("invalid-argument", "missing question");
+    if (!anthropicApiKey.value()) throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY לא הוגדר");
+    const db = admin.firestore();
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: anthropicApiKey.value() });
+    const today = new Date().toISOString().slice(0, 10);
+    const SYSTEM = `את עוזרת AI של אדמין אפליקציית בייביז קלאב — אפליקציה לניהול מדריכות חוגי חיות בגני ילדים בישראל.
+מטרתך: לעזור לאדמין (שיר) לשלוף ולנתח מידע. את לא משנה נתונים — רק קוראת ומציגה.
+
+📅 תאריך היום: ${today}
+🎯 הקשר: 30+ מדריכות, 277+ גנים, 46 מערכים שבועיים, חשבוניות חודשיות + קבלות חניה.
+
+🛠 הכלים: query_visits / query_users / query_gardens / query_receipts / query_materials / export_excel
+
+📋 הנחיות:
+1. עני בעברית ברורה ומסודרת, השתמשי באמוג'י במידה.
+2. כשמבקשים סטטיסטיקה — סכמי במספרים מפורשים.
+3. כשמבקשים ייצוא — קראי ל-export_excel עם נתונים מסוננים.
+4. אל תמציאי נתונים — הסתמכי רק על תוצאות הכלים.
+5. שאלה לא ברורה → שאלי הבהרה קצרה.
+6. הרבה נתונים → סכמי + הציעי לייצא אקסל.`;
+
+    const messages = Array.isArray(history) ? history.slice(-10) : [];
+    messages.push({ role: "user", content: question });
+
+    const tools = buildAssistantTools();
+    const filesAccumulator = [];
+    let iterations = 0, finalText = "", totalInTokens = 0, totalOutTokens = 0, modelUsed = "";
+
+    while (iterations < 10) {
+      iterations++;
+      const resp = await client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        system: SYSTEM,
+        tools,
+        messages,
+      });
+      modelUsed = resp.model;
+      totalInTokens += resp.usage.input_tokens;
+      totalOutTokens += resp.usage.output_tokens;
+      messages.push({ role: "assistant", content: resp.content });
+      if (resp.stop_reason !== "tool_use") {
+        finalText = resp.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+        break;
+      }
+      const toolUses = resp.content.filter(b => b.type === "tool_use");
+      const toolResults = [];
+      for (const tu of toolUses) {
+        try {
+          const result = await execAssistantTool(tu.name, tu.input, db, filesAccumulator);
+          toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(result).slice(0, 100000) });
+        } catch (e) {
+          toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: "Error: " + (e.message || String(e)), is_error: true });
+        }
+      }
+      messages.push({ role: "user", content: toolResults });
+    }
+
+    await db.collection("aiAssistantLog").add({
+      askedAt: Date.now(), by: req.auth.uid, question,
+      answerPreview: (finalText || "").slice(0, 500), model: modelUsed,
+      iterations, inputTokens: totalInTokens, outputTokens: totalOutTokens,
+      filesCount: filesAccumulator.length,
+    });
+
+    return {
+      success: true,
+      answer: finalText || "(לא התקבלה תשובה)",
+      files: filesAccumulator,
+      usage: { input: totalInTokens, output: totalOutTokens, iterations },
+      assistantHistory: messages.filter(m => m.role === "assistant" || m.role === "user").slice(-20),
+    };
   }
 );
