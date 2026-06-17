@@ -3005,6 +3005,12 @@ function buildAssistantTools() {
         category: { type: "string", enum: ["rodent","bird","chick","reptile","insect","generic"] },
         nameContains: { type: "string" }
       }}},
+    { name: "query_auth_status", description: "שולף סטטוס כניסה (Firebase Auth) לכל המדריכות: האם ביצעו כניסה ראשונה, מתי הכניסה האחרונה, וכמה ימים עברו. שימושי לזיהוי 'מי לא נכנסה אף פעם' או 'מי לא נכנסה לאחרונה'.",
+      input_schema: { type: "object", properties: {
+        neverSignedIn: { type: "boolean", description: "true = החזרת רק מדריכות שלא נכנסו אף פעם" },
+        inactiveDaysMin: { type: "number", description: "החזרת רק מדריכות שלא נכנסו N ימים או יותר (לפעיל=0)" },
+        nameContains: { type: "string", description: "סינון לפי שם (חלקי)" }
+      }}},
     { name: "export_excel", description: "מייצר קובץ אקסל מנתונים שהתקבלו. למשתמש יוצג ככפתור הורדה. יש להעביר sheets - מערך של גיליונות, כל אחד עם name + rows (מערך של אובייקטים).",
       input_schema: { type: "object", properties: {
         filename: { type: "string", description: "שם הקובץ (בלי .xlsx)" },
@@ -3078,6 +3084,37 @@ async function execAssistantTool(toolName, toolInput, db, filesAccumulator) {
       audioCount: (m.audioFiles||[]).length
     })) };
   }
+  if (toolName === "query_auth_status") {
+    const usersSnap = await db.collection("users").get();
+    const fsUsers = {};
+    usersSnap.forEach(d => { const u = d.data(); if (u.role !== "admin") fsUsers[d.id] = u; });
+    let pageToken = undefined;
+    const authByUid = {};
+    do {
+      const page = await admin.auth().listUsers(1000, pageToken);
+      page.users.forEach(u => { authByUid[u.uid] = u; });
+      pageToken = page.pageToken;
+    } while (pageToken);
+    const now = Date.now();
+    let rows = Object.keys(fsUsers).map(uid => {
+      const fu = fsUsers[uid];
+      const au = authByUid[uid];
+      const lastSignIn = au && au.metadata && au.metadata.lastSignInTime ? au.metadata.lastSignInTime : null;
+      const created = au && au.metadata && au.metadata.creationTime ? au.metadata.creationTime : null;
+      const lastMs = lastSignIn ? Date.parse(lastSignIn) : null;
+      const daysSince = lastMs ? Math.floor((now - lastMs) / 86400000) : null;
+      return {
+        name: fu.name, username: fu.username, phone: fu.phone || "",
+        neverSignedIn: !lastSignIn, lastSignIn, daysSinceLastSignIn: daysSince,
+        accountCreated: created, hasAuthAccount: !!au
+      };
+    });
+    if (toolInput.neverSignedIn === true) rows = rows.filter(r => r.neverSignedIn);
+    if (typeof toolInput.inactiveDaysMin === "number") rows = rows.filter(r => r.neverSignedIn || (r.daysSinceLastSignIn != null && r.daysSinceLastSignIn >= toolInput.inactiveDaysMin));
+    if (toolInput.nameContains) { const q = toolInput.nameContains.toLowerCase(); rows = rows.filter(r => (r.name||"").toLowerCase().includes(q)); }
+    rows.sort((a,b) => { if (a.neverSignedIn !== b.neverSignedIn) return a.neverSignedIn ? -1 : 1; return (b.daysSinceLastSignIn||0) - (a.daysSinceLastSignIn||0); });
+    return { count: rows.length, results: rows };
+  }
   if (toolName === "export_excel") {
     const XLSX = require("xlsx");
     const wb = XLSX.utils.book_new();
@@ -3113,7 +3150,7 @@ exports.askassistant = onCall(
 📅 תאריך היום: ${today}
 🎯 הקשר: 30+ מדריכות, 277+ גנים, 46 מערכים שבועיים, חשבוניות חודשיות + קבלות חניה.
 
-🛠 הכלים: query_visits / query_users / query_gardens / query_receipts / query_materials / export_excel
+🛠 הכלים: query_visits / query_users / query_gardens / query_receipts / query_materials / query_auth_status / export_excel
 
 📋 הנחיות:
 1. עני בעברית ברורה ומסודרת, השתמשי באמוג'י במידה.
