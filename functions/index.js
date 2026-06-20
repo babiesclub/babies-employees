@@ -2230,6 +2230,47 @@ exports.notifyinstructorsweeklycron = onSchedule(
  * Admin clicks "send now" in the UI -> these onCall functions run immediately,
  * bypassing the scheduled crons. Same internals; different entry point.
  */
+exports.getinstructorspushstatus = onCall(
+  { region: "us-central1", timeoutSeconds: 60 },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const db = admin.firestore();
+    const usersSnap = await db.collection("users").get();
+    const fsUsers = {};
+    usersSnap.forEach(d => { const u = d.data(); if (u.role !== "admin") fsUsers[d.id] = u; });
+    let pageToken = undefined;
+    const authByUid = {};
+    do {
+      const page = await admin.auth().listUsers(1000, pageToken);
+      page.users.forEach(u => { authByUid[u.uid] = u; });
+      pageToken = page.pageToken;
+    } while (pageToken);
+    const now = Date.now();
+    const rows = Object.keys(fsUsers).map(uid => {
+      const fu = fsUsers[uid];
+      const au = authByUid[uid];
+      const lastSignIn = au && au.metadata && au.metadata.lastSignInTime ? au.metadata.lastSignInTime : null;
+      const lastMs = lastSignIn ? Date.parse(lastSignIn) : null;
+      const subIds = Array.isArray(fu.oneSignalSubscriptionIds) ? fu.oneSignalSubscriptionIds : (fu.oneSignalSubscriptionId ? [fu.oneSignalSubscriptionId] : []);
+      return {
+        uid, name: fu.name, username: fu.username, phone: fu.phone || "",
+        neverSignedIn: !lastSignIn,
+        lastSignIn,
+        daysSinceLastSignIn: lastMs ? Math.floor((now - lastMs) / 86400000) : null,
+        deviceCount: subIds.length,
+        hasSubscription: subIds.length > 0,
+      };
+    });
+    rows.sort((a, b) => {
+      const aBad = !a.hasSubscription || a.neverSignedIn;
+      const bBad = !b.hasSubscription || b.neverSignedIn;
+      if (aBad !== bBad) return aBad ? -1 : 1;
+      return (a.name || "").localeCompare(b.name || "", "he");
+    });
+    return { rows, total: rows.length };
+  }
+);
+
 async function requireAdmin(auth) {
   if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign in required");
   const db = admin.firestore();
