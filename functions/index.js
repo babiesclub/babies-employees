@@ -165,6 +165,32 @@ exports.sendpushonnotification = onDocumentCreated(
           errors: result.errors,
           result,
         });
+        const invalidIds = (result.errors && result.errors.invalid_player_ids) || [];
+        if (invalidIds.length && data.recipientUid) {
+          try {
+            const userRef = admin.firestore().collection("users").doc(String(data.recipientUid));
+            const userDoc = await userRef.get();
+            if (userDoc.exists) {
+              const ud = userDoc.data();
+              const currentIds = Array.isArray(ud.oneSignalSubscriptionIds) ? ud.oneSignalSubscriptionIds : (ud.oneSignalSubscriptionId ? [ud.oneSignalSubscriptionId] : []);
+              const cleaned = currentIds.filter(id => !invalidIds.includes(id));
+              if (cleaned.length !== currentIds.length) {
+                await userRef.update({
+                  oneSignalSubscriptionIds: cleaned,
+                  oneSignalSubscriptionId: cleaned[0] || null,
+                  oneSignalCleanedAt: new Date().toISOString(),
+                });
+                logger.info("Pruned invalid subscription IDs", {
+                  recipientUid: data.recipientUid,
+                  removed: invalidIds.length,
+                  remaining: cleaned.length,
+                });
+              }
+            }
+          } catch (e) {
+            logger.warn("Failed to prune invalid IDs", { error: e.message });
+          }
+        }
         return;
       }
 
