@@ -2056,6 +2056,20 @@ exports.sendweeklytogardenscron = onSchedule(
       const errors = [];
       const sendLogRoot = db.collection("sendLog").doc("weekly").collection(weekId);
 
+      // Clear previous send log for this week so counter shows only this run
+      try {
+        const prev = await sendLogRoot.get();
+        if (!prev.empty) {
+          const docs = prev.docs;
+          for (let i = 0; i < docs.length; i += 400) {
+            const batch = db.batch();
+            docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+          }
+          logger.info("sendweeklytogardenscron: cleared previous log", { count: docs.length, weekId });
+        }
+      } catch (e) { logger.warn("clear log failed (continuing):", e.message); }
+
       for (const uid of uids) {
         const matId = assignments[uid];
         const mat = matById[matId];
@@ -2370,6 +2384,20 @@ exports.sendweeklytogardensnow = onCall(
       let sent = 0, failed = 0, skipped = 0;
       const errors = [];
       const sendLogRoot = db.collection("sendLog").doc("weekly").collection(resolvedWeekId);
+
+      // Clear previous send log for this week so the counter shows ONLY this run
+      try {
+        const prev = await sendLogRoot.get();
+        if (!prev.empty) {
+          const docs = prev.docs;
+          for (let i = 0; i < docs.length; i += 400) {
+            const batch = db.batch();
+            docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+          }
+          logger.info("sendweeklytogardensnow: cleared previous log", { count: docs.length, weekId: resolvedWeekId });
+        }
+      } catch (e) { logger.warn("clear log failed (continuing):", e.message); }
 
       for (const uid of uids) {
         const matId = assignments[uid];
