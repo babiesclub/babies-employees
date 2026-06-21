@@ -1955,7 +1955,10 @@ async function sendOneTemplateMessage({ to, templateName, languageCode, paramete
   if (Array.isArray(parameters) && parameters.length) {
     payload.template.components.push({
       type: "body",
-      parameters: parameters.map((p) => ({ type: "text", text: String(p) })),
+      parameters: parameters.map((p) => ({
+        type: "text",
+        text: String(p).replace(/[\r\n\t]+/g, " ").replace(/ {4,}/g, "   ").trim(),
+      })),
     });
   }
   const url = `${WHATSAPP_API_BASE}/${phoneId}/messages`;
