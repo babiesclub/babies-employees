@@ -1218,13 +1218,32 @@ exports.receivewhatsapp = onRequest(
               const msgId = status.id;
               const statusValue = status.status; // sent / delivered / read / failed
               const timestamp = status.timestamp ? Number(status.timestamp) * 1000 : Date.now();
+              const errDetail = (status.errors && status.errors[0] && (status.errors[0].title || status.errors[0].message)) || null;
               await admin.firestore().collection("whatsapp_messages").doc(msgId).set(
                 {
                   [`status_${statusValue}_at`]: new Date(timestamp).toISOString(),
                   status: statusValue,
+                  ...(errDetail ? { deliveryError: errDetail } : {}),
                 },
                 { merge: true }
               );
+              // Also update the sendLog record for this message (via index)
+              try {
+                const idxDoc = await admin.firestore().collection("sendLogIndex").doc(msgId).get();
+                if (idxDoc.exists) {
+                  const idx = idxDoc.data();
+                  const sendLogRef = admin.firestore()
+                    .collection("sendLog").doc("weekly")
+                    .collection(idx.weekId).doc(idx.sendLogId);
+                  await sendLogRef.set({
+                    deliveryStatus: statusValue,
+                    [`delivery_${statusValue}_at`]: timestamp,
+                    ...(errDetail ? { deliveryError: errDetail } : {}),
+                  }, { merge: true });
+                }
+              } catch (e) {
+                logger.warn("receivewhatsapp: sendLog update failed", { error: e.message });
+              }
               logger.info("receivewhatsapp: status saved", { msgId, status: statusValue });
             } catch (e) {
               logger.error("receivewhatsapp: failed to process status", { error: e.message, status });
@@ -2080,7 +2099,7 @@ exports.sendweeklytogardenscron = onSchedule(
           const garden = gardenByName[gName];
           if (!garden || !garden.phone) { skipped++; continue; }
           try {
-            await sendOneTemplateMessage({
+            const apiResult = await sendOneTemplateMessage({
               to: garden.phone,
               templateName,
               languageCode,
@@ -2090,8 +2109,9 @@ exports.sendweeklytogardenscron = onSchedule(
               token,
               phoneId,
             });
+            const messageId = (apiResult && apiResult.messages && apiResult.messages[0] && apiResult.messages[0].id) || null;
             sent++;
-            await sendLogRoot.add({
+            const sendLogRef = await sendLogRoot.add({
               type: "garden",
               instructorUid: uid,
               instructorName: user.name || "",
@@ -2101,7 +2121,13 @@ exports.sendweeklytogardenscron = onSchedule(
               materialName: mat.name,
               status: "sent",
               sentAt: Date.now(),
+              messageId,
             });
+            if (messageId) {
+              await db.collection("sendLogIndex").doc(messageId).set({
+                weekId, sendLogId: sendLogRef.id, sentAt: Date.now(),
+              });
+            }
           } catch (e) {
             failed++;
             errors.push({ garden: gName, error: e.message || String(e) });
@@ -2409,7 +2435,7 @@ exports.sendweeklytogardensnow = onCall(
           const garden = gardenByName[gName];
           if (!garden || !garden.phone) { skipped++; continue; }
           try {
-            await sendOneTemplateMessage({
+            const apiResult = await sendOneTemplateMessage({
               to: garden.phone,
               templateName,
               languageCode,
@@ -2419,15 +2445,22 @@ exports.sendweeklytogardensnow = onCall(
               token,
               phoneId,
             });
+            const messageId = (apiResult && apiResult.messages && apiResult.messages[0] && apiResult.messages[0].id) || null;
             sent++;
-            await sendLogRoot.add({
+            const sendLogRef = await sendLogRoot.add({
               type: "garden", trigger: "manual",
               instructorUid: uid, instructorName: user.name || "",
               gardenName: gName, gardenPhone: garden.phone,
               materialId: matId, materialName: mat.name,
               status: "sent", sentAt: Date.now(),
+              messageId,
               triggeredBy: req.auth.uid,
             });
+            if (messageId) {
+              await db.collection("sendLogIndex").doc(messageId).set({
+                weekId: resolvedWeekId, sendLogId: sendLogRef.id, sentAt: Date.now(),
+              });
+            }
           } catch (e) {
             failed++;
             errors.push({ garden: gName, error: e.message || String(e) });
