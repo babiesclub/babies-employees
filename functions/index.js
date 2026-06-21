@@ -2299,6 +2299,62 @@ exports.notifyinstructorsweeklycron = onSchedule(
  * Admin clicks "send now" in the UI -> these onCall functions run immediately,
  * bypassing the scheduled crons. Same internals; different entry point.
  */
+exports.sendwhatsapptogardennow = onCall(
+  { region: "us-central1", secrets: [whatsappAccessToken, whatsappPhoneNumberId], timeoutSeconds: 60 },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const { gardenName, materialId } = req.data || {};
+    if (!gardenName) throw new HttpsError("invalid-argument", "missing gardenName");
+    if (!materialId) throw new HttpsError("invalid-argument", "missing materialId");
+    const db = admin.firestore();
+    const gardensSnap = await db.collection("meta").doc("gardens").get();
+    const items = gardensSnap.exists ? (gardensSnap.data().items || []) : [];
+    const garden = items.find(g => typeof g === "object" && g.name === gardenName);
+    if (!garden) return { success: false, error: "הגן לא נמצא" };
+    if (!garden.phone) return { success: false, error: "אין טלפון מוגדר לגן" };
+    const matDoc = await db.collection("materials").doc(materialId).get();
+    if (!matDoc.exists) return { success: false, error: "המערך לא נמצא" };
+    const mat = matDoc.data();
+    if (!mat.gardenPdfUrl) return { success: false, error: "חסר PDF למערך הזה" };
+    const settingsDoc = await db.collection("settings").doc("weeklySend").get();
+    const settings = settingsDoc.exists ? settingsDoc.data() : {};
+    const templateName = settings.templateName || "gan_weekly_visit";
+    const languageCode = settings.templateLanguage || "he";
+    const token = String(whatsappAccessToken.value()).trim();
+    const phoneId = String(whatsappPhoneNumberId.value()).trim();
+    try {
+      const apiResult = await sendOneTemplateMessage({
+        to: garden.phone, templateName, languageCode,
+        parameters: [mat.animalName || mat.name, mat.summary || ""],
+        mediaUrl: mat.gardenPdfUrl,
+        mediaCaption: mat.gardenPdfName || "מי בא לבקר.pdf",
+        token, phoneId,
+      });
+      const messageId = (apiResult && apiResult.messages && apiResult.messages[0] && apiResult.messages[0].id) || null;
+      const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+      const sunday = new Date(nowIsrael);
+      sunday.setHours(0, 0, 0, 0);
+      sunday.setDate(sunday.getDate() - sunday.getDay());
+      const weekId = `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, "0")}-${String(sunday.getDate()).padStart(2, "0")}`;
+      const sendLogRef = await db.collection("sendLog").doc("weekly").collection(weekId).add({
+        type: "garden", trigger: "single",
+        gardenName, gardenPhone: garden.phone,
+        materialId, materialName: mat.name,
+        status: "sent", sentAt: Date.now(),
+        messageId, triggeredBy: req.auth.uid,
+      });
+      if (messageId) {
+        await db.collection("sendLogIndex").doc(messageId).set({
+          weekId, sendLogId: sendLogRef.id, sentAt: Date.now(),
+        });
+      }
+      return { success: true, messageId, gardenPhone: garden.phone, gardenName };
+    } catch (e) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+);
+
 exports.getinstructorspushstatus = onCall(
   { region: "us-central1", timeoutSeconds: 60 },
   async (req) => {
