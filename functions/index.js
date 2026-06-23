@@ -3400,3 +3400,74 @@ exports.askassistant = onCall(
     };
   }
 );
+
+/**
+ * processcustomnotifications - runs every 15 minutes. Reads enabled custom
+ * notifications, checks each schedule, and fires those that are due by writing
+ * a notification doc per recipient (which triggers OneSignal via sendpushonnotification).
+ */
+exports.processcustomnotifications = onSchedule(
+  { schedule: "*/15 * * * *", timeZone: "Asia/Jerusalem", region: "us-central1", timeoutSeconds: 300 },
+  async () => {
+    const db = admin.firestore();
+    const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+    const nowMs = Date.now();
+    logger.info("processcustomnotifications: starting", { israelTime: nowIsrael.toISOString() });
+    const snap = await db.collection("customNotifications").where("enabled", "==", true).get();
+    if (snap.empty) { logger.info("no enabled custom notifs"); return null; }
+    const usersSnap = await db.collection("users").get();
+    const users = []; usersSnap.forEach(d => users.push({ uid: d.id, ...d.data() }));
+    const nonAdminUsers = users.filter(u => u.role !== "admin");
+    const dueWindowMs = 16 * 60 * 1000;
+    let fired = 0, skipped = 0;
+    for (const docSnap of snap.docs) {
+      const n = docSnap.data();
+      const ref = docSnap.ref;
+      const s = n.schedule || {};
+      let scheduledTime = null;
+      if (s.type === "daily") {
+        const t = new Date(nowIsrael); t.setHours(s.hour || 0, s.minute || 0, 0, 0);
+        scheduledTime = t.getTime();
+      } else if (s.type === "weekly") {
+        if (nowIsrael.getDay() !== (s.dayOfWeek || 0)) { skipped++; continue; }
+        const t = new Date(nowIsrael); t.setHours(s.hour || 0, s.minute || 0, 0, 0);
+        scheduledTime = t.getTime();
+      } else if (s.type === "monthly") {
+        if (nowIsrael.getDate() !== (s.dayOfMonth || 1)) { skipped++; continue; }
+        const t = new Date(nowIsrael); t.setHours(s.hour || 0, s.minute || 0, 0, 0);
+        scheduledTime = t.getTime();
+      } else if (s.type === "once") {
+        if (!s.date) { skipped++; continue; }
+        scheduledTime = Date.parse(s.date);
+        if (n.lastRunAt) { skipped++; continue; }
+      } else { skipped++; continue; }
+      const israelNowMs = nowIsrael.getTime();
+      const drift = israelNowMs - scheduledTime;
+      if (drift < 0 || drift > dueWindowMs) { skipped++; continue; }
+      if (n.lastRunAt && (nowMs - n.lastRunAt) < dueWindowMs) { skipped++; continue; }
+      const r = n.recipients || { type: "all" };
+      let recipients = [];
+      if (r.type === "all") recipients = nonAdminUsers;
+      else if (r.type === "specialty" && r.specialty) recipients = nonAdminUsers.filter(u => u.specialty === r.specialty);
+      else if (r.type === "specific" && Array.isArray(r.uids)) recipients = r.uids.map(uid => users.find(u => u.uid === uid || String(u.id) === String(uid))).filter(Boolean);
+      logger.info("firing custom notif", { id: docSnap.id, title: n.title, recipients: recipients.length });
+      const writes = recipients.map(u => {
+        const id = Date.now() + Math.floor(Math.random() * 10000);
+        return db.collection("notifications").doc(String(id)).set({
+          id, recipientUid: u.uid || String(u.id),
+          type: "custom_scheduled", icon: n.icon || "🔔",
+          title: n.title || "התראה", body: n.body || "",
+          link: null, createdAt: new Date().toISOString(),
+          createdBy: n.createdBy || "system", createdByName: "מערכת התראות",
+          read: false, readAt: null,
+          customNotifId: docSnap.id,
+        });
+      });
+      await Promise.all(writes);
+      await ref.set({ lastRunAt: nowMs, lastRunRecipientCount: recipients.length }, { merge: true });
+      fired++;
+    }
+    logger.info("processcustomnotifications: done", { fired, skipped });
+    return null;
+  }
+);
