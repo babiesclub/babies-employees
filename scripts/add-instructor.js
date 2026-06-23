@@ -25,10 +25,16 @@ const NAME = arg('--name');
 const USERNAME = arg('--username');
 const SPECIALTY = arg('--specialty') || 'animals';
 const PHONE = arg('--phone') || null;
+const REGION = arg('--region') || null;
+const VALID_REGIONS = ['צפון רחוק','צפון','שרון','מרכז','ירושלים','דרום'];
 
 if (!NAME || !USERNAME) {
   console.error('Usage: node add-instructor.js --name "<Hebrew name>" --username <english_username>');
-  console.error('Optional: --specialty animals|develop|dog|training  --phone 050-...');
+  console.error('Optional: --specialty animals|develop|dog|training  --phone 050-...  --region <צפון רחוק|צפון|שרון|מרכז|ירושלים|דרום>');
+  process.exit(1);
+}
+if (REGION && !VALID_REGIONS.includes(REGION)) {
+  console.error(`✗ אזור לא תקין: "${REGION}". תקין: ${VALID_REGIONS.join(' / ')}`);
   process.exit(1);
 }
 
@@ -83,6 +89,7 @@ const usernameToEmail = (u) => u + '@babiez.local';
     gardens: [],
     specialty: SPECIALTY,
     phone: PHONE,
+    region: REGION,
     vatStatus: 'patur',
     travelMonthly: 0,
     gardenPayHistory: {},
@@ -107,6 +114,7 @@ const usernameToEmail = (u) => u + '@babiez.local';
   console.log(`שם משתמש:  ${USERNAME}`);
   console.log(`סיסמא:     ${password}`);
   console.log(`התמחות:    ${SPECIALTY}`);
+  console.log(`אזור:      ${REGION || '(לא הוגדר)'}`);
   console.log(`UID:       ${uid}`);
   console.log(`חודש פתוח: ${curMonth} (לדיווח רטרו)`);
   console.log('='.repeat(50));
