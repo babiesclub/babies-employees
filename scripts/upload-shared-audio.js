@@ -19,8 +19,8 @@ const bucket = admin.storage().bucket();
 
 const SHARED = 'C:\\Users\\David\\שיר דיין\\Shared - Documents\\מערכי שיעור +שירים + מי בא לבקר';
 const FILES = [
-  { local: path.join(SHARED, 'שיר פתיחה - קיפוד על הזקן מקוצר.mp3.mpeg'), kind: 'opening', displayName: 'שיר פתיחה — קיפוד על הזקן', destExt: 'mp3' },
-  { local: path.join(SHARED, 'שלום ולהתראות.mp3.mpeg'),                    kind: 'closing', displayName: 'שלום ולהתראות',                  destExt: 'mp3' },
+  { local: path.join(SHARED, 'קיפוד על הזקן -מקוצר חזק-.m4a.mp4'), kind: 'opening', displayName: 'שיר פתיחה — קיפוד על הזקן (מקוצר)', destExt: 'm4a', contentType: 'audio/mp4' },
+  { local: path.join(SHARED, 'שלום ולהתראות.mp3.mpeg'),             kind: 'closing', displayName: 'שלום ולהתראות',                    destExt: 'mp3', contentType: 'audio/mpeg' },
 ];
 
 (async () => {
@@ -32,11 +32,18 @@ const FILES = [
 
   const result = {};
   for (const f of FILES) {
+    // Clean up alternate format if it exists (e.g., switching opening.mp3 → opening.m4a)
+    for (const ext of ['mp3', 'm4a', 'wav', 'ogg']) {
+      if (ext === f.destExt) continue;
+      const altPath = `materials/_shared/${f.kind}.${ext}`;
+      const [altExists] = await bucket.file(altPath).exists();
+      if (altExists) { await bucket.file(altPath).delete(); console.log(`   🗑  מוחק נכס יתום ${altPath}`); }
+    }
     const dest = `materials/_shared/${f.kind}.${f.destExt}`;
     console.log(`📤 מעלה ${path.basename(f.local)} → ${dest}`);
     const [uploaded] = await bucket.upload(f.local, {
       destination: dest,
-      metadata: { contentType: 'audio/mpeg', cacheControl: 'public, max-age=2592000' },
+      metadata: { contentType: f.contentType || 'audio/mpeg', cacheControl: 'public, max-age=2592000' },
     });
     await uploaded.makePublic();
     const url = `https://storage.googleapis.com/${bucket.name}/${dest}`;
