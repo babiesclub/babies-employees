@@ -49,31 +49,36 @@ function parseRowPerSession(rows){
       if(v==='יום')d=j;
       else if(v==='תאריך')da=j;
       else if(v==='שעה'||v==='שעת התחלה')t=j;
-      else if(/שם\s*המסגרת|שם\s*הגן|מסגרת|גן/.test(v)&&g<0)g=j;
+      else if(/שם\s*המסגרת|שם\s*הגן|מסגרת|^גן$/.test(v)&&g<0)g=j;
       else if(/כתובת/.test(v))a=j;
     });
     if(t>=0 && g>=0){headerRowIdx=r;colDay=d;colDate=da;colTime=t;colGarden=g;colAddr=a;break}
   }
   if(headerRowIdx<0)return [];
   const sessions=[];
-  let curDay='', curDate='';
+  let curDay='', curDate='', curGarden='', curAddr='';
+  const toMin=t=>{const[h,m]=t.split(':').map(Number);return h*60+m};
+  const fromMin=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
   for(let r=headerRowIdx+1;r<rows.length;r++){
     const row=rows[r]||[];
-    if(colDay>=0){const v=String(row[colDay]||'').trim();if(v)curDay=v}
-    if(colDate>=0){const v=String(row[colDate]||'').trim();if(v){const m=v.match(/(\d{1,2})[\.\/](\d{1,2})/);if(m)curDate=String(m[1]).padStart(2,'0')+'/'+String(m[2]).padStart(2,'0')}}
+    const dayVal=colDay>=0?String(row[colDay]||'').trim():'';
+    const dateValRaw=colDate>=0?String(row[colDate]||'').trim():'';
+    const isNewDateBlock=!!dayVal||(!!dateValRaw&&/\d{1,2}[\.\/]\d{1,2}/.test(dateValRaw));
+    if(dayVal)curDay=dayVal;
+    if(dateValRaw){const m=dateValRaw.match(/(\d{1,2})[\.\/](\d{1,2})/);if(m)curDate=String(m[1]).padStart(2,'0')+'/'+String(m[2]).padStart(2,'0')}
+    if(isNewDateBlock){curGarden='';curAddr=''}
     const timeStr=String(row[colTime]||'').trim();
-    const garden=String(row[colGarden]||'').trim();
-    if(!timeStr||!garden)continue;
+    const gardenRaw=String(row[colGarden]||'').trim();
+    if(gardenRaw)curGarden=gardenRaw;
+    const addrRaw=colAddr>=0?String(row[colAddr]||'').trim():'';
+    if(addrRaw)curAddr=addrRaw;
+    if(!timeStr||!curGarden||!curDate)continue;
     const tm=timeStr.match(/(\d{1,2}):(\d{2})\s*(?:[-–—]\s*(\d{1,2}):(\d{2}))?/);
     if(!tm)continue;
     const startTime=tm[1].padStart(2,'0')+':'+tm[2];
     let endTime=tm[3]?(tm[3].padStart(2,'0')+':'+tm[4]):null;
-    const address=colAddr>=0?String(row[colAddr]||'').trim():'';
-    sessions.push({date:curDate.split('/').reverse().join('-'),startTime,endTime,gardenName:garden,address,groupsCount:1,_day:curDay});
+    sessions.push({date:curDate.split('/').reverse().join('-'),startTime,endTime,gardenName:curGarden,address:curAddr,groupsCount:1,_day:curDay});
   }
-  // Fill in endTime from next session's startTime (if same date) or default to +40min
-  const toMin=t=>{const[h,m]=t.split(':').map(Number);return h*60+m};
-  const fromMin=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
   for(let i=0;i<sessions.length;i++){
     if(sessions[i].endTime)continue;
     const next=sessions[i+1];
