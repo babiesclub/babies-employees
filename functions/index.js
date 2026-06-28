@@ -978,6 +978,50 @@ exports.sendwhatsapp = onCall(
 );
 
 /**
+ * listwatemplates - List all WhatsApp message templates registered for the business account.
+ * Useful for debugging "Template name does not exist" errors (#132001).
+ */
+exports.listwatemplates = onCall(
+  {
+    secrets: [whatsappAccessToken, whatsappBusinessAccountId],
+    region: "us-central1",
+    timeoutSeconds: 30,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const wabaId = String(whatsappBusinessAccountId.value()).trim();
+      const token = String(whatsappAccessToken.value()).trim();
+      const url = `${WHATSAPP_API_BASE}/${wabaId}/message_templates?limit=200&fields=name,language,status,category`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const txt = await r.text();
+      let result;
+      try { result = JSON.parse(txt); } catch (e) { result = { raw: txt }; }
+      if (!r.ok || result.error) {
+        const msg = (result.error && (result.error.message || result.error.error_user_msg)) || ("HTTP " + r.status);
+        throw new HttpsError("internal", "Meta API שגיאה: " + msg);
+      }
+      const templates = (result.data || []).map((t) => ({
+        name: t.name,
+        language: t.language,
+        status: t.status,
+        category: t.category,
+      }));
+      logger.info("listwatemplates: returning " + templates.length + " templates");
+      return { success: true, count: templates.length, templates };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("listwatemplates: error", err);
+      throw new HttpsError("internal", err.message || String(err));
+    }
+  }
+);
+
+/**
  * getwhatsappstatus - Get current WhatsApp budget status + usage (admin only)
  */
 exports.getwhatsappstatus = onCall(
