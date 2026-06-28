@@ -416,6 +416,114 @@ function buildInvoiceDescription(records, garden, networkBranches) {
   return lines.join("\n");
 }
 
+function getEligibleRates(garden, date) {
+  let hist = Array.isArray(garden.chargeRatesHistory) ? garden.chargeRatesHistory : [];
+  if (!hist.length && garden.chargeRates && Object.keys(garden.chargeRates).length > 0) {
+    hist = [{from: "1970-01-01", rates: garden.chargeRates}];
+  }
+  if (!hist.length) return null;
+  let eligible = hist.filter((h) => h.from <= date).sort((a, b) => b.from.localeCompare(a.from));
+  if (!eligible.length) eligible = [...hist].sort((a, b) => a.from.localeCompare(b.from));
+  return eligible[0].rates || {};
+}
+
+/**
+ * Build itemized income lines for a Morning invoice.
+ * Returns an array of {description, quantity, price, currency, vatType} - one per (date, garden, duration) group.
+ * Rules:
+ *   per_group: 1 line per date+branch, quantity = total groups, price = perGroup rate
+ *   per_child: 1 line per date+branch, quantity = children count, price = perChild rate
+ *   time:      1 line per date+branch+duration, quantity = visits × (duration/30), price = rate / (duration/30)
+ *              (rate per half-hour unit; e.g. 60 min visit at 700 rate → qty=2, price=350)
+ * Network gardens prefix the description with branch name.
+ */
+function buildInvoiceIncomeLines(records, garden, networkBranches) {
+  const isNetwork = Array.isArray(networkBranches) && networkBranches.length > 1;
+  const gardenByName = new Map();
+  if (isNetwork) networkBranches.forEach((g) => gardenByName.set(g.name, g));
+
+  const grouped = {};
+  records.forEach((r) => {
+    const recGarden = gardenByName.get(r.garden) || garden;
+    const bm = recGarden.billingMode || "time";
+    let key;
+    if (bm === "time") key = r.date + "|" + r.garden + "|" + (r.duration || "0");
+    else key = r.date + "|" + r.garden;
+    if (!grouped[key]) {
+      grouped[key] = {date: r.date, garden: r.garden, gardenObj: recGarden, billingMode: bm, duration: r.duration, records: []};
+    }
+    grouped[key].records.push(r);
+  });
+
+  const sortedKeys = Object.keys(grouped).sort();
+  const lines = [];
+  for (const key of sortedKeys) {
+    const g = grouped[key];
+    const dParts = (g.date || "").split("-");
+    const dateStr = dParts.length === 3 ? (dParts[2] + "/" + dParts[1] + "/" + dParts[0]) : g.date;
+    const branchPrefix = isNetwork ? ((g.gardenObj.branchName || g.garden) + " · ") : "";
+    const rates = getEligibleRates(g.gardenObj, g.date);
+    if (!rates) continue;
+
+    if (g.billingMode === "per_group") {
+      const totalGroups = g.records.reduce((s, r) => s + (parseFloat(r.groups) || 0), 0);
+      const rate = Number(rates.perGroup) || 0;
+      if (rate <= 0 || totalGroups <= 0) continue;
+      lines.push({
+        description: branchPrefix + dateStr + " (פר קבוצה)",
+        quantity: totalGroups,
+        price: rate,
+        currency: "ILS",
+        vatType: 0,
+      });
+    } else if (g.billingMode === "per_child") {
+      const month = g.date.slice(0, 7);
+      const childCount = ((g.gardenObj.monthlyChildCounts || {})[month]) || 0;
+      const rate = Number(rates.perChild) || 0;
+      if (rate <= 0 || childCount <= 0) continue;
+      // One line per record (multiple visits same day → multiple lines)
+      for (const r of g.records) {
+        lines.push({
+          description: branchPrefix + dateStr + " · " + childCount + " ילדים",
+          quantity: childCount,
+          price: rate,
+          currency: "ILS",
+          vatType: 0,
+        });
+      }
+    } else {
+      // time mode
+      const dur = Number(g.duration) || 0;
+      if (dur <= 0) continue;
+      const halfHours = dur / 30;
+      // Get rate for this duration
+      const exact = Number(rates[String(dur)]) || 0;
+      let ratePerVisit;
+      if (exact > 0) {
+        ratePerVisit = exact;
+      } else {
+        // Fallback: pro-rate from smallest valid rate
+        const validKeys = Object.keys(rates)
+          .filter((k) => !isNaN(Number(k)) && rates[k] && Number(rates[k]) > 0)
+          .sort((a, b) => Number(a) - Number(b));
+        if (!validKeys.length) continue;
+        const baseRate = Number(rates[validKeys[0]]);
+        ratePerVisit = baseRate * (dur / Number(validKeys[0]));
+      }
+      const pricePerHalfHour = +(ratePerVisit / halfHours).toFixed(4);
+      const totalHalfHours = +(g.records.length * halfHours).toFixed(2);
+      lines.push({
+        description: branchPrefix + dateStr + " · פעילות בת " + dur + " דק'",
+        quantity: totalHalfHours,
+        price: pricePerHalfHour,
+        currency: "ILS",
+        vatType: 0,
+      });
+    }
+  }
+  return lines;
+}
+
 function calcChargeBaseServer(record, garden) {
   const billingMode = (garden && garden.billingMode) || "time";
   const dur = record.duration;
@@ -585,7 +693,6 @@ exports.createmorninginvoice = onCall(
 
       const monthParts = month.split("-");
       const monthName = HE_MONTHS_M[parseInt(monthParts[1]) - 1];
-      const description = buildInvoiceDescription(records, garden, networkBranches);
 
       logger.info("createmorninginvoice: calling morningAuth");
       const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
@@ -593,11 +700,18 @@ exports.createmorninginvoice = onCall(
 
       const docType = parseInt(docTypeOverride || garden.morningDocType || "300");
 
+      // === Build itemized income lines (one per date / per branch / per duration) ===
+      const incomeLines = buildInvoiceIncomeLines(records, garden, networkBranches);
+      const itemizedTotal = +incomeLines.reduce((s, l) => s + (Number(l.quantity) * Number(l.price)), 0).toFixed(2);
+      logger.info("createmorninginvoice: itemized lines built", { count: incomeLines.length, itemizedTotal, summedTotal: total });
+      if (!incomeLines.length) {
+        throw new HttpsError("failed-precondition", "לא נבנו שורות חיוב — בדקי שתעריפים מוגדרים לתאריכים שדווחו.");
+      }
+
       // vatType in Morning API:
       //   0 = REGULAR (default - VAT 18% added on top of price)
       //   1 = EXEMPT (no VAT - פטור)
       //   2 = INCLUDED (price already includes VAT)
-      // Our `total` is the base amount BEFORE VAT, so we use vatType: 0
       const gardenEmails = parseEmails(garden.email);
       const clientObj = { id: String(garden.morningClientId) };
       if (gardenEmails.length > 0) {
@@ -605,20 +719,13 @@ exports.createmorninginvoice = onCall(
       }
       const payload = {
         type: docType,
+        description: "חוגי בייביז · " + monthName + " " + monthParts[0],
         date: new Date().toISOString().slice(0, 10),
         lang: "he",
         currency: "ILS",
         vatType: 0,
         client: clientObj,
-        income: [
-          {
-            description: "חוגי בייביז לחודש " + monthName + " " + monthParts[0] + "\n" + description,
-            quantity: 1,
-            price: total,
-            currency: "ILS",
-            vatType: 0,
-          },
-        ],
+        income: incomeLines,
         remarks: "הופק אוטומטית ע\"י אפליקציית בייביז · " + monthName + " " + monthParts[0],
       };
       logger.info("createmorninginvoice: posting to Morning", { docType, total, clientId: garden.morningClientId, willEmailTo: gardenEmails });
@@ -677,9 +784,10 @@ exports.createmorninginvoice = onCall(
         morningDocId: docResult.id || null,
         morningDocNumber: docNumber,
         morningDocUrl: docUrl,
-        totalAmount: total,
-        vatAmount: +(total * VAT_RATE).toFixed(2),
+        totalAmount: itemizedTotal,
+        vatAmount: +(itemizedTotal * VAT_RATE).toFixed(2),
         recordCount: records.length,
+        lineItemCount: incomeLines.length,
         createdAt: new Date().toISOString(),
         createdBy: callerUid,
         emailedTo,
