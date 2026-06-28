@@ -916,21 +916,42 @@ exports.sendwhatsapp = onCall(
       const token = String(whatsappAccessToken.value()).trim();
       const url = `${WHATSAPP_API_BASE}/${phoneId}/messages`;
       logger.info("sendwhatsapp: posting", { mode: sendMode, to: phone, templateName: payload.template && payload.template.name });
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-      const respText = await response.text();
-      let result;
-      try { result = JSON.parse(respText); } catch (e) { result = { raw: respText }; }
+      const doSend = async (p) => {
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(p),
+        });
+        const txt = await r.text();
+        let parsed;
+        try { parsed = JSON.parse(txt); } catch (e) { parsed = { raw: txt }; }
+        return { resp: r, result: parsed, raw: txt };
+      };
+      let { resp: response, result, raw: respText } = await doSend(payload);
       logger.info("sendwhatsapp: WhatsApp response", { status: response.status, result });
+      // Fallback: error 132001 means the template's language doesn't exist as registered.
+      // Templates are sometimes approved with 'he_IL' while we send 'he' (or vice versa).
+      // Auto-retry once with the alternate code.
+      const errCode = result.error && result.error.code;
+      if (sendMode === "template" && (errCode === 132001 || errCode === 132000) && payload.template) {
+        const orig = payload.template.language.code;
+        const alt = orig === "he" ? "he_IL" : (orig === "he_IL" ? "he" : (orig === "en" ? "en_US" : (orig === "en_US" ? "en" : null)));
+        if (alt) {
+          logger.info("sendwhatsapp: retrying with alt language", { templateName: payload.template.name, from: orig, to: alt });
+          payload.template.language.code = alt;
+          const retry = await doSend(payload);
+          response = retry.resp;
+          result = retry.result;
+          respText = retry.raw;
+          logger.info("sendwhatsapp: retry response", { status: response.status, result });
+        }
+      }
       if (!response.ok || result.error) {
-        const errMsg = (result.error && (result.error.message || result.error.error_user_msg)) || ("HTTP " + response.status);
-        throw new HttpsError("internal", "WhatsApp שגיאה: " + errMsg);
+        const baseMsg = (result.error && (result.error.message || result.error.error_user_msg)) || ("HTTP " + response.status);
+        const hint = errCode === 132001
+          ? "\n\n💡 הבעיה: שם הטמפלייט נכון אבל הוא אושר בקוד שפה אחר. בדקי ב-WhatsApp Manager → Templates → לחצי על הטמפלייט → אם הוא רשום כ-'Hebrew (he_IL)' או 'Hebrew (he)' - וודאי שזה תואם."
+          : "";
+        throw new HttpsError("internal", "WhatsApp שגיאה: " + baseMsg + hint);
       }
 
       // Track usage
