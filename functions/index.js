@@ -425,8 +425,14 @@ function calcChargeBaseServer(record, garden) {
   if (!history.length && garden.chargeRates && Object.keys(garden.chargeRates).length > 0) {
     history = [{from: "1970-01-01", rates: garden.chargeRates}];
   }
-  const eligible = history.filter((h) => h.from <= date).sort((a, b) => b.from.localeCompare(a.from));
-  if (!eligible.length) return null;
+  let eligible = history.filter((h) => h.from <= date).sort((a, b) => b.from.localeCompare(a.from));
+  if (!eligible.length) {
+    // Fallback (match client): if no rate is eligible because date is BEFORE all rate
+    // effective dates, use the EARLIEST rate. This prevents records made before the rate
+    // was set up from being silently dropped from invoices.
+    if (!history.length) return null;
+    eligible = [...history].sort((a, b) => a.from.localeCompare(b.from));
+  }
   const rates = eligible[0].rates || {};
 
   if (billingMode === "per_child") {
