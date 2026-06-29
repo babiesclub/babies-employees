@@ -3650,3 +3650,73 @@ exports.processcustomnotifications = onSchedule(
     return null;
   }
 );
+
+// Parse camp schedule image (screenshot of WhatsApp, paper photo, Excel screenshot, etc.)
+// via Claude Vision and return structured JSON of sessions.
+exports.parsescheduleimage = onCall(
+  { region: "us-central1", timeoutSeconds: 120, memory: "512MiB", secrets: [anthropicApiKey] },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const { imageBase64, mimeType, year, instructorName } = req.data || {};
+    if (!imageBase64) throw new HttpsError("invalid-argument", "missing imageBase64");
+    if (!year) throw new HttpsError("invalid-argument", "missing year");
+    if (!anthropicApiKey.value()) throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY לא הוגדר");
+    const mime = mimeType || "image/png";
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: anthropicApiKey.value() });
+    const SYSTEM = `אתה מומחה לקריאת לוחות זמנים של מדריכות קייטנה בעברית. מקבל תמונה (צילום מסך, וואטסאפ, צילום נייר) ומחזיר JSON מובנה בלבד — בלי הסברים, בלי markdown.
+
+הפלט חייב להיות בדיוק:
+{
+  "sessions": [
+    {
+      "date": "YYYY-MM-DD",
+      "startTime": "HH:MM",
+      "endTime": "HH:MM",
+      "gardenName": "שם הגן/בית הספר",
+      "address": "כתובת אם זוהתה (אופציונלי)",
+      "groupsCount": 1
+    }
+  ],
+  "warnings": ["אזהרות אם משהו לא ברור"]
+}
+
+כללי פירוש:
+- שנת ${year} כברירת מחדל (השנה שהמשתמשת ציינה).
+- תאריך בפורמט DD.MM או DD/MM → הפוך ל-YYYY-MM-DD.
+- שעה בודדת (לדוגמה 09:00 ללא טווח) → endTime = startTime + 40 דק'.
+- אם בתא רשום "X קבוצות" / "X קב'" → groupsCount = X. אחרת 1.
+- שם הגן הוא הטקסט שלפני מקף "-" או פסיק; הכתובת אחריו.
+- אם יש מספר ביקורים באותה תמונה — החזר את כולם.
+- אם מספר ימים בתמונה — תאריך לכל ביקור לפי הכותרת.
+${instructorName ? `- שם המדריכה שמופיעה בתמונה: ${instructorName} (לידיעה).` : ""}
+
+החזר רק את ה-JSON, בלי שום טקסט נוסף.`;
+
+    const resp = await client.messages.create({
+      model: "claude-opus-4-7",
+      max_tokens: 4096,
+      system: SYSTEM,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: mime, data: imageBase64 } },
+          { type: "text", text: "פרק את הלוז שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
+        ],
+      }],
+    });
+    const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    let parsed;
+    try {
+      const m = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(m ? m[0] : text);
+    } catch (e) {
+      logger.error("parse failed:", text);
+      throw new HttpsError("internal", "תגובת Claude לא בפורמט JSON תקין: " + text.slice(0, 200));
+    }
+    if (!parsed.sessions || !Array.isArray(parsed.sessions)) parsed.sessions = [];
+    if (!parsed.warnings) parsed.warnings = [];
+    logger.info("parsescheduleimage:", { count: parsed.sessions.length, inTokens: resp.usage.input_tokens, outTokens: resp.usage.output_tokens });
+    return { sessions: parsed.sessions, warnings: parsed.warnings, tokens: { input: resp.usage.input_tokens, output: resp.usage.output_tokens } };
+  }
+);
