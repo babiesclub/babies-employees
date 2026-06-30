@@ -3720,3 +3720,82 @@ ${instructorName ? `- שם המדריכה שמופיעה בתמונה: ${instruc
     return { sessions: parsed.sessions, warnings: parsed.warnings, tokens: { input: resp.usage.input_tokens, output: resp.usage.output_tokens } };
   }
 );
+
+// Analyze a tender / RFP / contract PDF via Claude and return structured JSON.
+exports.analyzetender = onCall(
+  { region: "us-central1", timeoutSeconds: 300, memory: "1GiB", secrets: [anthropicApiKey] },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const { pdfBase64, filename } = req.data || {};
+    if (!pdfBase64) throw new HttpsError("invalid-argument", "missing pdfBase64");
+    if (!anthropicApiKey.value()) throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY לא הוגדר");
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: anthropicApiKey.value() });
+    const today = new Date().toISOString().slice(0, 10);
+    const SYSTEM = `אתה עוזר מנוסה לחברה בייביז קלאב - חוגי חיות לגיל הרך בישראל (גני ילדים, צהרונים, קייטנות). את מקבלת קולות קוראים, מכרזים, חוזים, הסכמים, ומחזירה ניתוח מובנה בעברית.
+
+תאריך היום: ${today}
+
+הפלט חייב להיות JSON בלבד, בלי טקסט מקדים, בלי markdown. הפורמט:
+{
+  "title": "שם קצר ומדויק של המכרז/הקול הקורא (מקסימום 70 תווים)",
+  "issuer": "מי פרסם — שם העמותה/הרשות/המשרד",
+  "summary": "תקציר 2-4 משפטים: על מה המכרז, מטרתו, ולמי הוא מיועד",
+  "deadline": "YYYY-MM-DD אם זוהה תאריך הגשה אחרון, אחרת null",
+  "scope": {
+    "areas": ["אזורים גיאוגרפיים מותרים — ערים/יישובים/מועצות"],
+    "venues": ["מסגרות לפעילות — גנים, צהרונים, בתי ספר, מתנ\"סים וכו"],
+    "topics": ["תחומים שמתאימים לבייביז — חיות, טבע, העשרה, אילוף, מדעים"]
+  },
+  "fitForBabiez": "high/medium/low — עד כמה זה מתאים לפעילות של חוגי חיות לגיל הרך, עם הסבר משפט",
+  "requiredDocs": [
+    {"name": "שם המסמך", "page": "עמ' X סע' Y", "mandatory": true, "category": "company/instructor/legal/insurance/professional/financial", "notes": "הערה רלוונטית או null"}
+  ],
+  "obligations": ["התחייבויות עיקריות של המגיש"],
+  "payment": "מידע על תמחור/תשלום אם מצוין, אחרת null",
+  "redFlags": ["דגלים אדומים — סיכונים, סעיפים בעייתיים, אי-התחייבות לעבודה וכו"],
+  "todos": ["משימות מסודרות שעל המגיש לבצע"],
+  "questions": ["נקודות לא ברורות שכדאי לוודא לפני הגשה"]
+}
+
+הנחיות:
+- היה מדויק ולא להמציא. אם משהו לא ברור, ציין ב-questions.
+- requiredDocs - כל המסמכים הנדרשים, עם הפניה לעמוד/סעיף בקול הקורא. הקטגוריה: company=עסק (אישור עוסק, ניהול ספרים), instructor=מדריך (ק.ח, אישור משטרה), legal=משפטי (תצהיר ניגוד עניינים), insurance=ביטוח, professional=הסמכות מקצועיות, financial=כספי.
+- fitForBabiez — חוגי חיות לגיל הרך הם פעילות חינוכית בלתי-פורמלית בתחומי טבע, חיות, מדעים, העשרה. אם המכרז מבקש דברים כאלה — high. אם מתאים חלקית — medium. אם לא רלוונטי בכלל (לדוגמה משפטים, בנייה) — low.
+- אם המסמך לא מכרז אלא חוזה רגיל / הודעה — אותו פורמט, מתואם לתוכן.
+- היה תמציתי אבל מקיף. החזר רק JSON.`;
+
+    const resp = await client.messages.create({
+      model: "claude-opus-4-7",
+      max_tokens: 8000,
+      system: SYSTEM,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
+          { type: "text", text: `נתח את המסמך הזה לפי הסכמה. החזר רק JSON. שם הקובץ: ${filename || 'unknown.pdf'}` }
+        ]
+      }]
+    });
+    const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    let parsed;
+    try {
+      const m = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(m ? m[0] : text);
+    } catch (e) {
+      logger.error("tender parse failed:", text.slice(0, 1000));
+      throw new HttpsError("internal", "Claude החזירה תגובה לא תקינה: " + text.slice(0, 200));
+    }
+    logger.info("analyzetender:", {
+      title: parsed.title,
+      docsCount: (parsed.requiredDocs || []).length,
+      fit: parsed.fitForBabiez,
+      inTokens: resp.usage.input_tokens,
+      outTokens: resp.usage.output_tokens
+    });
+    return {
+      analysis: parsed,
+      tokens: { input: resp.usage.input_tokens, output: resp.usage.output_tokens }
+    };
+  }
+);
