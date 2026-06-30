@@ -43,6 +43,11 @@ service firebase.storage {
       allow write: if isAdmin();
     }
 
+    // Company profile docs (CVs, insurance, syllabi, certificates) - admin only.
+    match /company-docs/{docId}/{allPaths=**} {
+      allow read, write: if isAdmin();
+    }
+
     // Default deny.
     match /{allPaths=**} {
       allow read, write: if false;
