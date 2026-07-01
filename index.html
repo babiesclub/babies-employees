@@ -1574,7 +1574,107 @@ function getMonthlyChildCount(g,date){if(!g||typeof g!=='object'||!date)return n
 function getGardenInstructorPayHistory(g){if(!g||typeof g!=='object')return[];return Array.isArray(g.instructorPayHistory)?g.instructorPayHistory:[]}
 function appendRateHistory(oldHistory,newRates){const today=new Date().toISOString().slice(0,10);const eq=(a,b)=>JSON.stringify(a||{})===JSON.stringify(b||{});const list=[...(oldHistory||[])];const last=list.length?list[list.length-1]:null;if(last&&eq(last.rates,newRates))return list;if(last&&last.from===today){list[list.length-1]={from:today,rates:newRates}}else{list.push({from:today,rates:newRates})}return list}
 function calcRecBilling(r){const gardens=DB.get('gardens')||[];const users=DB.get('users')||[];const garden=gardens.find(g=>(typeof g==='string'?g:g.name)===r.garden);const user=users.find(u=>u.id===r.instructorId||u.uid===r.instructorUid);const dur=r.duration,date=r.date,groups=parseInt(r.groups)||1;const billingMode=(garden&&garden.billingMode)||'time';const payMode=billingMode==='per_child'?((garden&&garden.payMode)||'time'):billingMode;let chargeBase=null,payBase=null;if(billingMode==='per_child'){const rate=lookupPerChildAtDate(getGardenChargeHistory(garden),date);const count=getMonthlyChildCount(garden,date);chargeBase=(rate!=null&&count!=null)?+(rate*count).toFixed(2):null}else if(billingMode==='per_group'){const chargePerG=lookupPerGroupAtDate(getGardenChargeHistory(garden),date);chargeBase=chargePerG!=null?+(chargePerG*groups).toFixed(2):null}else{chargeBase=lookupRateAtDate(getGardenChargeHistory(garden),dur,date)}if(payMode==='per_group'){let payPerG=lookupPerGroupAtDate(getInstructorGardenPayHistory(user,r.garden),date);if(payPerG==null&&garden){payPerG=lookupPerGroupAtDate(getGardenInstructorPayHistory(garden),date)}payBase=payPerG!=null?+(payPerG*groups).toFixed(2):null}else{payBase=lookupRateAtDate(getInstructorGardenPayHistory(user,r.garden),dur,date);if(payBase==null&&garden){payBase=lookupRateAtDate(getGardenInstructorPayHistory(garden),dur,date)}}const vatStatus=user?(user.vatStatus||'patur'):'patur';const chargeVat=chargeBase!=null?+(chargeBase*VAT_RATE).toFixed(2):null;const chargeTotal=chargeBase!=null?+(chargeBase+chargeVat).toFixed(2):null;const payVat=payBase!=null?(vatStatus==='morshe'?+(payBase*VAT_RATE).toFixed(2):0):null;const payTotal=payBase!=null?+(payBase+(payVat||0)).toFixed(2):null;return{chargeBase,chargeVat,chargeTotal,payBase,payVat,payTotal,vatStatus,billingMode,payMode}}
-function exportExcel(mode){const recs=DB.get('records')||[];const users=DB.get('users')||[];const month=document.getElementById('rmf').value;const instId=document.getElementById('rif').value;const wizoOnly=document.getElementById('exp-wizo')&&document.getElementById('exp-wizo').checked;let data=recs;if(mode==='month'&&month)data=data.filter(r=>r.date.startsWith(month));if(instId)data=data.filter(r=>r.instructorId==instId);if(wizoOnly)data=data.filter(r=>r.garden&&r.garden.includes('ויצו'));if(!data.length){alert(wizoOnly?'אין דיווחים של לקוחות ויצו בתקופה זו':'אין נתונים לייצוא');return}const num=v=>typeof v==='number'?v:0;const rows=data.map(r=>{const b=calcRecBilling(r);const tr=(r.timeIn&&r.timeOut)?`${r.timeIn}-${r.timeOut}`:(r.timeIn||r.timeOut||'');return{'תאריך':r.date,'מדריך':r.instructorName,'גן':r.garden,'קבוצות':r.groups,'טווח שעות':tr,'משך (דקות)':r.duration,'חיוב לפני מע"מ (₪)':b.chargeBase!=null?b.chargeBase:'-','מע"מ חיוב 18% (₪)':b.chargeVat!=null?b.chargeVat:'-','חיוב כולל (₪)':b.chargeTotal!=null?b.chargeTotal:'-','תשלום למדריך לפני מע"מ (₪)':b.payBase!=null?b.payBase:'-','מע"מ תשלום (₪)':b.payVat!=null?b.payVat:'-','תשלום למדריך כולל (₪)':b.payTotal!=null?b.payTotal:'-','סטטוס מס':b.vatStatus==='morshe'?'עוסק מורשה':'פטור','כיתות':(r.classes||[]).join(', '),'בעל חיים':r.animal||'','הערות':r.notes||''}});const totals={'תאריך':'סה"כ סשנים','מדריך':'','גן':'','קבוצות':'','טווח שעות':'','משך (דקות)':'','חיוב לפני מע"מ (₪)':+rows.reduce((s,r)=>s+num(r['חיוב לפני מע"מ (₪)']),0).toFixed(2),'מע"מ חיוב 18% (₪)':+rows.reduce((s,r)=>s+num(r['מע"מ חיוב 18% (₪)']),0).toFixed(2),'חיוב כולל (₪)':+rows.reduce((s,r)=>s+num(r['חיוב כולל (₪)']),0).toFixed(2),'תשלום למדריך לפני מע"מ (₪)':+rows.reduce((s,r)=>s+num(r['תשלום למדריך לפני מע"מ (₪)']),0).toFixed(2),'מע"מ תשלום (₪)':+rows.reduce((s,r)=>s+num(r['מע"מ תשלום (₪)']),0).toFixed(2),'תשלום למדריך כולל (₪)':+rows.reduce((s,r)=>s+num(r['תשלום למדריך כולל (₪)']),0).toFixed(2),'סטטוס מס':'','כיתות':'','בעל חיים':'','הערות':''};rows.push(totals);const header=['תאריך','מדריך','גן','קבוצות','טווח שעות','משך (דקות)','חיוב לפני מע"מ (₪)','מע"מ חיוב 18% (₪)','חיוב כולל (₪)','תשלום למדריך לפני מע"מ (₪)','מע"מ תשלום (₪)','תשלום למדריך כולל (₪)','סטטוס מס','כיתות','בעל חיים','הערות'];const ws=XLSX.utils.json_to_sheet(rows,{header});ws['!cols']=header.map(h=>({wch:h.includes('₪')?16:(h==='הערות'?20:(h==='כיתות'?18:12))}));const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'ביקורים');const byInst={};data.forEach(r=>{const b=calcRecBilling(r);const key=r.instructorId+'|'+r.instructorName;if(!byInst[key])byInst[key]={name:r.instructorName,id:r.instructorId,uid:r.instructorUid,sessions:0,payBase:0,payVat:0,payTotal:0,vatStatus:b.vatStatus};byInst[key].sessions++;byInst[key].payBase+=num(b.payBase);byInst[key].payVat+=num(b.payVat);byInst[key].payTotal+=num(b.payTotal)});const allRcps=DB.get('receipts')||[];const sumRows=Object.values(byInst).map(s=>{const u=users.find(x=>x.id===s.id||x.uid===s.uid);const travel=u&&u.travelMonthly?Number(u.travelMonthly):0;const parkingForInst=allRcps.filter(r=>r.type==='parking'&&r.amount&&((u&&u.uid&&r.instructorUid===u.uid)||(s.uid&&r.instructorUid===s.uid)||(s.id&&String(r.instructorUid)===String(s.id)))&&(mode!=='month'||!month||r.month===month));const parking=+parkingForInst.reduce((sum,r)=>sum+Number(r.amount||0),0).toFixed(2);const grand=+(s.payTotal+travel+parking).toFixed(2);return{'מדריך':s.name,'סטטוס מס':s.vatStatus==='morshe'?'עוסק מורשה':'פטור','מס׳ סשנים':s.sessions,'תשלום סשנים לפני מע"מ (₪)':+s.payBase.toFixed(2),'מע"מ תשלום (₪)':+s.payVat.toFixed(2),'תשלום סשנים כולל (₪)':+s.payTotal.toFixed(2),'נסיעות חודשי (₪)':travel,'חניה (₪)':parking,'סה"כ לתשלום (₪)':grand}});const grandTotal={'מדריך':'סה"כ','סטטוס מס':'','מס׳ סשנים':sumRows.reduce((s,r)=>s+r['מס׳ סשנים'],0),'תשלום סשנים לפני מע"מ (₪)':+sumRows.reduce((s,r)=>s+r['תשלום סשנים לפני מע"מ (₪)'],0).toFixed(2),'מע"מ תשלום (₪)':+sumRows.reduce((s,r)=>s+r['מע"מ תשלום (₪)'],0).toFixed(2),'תשלום סשנים כולל (₪)':+sumRows.reduce((s,r)=>s+r['תשלום סשנים כולל (₪)'],0).toFixed(2),'נסיעות חודשי (₪)':+sumRows.reduce((s,r)=>s+r['נסיעות חודשי (₪)'],0).toFixed(2),'חניה (₪)':+sumRows.reduce((s,r)=>s+r['חניה (₪)'],0).toFixed(2),'סה"כ לתשלום (₪)':+sumRows.reduce((s,r)=>s+r['סה"כ לתשלום (₪)'],0).toFixed(2)};sumRows.push(grandTotal);const sumHeader=['מדריך','סטטוס מס','מס׳ סשנים','תשלום סשנים לפני מע"מ (₪)','מע"מ תשלום (₪)','תשלום סשנים כולל (₪)','נסיעות חודשי (₪)','חניה (₪)','סה"כ לתשלום (₪)'];const ws2=XLSX.utils.json_to_sheet(sumRows,{header:sumHeader});ws2['!cols']=sumHeader.map(h=>({wch:h.includes('₪')?20:14}));XLSX.utils.book_append_sheet(wb,ws2,'סיכום פר מדריך');const gardensList=DB.get('gardens')||[];const gardenByName=new Map();gardensList.forEach(g=>{const o=typeof g==='string'?{name:g}:g;gardenByName.set(o.name,o)});const byGarden={};data.forEach(r=>{const b=calcRecBilling(r);if(!byGarden[r.garden]){const go=gardenByName.get(r.garden);byGarden[r.garden]={name:r.garden,terms:(go&&go.paymentTerms)||'',sessions:0,chargeBase:0,chargeVat:0,chargeTotal:0}}byGarden[r.garden].sessions++;byGarden[r.garden].chargeBase+=num(b.chargeBase);byGarden[r.garden].chargeVat+=num(b.chargeVat);byGarden[r.garden].chargeTotal+=num(b.chargeTotal)});const gardenRows=Object.values(byGarden).sort((a,b)=>a.name.localeCompare(b.name,'he')).map(s=>({'גן':s.name,'תנאי תשלום':s.terms||'לא הוגדר','מס׳ סשנים':s.sessions,'חיוב לפני מע"מ (₪)':+s.chargeBase.toFixed(2),'מע"מ 18% (₪)':+s.chargeVat.toFixed(2),'חיוב כולל (₪)':+s.chargeTotal.toFixed(2)}));const gardenTotal={'גן':'סה"כ','תנאי תשלום':'','מס׳ סשנים':gardenRows.reduce((s,r)=>s+r['מס׳ סשנים'],0),'חיוב לפני מע"מ (₪)':+gardenRows.reduce((s,r)=>s+r['חיוב לפני מע"מ (₪)'],0).toFixed(2),'מע"מ 18% (₪)':+gardenRows.reduce((s,r)=>s+r['מע"מ 18% (₪)'],0).toFixed(2),'חיוב כולל (₪)':+gardenRows.reduce((s,r)=>s+r['חיוב כולל (₪)'],0).toFixed(2)};gardenRows.push(gardenTotal);const gHeader=['גן','תנאי תשלום','מס׳ סשנים','חיוב לפני מע"מ (₪)','מע"מ 18% (₪)','חיוב כולל (₪)'];const ws3=XLSX.utils.json_to_sheet(gardenRows,{header:gHeader});ws3['!cols']=gHeader.map(h=>({wch:h.includes('₪')?20:(h==='תנאי תשלום'?20:16)}));XLSX.utils.book_append_sheet(wb,ws3,'סיכום פר גן');const cashFlow={};data.forEach(r=>{const b=calcRecBilling(r);if(b.chargeTotal==null)return;const go=gardenByName.get(r.garden);const terms=(go&&go.paymentTerms)||'';const mn=r.date.slice(0,7);const key=`${r.garden}|${mn}`;if(!cashFlow[key])cashFlow[key]={garden:r.garden,month:mn,terms,total:0,expectedDate:calcExpectedPaymentDate(mn,terms)};cashFlow[key].total+=num(b.chargeTotal)});const cashRows=Object.values(cashFlow).sort((a,b)=>{if(!a.expectedDate&&!b.expectedDate)return a.garden.localeCompare(b.garden,'he');if(!a.expectedDate)return 1;if(!b.expectedDate)return -1;return a.expectedDate-b.expectedDate}).map(c=>({'תאריך תשלום צפוי':c.expectedDate?fmtDate(c.expectedDate):'לא הוגדר','גן':c.garden,'חודש החיוב':c.month,'תנאי תשלום':c.terms||'לא הוגדר','סכום צפוי כולל מע"מ (₪)':+c.total.toFixed(2)}));const cashTotal={'תאריך תשלום צפוי':'סה"כ','גן':'','חודש החיוב':'','תנאי תשלום':'','סכום צפוי כולל מע"מ (₪)':+cashRows.reduce((s,r)=>s+r['סכום צפוי כולל מע"מ (₪)'],0).toFixed(2)};cashRows.push(cashTotal);const cashHeader=['תאריך תשלום צפוי','גן','חודש החיוב','תנאי תשלום','סכום צפוי כולל מע"מ (₪)'];const ws4=XLSX.utils.json_to_sheet(cashRows,{header:cashHeader});ws4['!cols']=cashHeader.map(h=>({wch:h.includes('₪')?22:18}));XLSX.utils.book_append_sheet(wb,ws4,'תחזית תזרים');const fileName=(wizoOnly?'בייביז_ויצו_':'בייביז_')+(mode==='month'&&month?month:'כל_הנתונים')+'.xlsx';XLSX.writeFile(wb,fileName)}
+function exportExcel(mode){
+  const recs=DB.get('records')||[];const users=DB.get('users')||[];
+  const month=document.getElementById('rmf').value;const instId=document.getElementById('rif').value;
+  const wizoOnly=document.getElementById('exp-wizo')&&document.getElementById('exp-wizo').checked;
+  let data=recs;
+  if(mode==='month'&&month)data=data.filter(r=>r.date.startsWith(month));
+  if(instId)data=data.filter(r=>r.instructorId==instId);
+  if(wizoOnly)data=data.filter(r=>r.garden&&r.garden.includes('ויצו'));
+  if(!data.length){alert(wizoOnly?'אין דיווחים של לקוחות ויצו בתקופה זו':'אין נתונים לייצוא');return}
+  const gardensList=DB.get('gardens')||[];const gardenByName=new Map();
+  gardensList.forEach(g=>{const o=typeof g==='string'?{name:g}:g;gardenByName.set(o.name,o)});
+  const allRcps=DB.get('receipts')||[];
+  const N=data.length,dataEnd=N+1,bicTotRow=N+2;
+  const SRC="'ביקורים'";
+  const setF=(ws,addr,f)=>{ws[addr]={t:'n',f}};
+  // === Sheet 1: ביקורים (source of truth — edit here to update all other sheets) ===
+  const bicHeader=['תאריך','מדריך','גן','קבוצות','טווח שעות','משך (דקות)','חיוב לפני מע"מ (₪)','מע"מ חיוב 18% (₪)','חיוב כולל (₪)','תשלום למדריך לפני מע"מ (₪)','מע"מ תשלום (₪)','תשלום למדריך כולל (₪)','סטטוס מס','כיתות','בעל חיים','הערות'];
+  const bicAoa=[bicHeader];
+  data.forEach(r=>{
+    const b=calcRecBilling(r);
+    const tr=(r.timeIn&&r.timeOut)?`${r.timeIn}-${r.timeOut}`:(r.timeIn||r.timeOut||'');
+    bicAoa.push([r.date,r.instructorName,r.garden,r.groups,tr,r.duration,
+      b.chargeBase!=null?b.chargeBase:null,b.chargeVat!=null?b.chargeVat:null,b.chargeTotal!=null?b.chargeTotal:null,
+      b.payBase!=null?b.payBase:null,b.payVat!=null?b.payVat:null,b.payTotal!=null?b.payTotal:null,
+      b.vatStatus==='morshe'?'עוסק מורשה':'פטור',(r.classes||[]).join(', '),r.animal||'',r.notes||'']);
+  });
+  bicAoa.push(['סה"כ סשנים','','','','','',null,null,null,null,null,null,'','','','']);
+  const ws=XLSX.utils.aoa_to_sheet(bicAoa);
+  ['G','H','I','J','K','L'].forEach(c=>setF(ws,c+bicTotRow,`SUM(${c}2:${c}${dataEnd})`));
+  ws['!cols']=bicHeader.map(h=>({wch:h.includes('₪')?16:(h==='הערות'?20:(h==='כיתות'?18:12))}));
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'ביקורים');
+  // === Sheet 2: סיכום פר מדריך (formulas → SUMIF from ביקורים) ===
+  const byInst={};
+  data.forEach(r=>{const b=calcRecBilling(r);const key=r.instructorId+'|'+r.instructorName;
+    if(!byInst[key])byInst[key]={name:r.instructorName,id:r.instructorId,uid:r.instructorUid,vatStatus:b.vatStatus}});
+  const instList=Object.values(byInst);
+  const sumHeader=['מדריך','סטטוס מס','מס׳ סשנים','תשלום סשנים לפני מע"מ (₪)','מע"מ תשלום (₪)','תשלום סשנים כולל (₪)','נסיעות חודשי (₪)','חניה (₪)','סה"כ לתשלום (₪)'];
+  const sumAoa=[sumHeader];
+  instList.forEach(s=>{
+    const u=users.find(x=>x.id===s.id||x.uid===s.uid);
+    const travel=u&&u.travelMonthly?Number(u.travelMonthly):0;
+    const parkingForInst=allRcps.filter(r=>r.type==='parking'&&r.amount&&((u&&u.uid&&r.instructorUid===u.uid)||(s.uid&&r.instructorUid===s.uid)||(s.id&&String(r.instructorUid)===String(s.id)))&&(mode!=='month'||!month||r.month===month));
+    const parking=+parkingForInst.reduce((sum,r)=>sum+Number(r.amount||0),0).toFixed(2);
+    sumAoa.push([s.name,s.vatStatus==='morshe'?'עוסק מורשה':'פטור',null,null,null,null,travel,parking,null]);
+  });
+  sumAoa.push(['סה"כ','',null,null,null,null,null,null,null]);
+  const ws2=XLSX.utils.aoa_to_sheet(sumAoa);
+  const sDS=2,sDE=1+instList.length,sTR=sDE+1;
+  for(let i=0;i<instList.length;i++){const r=sDS+i;
+    setF(ws2,'C'+r,`COUNTIF(${SRC}!$B$2:$B$${dataEnd},A${r})`);
+    setF(ws2,'D'+r,`SUMIF(${SRC}!$B$2:$B$${dataEnd},A${r},${SRC}!$J$2:$J$${dataEnd})`);
+    setF(ws2,'E'+r,`SUMIF(${SRC}!$B$2:$B$${dataEnd},A${r},${SRC}!$K$2:$K$${dataEnd})`);
+    setF(ws2,'F'+r,`SUMIF(${SRC}!$B$2:$B$${dataEnd},A${r},${SRC}!$L$2:$L$${dataEnd})`);
+    setF(ws2,'I'+r,`F${r}+G${r}+H${r}`);
+  }
+  if(instList.length)['C','D','E','F','G','H','I'].forEach(c=>setF(ws2,c+sTR,`SUM(${c}${sDS}:${c}${sDE})`));
+  ws2['!cols']=sumHeader.map(h=>({wch:h.includes('₪')?20:14}));
+  XLSX.utils.book_append_sheet(wb,ws2,'סיכום פר מדריך');
+  // === Sheet 3: סיכום פר גן (formulas → SUMIF from ביקורים) ===
+  const byGarden={};
+  data.forEach(r=>{if(!byGarden[r.garden]){const go=gardenByName.get(r.garden);byGarden[r.garden]={name:r.garden,terms:(go&&go.paymentTerms)||''}}});
+  const gardenList=Object.values(byGarden).sort((a,b)=>a.name.localeCompare(b.name,'he'));
+  const gHeader=['גן','תנאי תשלום','מס׳ סשנים','חיוב לפני מע"מ (₪)','מע"מ 18% (₪)','חיוב כולל (₪)'];
+  const gAoa=[gHeader];
+  gardenList.forEach(s=>gAoa.push([s.name,s.terms||'לא הוגדר',null,null,null,null]));
+  gAoa.push(['סה"כ','',null,null,null,null]);
+  const ws3=XLSX.utils.aoa_to_sheet(gAoa);
+  const gDS=2,gDE=1+gardenList.length,gTR=gDE+1;
+  for(let i=0;i<gardenList.length;i++){const r=gDS+i;
+    setF(ws3,'C'+r,`COUNTIF(${SRC}!$C$2:$C$${dataEnd},A${r})`);
+    setF(ws3,'D'+r,`SUMIF(${SRC}!$C$2:$C$${dataEnd},A${r},${SRC}!$G$2:$G$${dataEnd})`);
+    setF(ws3,'E'+r,`SUMIF(${SRC}!$C$2:$C$${dataEnd},A${r},${SRC}!$H$2:$H$${dataEnd})`);
+    setF(ws3,'F'+r,`SUMIF(${SRC}!$C$2:$C$${dataEnd},A${r},${SRC}!$I$2:$I$${dataEnd})`);
+  }
+  if(gardenList.length)['C','D','E','F'].forEach(c=>setF(ws3,c+gTR,`SUM(${c}${gDS}:${c}${gDE})`));
+  ws3['!cols']=gHeader.map(h=>({wch:h.includes('₪')?20:(h==='תנאי תשלום'?20:16)}));
+  XLSX.utils.book_append_sheet(wb,ws3,'סיכום פר גן');
+  // === Sheet 4: תחזית תזרים (SUMPRODUCT by garden+month from ביקורים) ===
+  const cashFlow={};
+  data.forEach(r=>{const go=gardenByName.get(r.garden);const terms=(go&&go.paymentTerms)||'';const mn=r.date.slice(0,7);const key=`${r.garden}|${mn}`;
+    if(!cashFlow[key])cashFlow[key]={garden:r.garden,month:mn,terms,expectedDate:calcExpectedPaymentDate(mn,terms)}});
+  const cashList=Object.values(cashFlow).sort((a,b)=>{
+    if(!a.expectedDate&&!b.expectedDate)return a.garden.localeCompare(b.garden,'he');
+    if(!a.expectedDate)return 1;if(!b.expectedDate)return -1;
+    return a.expectedDate-b.expectedDate;
+  });
+  const cashHeader=['תאריך תשלום צפוי','גן','חודש החיוב','תנאי תשלום','סכום צפוי כולל מע"מ (₪)'];
+  const cashAoa=[cashHeader];
+  cashList.forEach(c=>cashAoa.push([c.expectedDate?fmtDate(c.expectedDate):'לא הוגדר',c.garden,c.month,c.terms||'לא הוגדר',null]));
+  cashAoa.push(['סה"כ','','','',null]);
+  const ws4=XLSX.utils.aoa_to_sheet(cashAoa);
+  const cDS=2,cDE=1+cashList.length,cTR=cDE+1;
+  for(let i=0;i<cashList.length;i++){const r=cDS+i;
+    setF(ws4,'E'+r,`SUMPRODUCT((${SRC}!$C$2:$C$${dataEnd}=B${r})*(LEFT(${SRC}!$A$2:$A$${dataEnd},7)=C${r})*${SRC}!$I$2:$I$${dataEnd})`);
+  }
+  if(cashList.length)setF(ws4,'E'+cTR,`SUM(E${cDS}:E${cDE})`);
+  ws4['!cols']=cashHeader.map(h=>({wch:h.includes('₪')?22:18}));
+  XLSX.utils.book_append_sheet(wb,ws4,'תחזית תזרים');
+  const fileName=(wizoOnly?'בייביז_ויצו_':'בייביז_')+(mode==='month'&&month?month:'כל_הנתונים')+'.xlsx';
+  XLSX.writeFile(wb,fileName);
+}
 function renderAdm(){renderInstList();renderGrdList();renderAnmList();renderMaterialsList();renderWschGrid();renderRepFilter();renderRep();loadWaStatus();renderCampActive();renderNotifActive()}
 let _notifActiveTab='scheduled',_customNotifs=[],_notifHistory=[];
 const BUILTIN_NOTIFS=[
