@@ -1592,16 +1592,25 @@ function exportExcel(mode){
   // === Sheet 1: ביקורים (source of truth — edit here to update all other sheets) ===
   const bicHeader=['תאריך','מדריך','גן','קבוצות','טווח שעות','משך (דקות)','חיוב לפני מע"מ (₪)','מע"מ חיוב 18% (₪)','חיוב כולל (₪)','תשלום למדריך לפני מע"מ (₪)','מע"מ תשלום (₪)','תשלום למדריך כולל (₪)','סטטוס מס','כיתות','בעל חיים','הערות'];
   const bicAoa=[bicHeader];
+  const rowVat=[];
   data.forEach(r=>{
     const b=calcRecBilling(r);
     const tr=(r.timeIn&&r.timeOut)?`${r.timeIn}-${r.timeOut}`:(r.timeIn||r.timeOut||'');
+    const isMorshe=b.vatStatus==='morshe';
+    rowVat.push(isMorshe);
     bicAoa.push([r.date,r.instructorName,r.garden,r.groups,tr,r.duration,
-      b.chargeBase!=null?b.chargeBase:null,b.chargeVat!=null?b.chargeVat:null,b.chargeTotal!=null?b.chargeTotal:null,
-      b.payBase!=null?b.payBase:null,b.payVat!=null?b.payVat:null,b.payTotal!=null?b.payTotal:null,
-      b.vatStatus==='morshe'?'עוסק מורשה':'פטור',(r.classes||[]).join(', '),r.animal||'',r.notes||'']);
+      b.chargeBase!=null?b.chargeBase:null,null,null,
+      b.payBase!=null?b.payBase:null,null,null,
+      isMorshe?'עוסק מורשה':'פטור',(r.classes||[]).join(', '),r.animal||'',r.notes||'']);
   });
   bicAoa.push(['סה"כ סשנים','','','','','',null,null,null,null,null,null,'','','','']);
   const ws=XLSX.utils.aoa_to_sheet(bicAoa);
+  for(let i=0;i<data.length;i++){const r=i+2;
+    setF(ws,'H'+r,`G${r}*0.18`);
+    setF(ws,'I'+r,`G${r}+H${r}`);
+    if(rowVat[i])setF(ws,'K'+r,`J${r}*0.18`);else ws['K'+r]={t:'n',v:0};
+    setF(ws,'L'+r,`J${r}+K${r}`);
+  }
   ['G','H','I','J','K','L'].forEach(c=>setF(ws,c+bicTotRow,`SUM(${c}2:${c}${dataEnd})`));
   ws['!cols']=bicHeader.map(h=>({wch:h.includes('₪')?16:(h==='הערות'?20:(h==='כיתות'?18:12))}));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'ביקורים');
