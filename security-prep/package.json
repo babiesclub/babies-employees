@@ -1,0 +1,19 @@
+{
+  "name": "babiez-security-rules-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isolated unit-test suite for the PROPOSED hardened Firestore security rules (../firestore.rules.proposed). Prep-only: does not touch production, does not deploy.",
+  "type": "module",
+  "scripts": {
+    "test": "mocha --timeout 20000 firestore.rules.test.mjs",
+    "emu": "firebase emulators:exec --project babiez-app --only firestore \"npm test\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "firebase": "^10.14.1",
+    "mocha": "^10.7.3"
+  }
+}

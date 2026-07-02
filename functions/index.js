@@ -717,10 +717,14 @@ exports.createmorninginvoice = onCall(
       if (gardenEmails.length > 0) {
         clientObj.emails = gardenEmails;
       }
+      const _reqDate = data.documentDate;
+      const _docDate = (typeof _reqDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(_reqDate))
+        ? _reqDate
+        : new Date().toISOString().slice(0, 10);
       const payload = {
         type: docType,
         description: "חוגי בייביז · " + monthName + " " + monthParts[0],
-        date: new Date().toISOString().slice(0, 10),
+        date: _docDate,
         lang: "he",
         currency: "ILS",
         vatType: 0,
@@ -780,6 +784,7 @@ exports.createmorninginvoice = onCall(
         gardenName,
         month,
         docType,
+        documentDate: _docDate,
         morningActualType: morningActualType,
         morningDocId: docResult.id || null,
         morningDocNumber: docNumber,
