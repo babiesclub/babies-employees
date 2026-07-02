@@ -3804,3 +3804,131 @@ exports.analyzetender = onCall(
     };
   }
 );
+
+/**
+ * sendafterschoolreportemail - Send an After-School report (Excel) as a real
+ * email attachment via Gmail SMTP. Admin only.
+ *
+ * Replaces the old mailto: flow where the user had to attach the file by hand.
+ * The client builds the .xlsx, encodes it Base64, and calls this function; we
+ * decode to a Buffer and attach it directly to the outgoing mail.
+ *
+ * Params (request.data):
+ *   recipientEmail (string) - destination email (single address)
+ *   subject        (string) - email subject
+ *   body           (string) - Hebrew message body (plain text)
+ *   base64File     (string) - the .xlsx file, Base64-encoded
+ *   fileName       (string) - attachment filename (e.g. אפטר_סקול_צהרון_2026-07.xlsx)
+ *   reportType     (string) - report kind for logging (tzaharon/talan/nivkharot)
+ *
+ * Secret: GMAIL_APP_PASSWORD (+ GMAIL_USER) - set via firebase functions:secrets:set
+ */
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const AFTERSCHOOL_REPORT_TYPES = ["tzaharon", "talan", "nivkharot"];
+
+exports.sendafterschoolreportemail = onCall(
+  {
+    region: "us-central1",
+    timeoutSeconds: 120,
+    memory: "512MiB",
+    secrets: [gmailUser, gmailAppPassword],
+  },
+  async (req) => {
+    await requireAdmin(req.auth);
+
+    const { recipientEmail, subject, body, base64File, fileName, reportType } = req.data || {};
+
+    // --- Validate inputs (Hebrew errors, consistent with sibling functions) ---
+    if (!recipientEmail) throw new HttpsError("invalid-argument", "חסר אימייל יעד (recipientEmail).");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipientEmail)) {
+      throw new HttpsError("invalid-argument", "כתובת אימייל לא תקינה: " + recipientEmail);
+    }
+    if (!base64File) throw new HttpsError("invalid-argument", "חסר קובץ מצורף (base64File).");
+    if (!fileName) throw new HttpsError("invalid-argument", "חסר שם קובץ (fileName).");
+    if (!subject) throw new HttpsError("invalid-argument", "חסר נושא (subject).");
+
+    // reportType is for logging only - keep it clean but don't hard-fail on an unknown value
+    const safeReportType = AFTERSCHOOL_REPORT_TYPES.includes(reportType) ? reportType : (reportType || "unknown");
+
+    // Base64 -> Buffer for the attachment
+    let fileBuffer;
+    try {
+      fileBuffer = Buffer.from(base64File, "base64");
+    } catch (e) {
+      throw new HttpsError("invalid-argument", "קובץ Base64 לא תקין.");
+    }
+    if (!fileBuffer || fileBuffer.length === 0) {
+      throw new HttpsError("invalid-argument", "הקובץ המצורף ריק.");
+    }
+
+    const datestr = new Date().toISOString().slice(0, 10);
+    const startedAt = Date.now();
+
+    // Gmail over explicit SMTP (smtp.gmail.com:465, TLS). Auth via GMAIL_USER + GMAIL_APP_PASSWORD.
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true, // TLS
+      auth: { user: gmailUser.value(), pass: gmailAppPassword.value() },
+    });
+
+    try {
+      await transporter.sendMail({
+        from: gmailUser.value(),
+        to: recipientEmail,
+        subject: subject,
+        text: body || "",
+        attachments: [{
+          filename: fileName,
+          content: fileBuffer,
+          contentType: XLSX_MIME,
+        }],
+      });
+
+      await admin.firestore().collection("backupLog").add({
+        type: "afterschool-report-email",
+        reportType: safeReportType,
+        startedAt,
+        finishedAt: Date.now(),
+        status: "success",
+        recipient: recipientEmail,
+        fileName,
+        sizeBytes: fileBuffer.length,
+        by: req.auth.uid,
+        date: datestr,
+      });
+
+      logger.info("sendafterschoolreportemail: done", {
+        recipient: recipientEmail,
+        reportType: safeReportType,
+        fileName,
+        sizeBytes: fileBuffer.length,
+      });
+
+      return {
+        success: true,
+        recipient: recipientEmail,
+        reportType: safeReportType,
+        fileName,
+        sizeBytes: fileBuffer.length,
+        message: "הדוח נשלח בהצלחה אל " + recipientEmail,
+      };
+    } catch (e) {
+      logger.error("sendafterschoolreportemail: FAILED", { error: e.message, recipient: recipientEmail, reportType: safeReportType });
+      await admin.firestore().collection("backupLog").add({
+        type: "afterschool-report-email",
+        reportType: safeReportType,
+        startedAt,
+        finishedAt: Date.now(),
+        status: "failed",
+        recipient: recipientEmail,
+        fileName: fileName || null,
+        error: e.message || String(e),
+        by: req.auth && req.auth.uid,
+        date: datestr,
+      });
+      throw new HttpsError("internal", "שליחת המייל נכשלה: " + (e.message || String(e)));
+    }
+  }
+);
