@@ -1,1 +1,3 @@
 wa_*.txt
+node_modules/
+security-prep/node_modules/
