@@ -3726,6 +3726,79 @@ ${instructorName ? `- שם המדריכה שמופיעה בתמונה: ${instruc
   }
 );
 
+// Parse WEEKLY schedule image (recurring, Sun-Thu template) via Claude Vision.
+// Returns entries with day-of-week + times + garden match against instructor's assigned gardens.
+exports.parseweeklyscheduleimage = onCall(
+  { region: "us-central1", timeoutSeconds: 120, memory: "512MiB", secrets: [anthropicApiKey] },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const { imageBase64, mimeType, gardens, instructorName } = req.data || {};
+    if (!imageBase64) throw new HttpsError("invalid-argument", "missing imageBase64");
+    if (!Array.isArray(gardens) || !gardens.length) throw new HttpsError("invalid-argument", "missing gardens array");
+    if (!anthropicApiKey.value()) throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY לא הוגדר");
+    const mime = mimeType || "image/png";
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: anthropicApiKey.value() });
+    const gardenList = gardens.map((g, i) => `${i + 1}. ${g}`).join("\n");
+    const SYSTEM = `אתה מומחה לקריאת לוחות שיבוץ שבועי (רקורנטי) של מדריכות חוגים בגני ילדים בישראל. אתה מקבל תמונה של טבלה שבועית ומחזיר JSON מובנה של השיבוצים.
+
+מבנה נפוץ של הטבלה: עמודות = ימי השבוע (ראשון, שני, שלישי, רביעי, חמישי, לפעמים שישי). כל תא יכול לכלול: שעה התחלה, שעה סיום, שם גן/מסגרת, הערה על מספר קבוצות/חלוקה/כתובת.
+
+רשימת הגנים המשוייכים למדריכה — התאם כל שיבוץ לגן הכי דומה מהרשימה. אם לא מזוהה בבטחון — סמן confidence: "low" והשאר את הטקסט המקורי ב-gardenRaw:
+${gardenList}
+
+הפלט חייב להיות JSON בלבד:
+{
+  "entries": [
+    {
+      "day": 0,
+      "start": "HH:MM",
+      "end": "HH:MM",
+      "gardenGuess": "שם מדויק מהרשימה או null אם לא זוהה",
+      "gardenConfidence": "high|medium|low",
+      "gardenRaw": "הטקסט המקורי מהתמונה",
+      "note": "הערות נוספות (מספר קבוצות, חלוקה, כתובת) או null"
+    }
+  ],
+  "warnings": []
+}
+
+מיפוי ימים: ראשון=0, שני=1, שלישי=2, רביעי=3, חמישי=4, שישי=5.
+- אל תמציא שיבוצים שלא בתמונה.
+- אם השעה לא ברורה — "??:??".
+- אם התאריך רשום (ולא שם יום) — התעלם מהתאריך והשתמש רק בשם היום.
+- שמור על סדר השיבוצים בכל יום לפי השעה.
+${instructorName ? `- שם המדריכה: ${instructorName} (לידיעה).` : ""}
+- החזר רק JSON תקין, בלי טקסט לפני או אחרי, בלי markdown.`;
+
+    const resp = await client.messages.create({
+      model: "claude-opus-4-7",
+      max_tokens: 4096,
+      system: SYSTEM,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: mime, data: imageBase64 } },
+          { type: "text", text: "פרק את הלוח השבועי שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
+        ],
+      }],
+    });
+    const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    let parsed;
+    try {
+      const m = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(m ? m[0] : text);
+    } catch (e) {
+      logger.error("parseweeklyscheduleimage parse failed:", text);
+      throw new HttpsError("internal", "תגובת Claude לא בפורמט JSON תקין: " + text.slice(0, 200));
+    }
+    if (!parsed.entries || !Array.isArray(parsed.entries)) parsed.entries = [];
+    if (!parsed.warnings) parsed.warnings = [];
+    logger.info("parseweeklyscheduleimage:", { count: parsed.entries.length, inTokens: resp.usage.input_tokens, outTokens: resp.usage.output_tokens });
+    return { entries: parsed.entries, warnings: parsed.warnings, tokens: { input: resp.usage.input_tokens, output: resp.usage.output_tokens } };
+  }
+);
+
 // Analyze a tender / RFP / contract PDF via Claude and return structured JSON.
 exports.analyzetender = onCall(
   { region: "us-central1", timeoutSeconds: 300, memory: "1GiB", secrets: [anthropicApiKey] },
