@@ -588,6 +588,8 @@ exports.createmorninginvoice = onCall(
       const gardenName = data.gardenName;
       const month = data.month;
       const docTypeOverride = data.docTypeOverride;
+      const afterSchoolType = data.afterSchoolType || null; // 'tzaharon' | 'talan' | 'nivkharot' | null
+      const ASR_TYPE_LABELS = { tzaharon: "צהרונים", talan: 'תל"ן', nivkharot: "נבחרות" };
       if (!gardenName || !month) {
         throw new HttpsError("invalid-argument", "gardenName and month required");
       }
@@ -614,9 +616,15 @@ exports.createmorninginvoice = onCall(
       // Network handling: if this garden is part of a network, find all sibling branches
       // (same networkName), and treat them as one invoice. Use this garden as the "lead"
       // for billing settings, but aggregate records from all branches.
-      const networkBranches = garden.networkName
+      let networkBranches = garden.networkName
         ? allGardens.filter((g) => typeof g === "object" && g.networkName === garden.networkName)
         : [garden];
+      if (afterSchoolType) {
+        networkBranches = networkBranches.filter((g) => g && g.afterSchoolType === afterSchoolType);
+        if (!networkBranches.length) {
+          throw new HttpsError("not-found", "אין סניפים מסווגים כ-" + (ASR_TYPE_LABELS[afterSchoolType] || afterSchoolType) + " ברשת " + (garden.networkName || gardenName));
+        }
+      }
       const allBranchNames = networkBranches.map((g) => g.name);
       const isNetwork = networkBranches.length > 1;
       logger.info("createmorninginvoice: network aggregation", {
@@ -672,15 +680,23 @@ exports.createmorninginvoice = onCall(
         throw new HttpsError("failed-precondition", reason);
       }
 
-      const existingInvoiceSnap = await admin.firestore()
+      let existingInvoiceQuery = admin.firestore()
         .collection("invoices")
         .where("gardenName", "==", gardenName)
         .where("month", "==", month)
-        .where("status", "==", "created")
-        .limit(1)
-        .get();
-      if (!existingInvoiceSnap.empty) {
-        const existing = existingInvoiceSnap.docs[0].data();
+        .where("status", "==", "created");
+      if (afterSchoolType) {
+        existingInvoiceQuery = existingInvoiceQuery.where("afterSchoolType", "==", afterSchoolType);
+      }
+      const existingInvoiceSnap = await existingInvoiceQuery.limit(1).get();
+      // When creating without a type filter, ignore any pre-existing type-specific invoices
+      const existingCandidates = existingInvoiceSnap.docs.filter((d) => {
+        const inv = d.data();
+        if (afterSchoolType) return inv.afterSchoolType === afterSchoolType;
+        return !inv.afterSchoolType;
+      });
+      if (existingCandidates.length) {
+        const existing = existingCandidates[0].data();
         logger.info("createmorninginvoice: returning existing", { id: existing.id });
         return {
           success: true,
@@ -721,16 +737,17 @@ exports.createmorninginvoice = onCall(
       const _docDate = (typeof _reqDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(_reqDate))
         ? _reqDate
         : new Date().toISOString().slice(0, 10);
+      const typeSuffix = afterSchoolType ? " · " + (ASR_TYPE_LABELS[afterSchoolType] || afterSchoolType) : "";
       const payload = {
         type: docType,
-        description: "חוגי בייביז · " + monthName + " " + monthParts[0],
+        description: "חוגי בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
         date: _docDate,
         lang: "he",
         currency: "ILS",
         vatType: 0,
         client: clientObj,
         income: incomeLines,
-        remarks: "הופק אוטומטית ע\"י אפליקציית בייביז · " + monthName + " " + monthParts[0],
+        remarks: "הופק אוטומטית ע\"י אפליקציית בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
       };
       logger.info("createmorninginvoice: posting to Morning", { docType, total, clientId: garden.morningClientId, willEmailTo: gardenEmails });
 
@@ -801,6 +818,7 @@ exports.createmorninginvoice = onCall(
         isNetwork,
         networkName: garden.networkName || null,
         branchNames: isNetwork ? allBranchNames : null,
+        afterSchoolType: afterSchoolType || null,
       };
       await admin.firestore().collection("invoices").doc(String(invoiceId)).set(invoiceData);
       logger.info("createmorninginvoice: SUCCESS", { gardenName, month, docNumber });
