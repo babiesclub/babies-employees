@@ -856,6 +856,199 @@ exports.createmorninginvoice = onCall(
 );
 
 /**
+ * Cancel an existing Morning invoice by issuing a credit note (חשבונית זיכוי, type 330)
+ * linked to the original document. Updates the local invoices/{id} record with
+ * cancellation metadata (status, creditNoteDocId/Number/Url, cancelledAt).
+ *
+ * Input: { invoiceId: string|number }
+ * Notes:
+ *   - Refuses if the invoice is already cancelled or missing morningDocId.
+ *   - Credit note is dated today (Israeli tax convention — reversals are current-dated).
+ *   - Mirrors the original invoice's income lines but with negative quantities so the
+ *     total is a full reversal. Uses linkedDocumentIds so Morning attaches the זיכוי
+ *     to the original in the client's account.
+ */
+exports.cancelmorninginvoice = onCall(
+  {
+    secrets: [morningApiKeyId, morningApiSecret],
+    region: "us-central1",
+    timeoutSeconds: 60,
+  },
+  async (request) => {
+    try {
+      logger.info("cancelmorninginvoice: START", { data: request.data, uid: request.auth && request.auth.uid });
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Must be logged in");
+      }
+      const callerUid = request.auth.uid;
+      const callerDoc = await admin.firestore().collection("users").doc(callerUid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+
+      const invoiceId = (request.data && request.data.invoiceId) ? String(request.data.invoiceId) : "";
+      if (!invoiceId) {
+        throw new HttpsError("invalid-argument", "חסר invoiceId");
+      }
+
+      const invRef = admin.firestore().collection("invoices").doc(invoiceId);
+      const invSnap = await invRef.get();
+      if (!invSnap.exists) {
+        throw new HttpsError("not-found", "החשבונית לא נמצאה במערכת המקומית (invoiceId=" + invoiceId + ")");
+      }
+      const invoice = invSnap.data();
+      logger.info("cancelmorninginvoice: invoice loaded", {
+        id: invoice.id,
+        gardenName: invoice.gardenName,
+        month: invoice.month,
+        status: invoice.status,
+        morningDocId: invoice.morningDocId,
+        morningDocNumber: invoice.morningDocNumber,
+      });
+
+      if (!invoice.morningDocId) {
+        throw new HttpsError("failed-precondition", "לחשבונית זו אין morningDocId — לא ניתן לבטל אותה במורנינג");
+      }
+      if (invoice.status === "cancelled") {
+        throw new HttpsError("failed-precondition", "החשבונית כבר בוטלה ב-" + (invoice.cancelledAt || "תאריך לא ידוע"));
+      }
+      const docTypeNum = Number(invoice.morningActualType || invoice.docType || 300);
+      // Only "invoice" family documents can be reversed by a credit note. Receipts
+      // (400) and receipt-invoices (320) already collected money and would need a
+      // different reversal flow.
+      if (docTypeNum !== 305 && docTypeNum !== 300) {
+        throw new HttpsError(
+          "failed-precondition",
+          "לא ניתן להוציא חשבונית זיכוי למסמך מסוג " + docTypeNum + ". רק חשבוניות מס (300/305) ניתנות לביטול בדרך זו."
+        );
+      }
+
+      logger.info("cancelmorninginvoice: calling morningAuth");
+      const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
+      logger.info("cancelmorninginvoice: morningAuth OK");
+
+      // Rebuild income lines from the original invoice, but negated. We need the
+      // original client id + income breakdown. Simplest approach: fetch the original
+      // doc from Morning to preserve exact line structure.
+      const origResp = await fetch(`${MORNING_API_BASE}/documents/${encodeURIComponent(invoice.morningDocId)}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const origText = await origResp.text();
+      let origDoc;
+      try { origDoc = JSON.parse(origText); } catch (e) { origDoc = { raw: origText }; }
+      logger.info("cancelmorninginvoice: Morning GET original doc", { status: origResp.status, docType: origDoc && origDoc.type, number: origDoc && origDoc.number });
+      if (!origResp.ok || origDoc.errorCode) {
+        const msg = origDoc.errorMessage || origDoc.message || ("HTTP " + origResp.status + ": " + origText.slice(0, 200));
+        throw new HttpsError("internal", "לא הצלחתי לטעון את המסמך המקורי ממורנינג: " + msg);
+      }
+
+      const origIncome = Array.isArray(origDoc.income) ? origDoc.income : [];
+      if (!origIncome.length) {
+        throw new HttpsError("internal", "המסמך המקורי במורנינג נטען אך אין בו שורות הכנסה. לא ניתן לבנות חשבונית זיכוי אוטומטית.");
+      }
+
+      // Build reversed lines: same description/price/vatType, negated quantity so
+      // the credit note's total exactly reverses the original.
+      const creditLines = origIncome.map((ln) => {
+        const qty = Number(ln.quantity != null ? ln.quantity : 1);
+        return {
+          description: ln.description || "ביטול",
+          quantity: -Math.abs(qty),
+          price: Number(ln.price != null ? ln.price : 0),
+          currency: ln.currency || "ILS",
+          vatType: ln.vatType != null ? ln.vatType : 0,
+        };
+      });
+
+      const clientObj = (origDoc.client && origDoc.client.id)
+        ? { id: String(origDoc.client.id) }
+        : { id: String(invoice.morningClientId || "") };
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const origNumber = origDoc.number || invoice.morningDocNumber || "";
+      const remarksTxt = "ביטול חשבונית #" + origNumber + " (הופק אוטומטית ע\"י אפליקציית בייביז)";
+
+      const creditPayload = {
+        type: 330, // חשבונית זיכוי
+        description: "ביטול חשבונית #" + origNumber,
+        date: todayStr,
+        lang: "he",
+        currency: origDoc.currency || "ILS",
+        vatType: origDoc.vatType != null ? origDoc.vatType : 0,
+        client: clientObj,
+        income: creditLines,
+        linkedDocumentIds: [invoice.morningDocId],
+        remarks: remarksTxt,
+      };
+      logger.info("cancelmorninginvoice: posting credit note to Morning", {
+        linkedTo: invoice.morningDocId,
+        origNumber,
+        lineCount: creditLines.length,
+      });
+
+      const creditResp = await fetch(`${MORNING_API_BASE}/documents`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(creditPayload),
+      });
+      const creditText = await creditResp.text();
+      let creditResult;
+      try { creditResult = JSON.parse(creditText); } catch (e) { creditResult = { raw: creditText }; }
+      logger.info("cancelmorninginvoice: Morning credit-note response", { status: creditResp.status, result: creditResult });
+
+      if (!creditResp.ok || creditResult.errorCode) {
+        const msg = creditResult.errorMessage || creditResult.message || ("HTTP " + creditResp.status + ": " + creditText.slice(0, 200));
+        // Common failure mode: original already reversed. Bubble it up in Hebrew.
+        throw new HttpsError("internal", "מורנינג סירבה להפיק חשבונית זיכוי: " + msg);
+      }
+
+      const creditDocId = creditResult.id || null;
+      const creditDocNumber = creditResult.number || creditResult.documentNumber || null;
+      const creditDocUrl = creditResult.url ? (creditResult.url.he || creditResult.url.origin || null) : null;
+      const nowIso = new Date().toISOString();
+
+      const updates = {
+        status: "cancelled",
+        cancelledAt: nowIso,
+        cancelledBy: callerUid,
+        creditNoteDocId: creditDocId,
+        creditNoteDocNumber: creditDocNumber,
+        creditNoteDocUrl: creditDocUrl,
+      };
+      await invRef.update(updates);
+      logger.info("cancelmorninginvoice: SUCCESS", {
+        invoiceId,
+        creditDocNumber,
+        creditDocId,
+      });
+
+      return {
+        success: true,
+        invoiceId,
+        creditNoteDocId: creditDocId,
+        creditNoteDocNumber: creditDocNumber,
+        creditNoteDocUrl: creditDocUrl,
+        cancelledAt: nowIso,
+      };
+    } catch (err) {
+      if (err instanceof HttpsError) {
+        logger.warn("cancelmorninginvoice: HttpsError", { code: err.code, message: err.message });
+        throw err;
+      }
+      logger.error("cancelmorninginvoice: UNCAUGHT", { message: err.message, stack: err.stack, name: err.name });
+      throw new HttpsError("internal", "שגיאה לא צפויה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
  * List invoices for a month (admin only) - returns simplified array for UI display
  */
 exports.listinvoices = onCall(
