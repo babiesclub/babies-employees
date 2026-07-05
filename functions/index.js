@@ -755,14 +755,11 @@ exports.createmorninginvoice = onCall(
         remarks: "הופק אוטומטית ע\"י אפליקציית בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
       };
       if (_needsBackdate) {
-        // Speculative fields — Morning ignores unknown params, so safe to try.
-        // If one of these unlocks past-dating, we'll know from the successful response.
-        payload.openDate = true;
-        payload.openMonth = true;
-        payload.hidden = false;
-        payload.allowEarlyDate = true;
-        payload.docDate = _docDate;
-        logger.info("createmorninginvoice: backdate speculative fields added", { daysAgo: _daysAgo, docDate: _docDate });
+        // skipDateValidation = the field the Morning UI sends when the user enables
+        // the toggle "הפקת מסמך לתאריך מוקדם יותר". Discovered by inspecting the
+        // Network payload from the real Morning UI on 2026-07-05.
+        payload.skipDateValidation = true;
+        logger.info("createmorninginvoice: skipDateValidation enabled for backdated document", { daysAgo: _daysAgo, docDate: _docDate });
       }
       logger.info("createmorninginvoice: posting to Morning", { docType, total, clientId: garden.morningClientId, willEmailTo: gardenEmails });
 
