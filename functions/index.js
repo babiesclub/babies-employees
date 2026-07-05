@@ -951,13 +951,14 @@ exports.cancelmorninginvoice = onCall(
         throw new HttpsError("internal", "המסמך המקורי במורנינג נטען אך אין בו שורות הכנסה. לא ניתן לבנות חשבונית זיכוי אוטומטית.");
       }
 
-      // Build reversed lines: same description/price/vatType, negated quantity so
-      // the credit note's total exactly reverses the original.
+      // Build credit note lines: SAME positive quantity/price as original.
+      // The document type 330 (חשבונית זיכוי) is itself the reversal — Morning
+      // API validates quantity > 0, so negative quantities are rejected.
       const creditLines = origIncome.map((ln) => {
         const qty = Number(ln.quantity != null ? ln.quantity : 1);
         return {
           description: ln.description || "ביטול",
-          quantity: -Math.abs(qty),
+          quantity: Math.abs(qty),
           price: Number(ln.price != null ? ln.price : 0),
           currency: ln.currency || "ILS",
           vatType: ln.vatType != null ? ln.vatType : 0,
