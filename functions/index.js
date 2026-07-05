@@ -522,9 +522,13 @@ function buildInvoiceIncomeLines(records, garden, networkBranches, opts) {
     }
   }
   // For NETWORK invoices — aggregate all detailed lines into ONE clean line.
-  // Customer sees only: קטלוג=חיות, פירוט=חוג חיות, כמות=סה"כ קבוצות, מחיר=ממוצע, סה"כ=טוטל.
-  // Detailed breakdown by date is sent separately via the Excel report attachment.
-  if (isNetwork && lines.length > 0) {
+  // "Network" here means the garden belongs to a network (garden.networkName is set)
+  // OR the invoice is filtered by afterSchoolType — both cases benefit from the summary
+  // format regardless of how many branches remain after filtering.
+  const belongsToNetwork = !!(garden && garden.networkName);
+  const isAsrTyped = !!(opts && opts.afterSchoolType);
+  const shouldAggregate = (isNetwork || belongsToNetwork || isAsrTyped) && lines.length > 0;
+  if (shouldAggregate) {
     const totalAmount = lines.reduce((s, l) => s + (Number(l.quantity) * Number(l.price)), 0);
     // Quantity: sum of `groups` field on records (with fallback to 1 per record)
     const totalGroups = records.reduce((s, r) => s + (parseInt(r.groups) || 1), 0);
