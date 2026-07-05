@@ -738,11 +738,12 @@ exports.createmorninginvoice = onCall(
         ? _reqDate
         : new Date().toISOString().slice(0, 10);
       const typeSuffix = afterSchoolType ? " · " + (ASR_TYPE_LABELS[afterSchoolType] || afterSchoolType) : "";
-      // Detect if date is a past-dated request (>7 days ago) — if so, add speculative
-      // fields that MIGHT correspond to Morning's "issue for earlier date" UI toggle.
-      const _docDateMs = new Date(_docDate).getTime();
-      const _daysAgo = (Date.now() - _docDateMs) / 86400000;
-      const _needsBackdate = _daysAgo > 7;
+      // Detect if the requested date is BEFORE today (any past date) — if so,
+      // enable Morning's "skipDateValidation" flag so past-dated documents are
+      // accepted. The threshold is deliberately generous: any date not-today.
+      const _todayStr = new Date().toISOString().slice(0, 10);
+      const _needsBackdate = _docDate < _todayStr;
+      const _daysAgo = (new Date(_todayStr).getTime() - new Date(_docDate).getTime()) / 86400000;
       const payload = {
         type: docType,
         description: "חוגי בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
