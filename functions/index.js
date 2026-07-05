@@ -895,18 +895,23 @@ exports.deletelocalinvoice = onCall(
       if (!callerDoc.exists || callerDoc.data().role !== "admin") {
         throw new HttpsError("permission-denied", "Admin only");
       }
-      const { gardenName, month } = request.data || {};
+      const { gardenName, month, afterSchoolType } = request.data || {};
       if (!gardenName || !month) throw new HttpsError("invalid-argument", "gardenName and month required");
       const snap = await admin.firestore().collection("invoices")
         .where("gardenName", "==", gardenName)
         .where("month", "==", month)
         .get();
       if (snap.empty) return { deleted: 0 };
+      // Filter by afterSchoolType if provided (delete only that type). If null, delete all matches.
+      const toDelete = afterSchoolType
+        ? snap.docs.filter(d => d.data().afterSchoolType === afterSchoolType)
+        : snap.docs;
+      if (!toDelete.length) return { deleted: 0 };
       const batch = admin.firestore().batch();
-      snap.forEach((d) => batch.delete(d.ref));
+      toDelete.forEach(d => batch.delete(d.ref));
       await batch.commit();
-      logger.info("deletelocalinvoice: deleted", { gardenName, month, count: snap.size });
-      return { deleted: snap.size };
+      logger.info("deletelocalinvoice: deleted", { gardenName, month, afterSchoolType: afterSchoolType || null, count: toDelete.length });
+      return { deleted: toDelete.length };
     } catch (err) {
       if (err instanceof HttpsError) throw err;
       logger.error("deletelocalinvoice: UNCAUGHT", { message: err.message, stack: err.stack });
