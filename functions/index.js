@@ -437,7 +437,7 @@ function getEligibleRates(garden, date) {
  *              (rate per half-hour unit; e.g. 60 min visit at 700 rate → qty=2, price=350)
  * Network gardens prefix the description with branch name.
  */
-function buildInvoiceIncomeLines(records, garden, networkBranches) {
+function buildInvoiceIncomeLines(records, garden, networkBranches, opts) {
   const isNetwork = Array.isArray(networkBranches) && networkBranches.length > 1;
   const gardenByName = new Map();
   if (isNetwork) networkBranches.forEach((g) => gardenByName.set(g.name, g));
@@ -520,6 +520,28 @@ function buildInvoiceIncomeLines(records, garden, networkBranches) {
         vatType: 0,
       });
     }
+  }
+  // For NETWORK invoices — aggregate all detailed lines into ONE clean line.
+  // Customer sees only: קטלוג=חיות, פירוט=חוג חיות, כמות=סה"כ קבוצות, מחיר=ממוצע, סה"כ=טוטל.
+  // Detailed breakdown by date is sent separately via the Excel report attachment.
+  if (isNetwork && lines.length > 0) {
+    const totalAmount = lines.reduce((s, l) => s + (Number(l.quantity) * Number(l.price)), 0);
+    // Quantity: sum of `groups` field on records (with fallback to 1 per record)
+    const totalGroups = records.reduce((s, r) => s + (parseInt(r.groups) || 1), 0);
+    if (totalGroups <= 0 || totalAmount <= 0) return lines; // safety fallback
+    const unitPrice = +(totalAmount / totalGroups).toFixed(4);
+    const asrType = opts && opts.afterSchoolType;
+    const ASR_LBL = { tzaharon: "צהרונים", talan: 'תל"ן', nivkharot: "נבחרות" };
+    const typeLabel = asrType && ASR_LBL[asrType] ? ASR_LBL[asrType] : "";
+    const description = "חוג חיות" + (typeLabel ? " · " + typeLabel : "");
+    return [{
+      description,
+      catalogNum: "חיות",
+      quantity: totalGroups,
+      price: unitPrice,
+      currency: "ILS",
+      vatType: 0,
+    }];
   }
   return lines;
 }
@@ -717,7 +739,7 @@ exports.createmorninginvoice = onCall(
       const docType = parseInt(docTypeOverride || garden.morningDocType || "300");
 
       // === Build itemized income lines (one per date / per branch / per duration) ===
-      const incomeLines = buildInvoiceIncomeLines(records, garden, networkBranches);
+      const incomeLines = buildInvoiceIncomeLines(records, garden, networkBranches, { afterSchoolType });
       const itemizedTotal = +incomeLines.reduce((s, l) => s + (Number(l.quantity) * Number(l.price)), 0).toFixed(2);
       logger.info("createmorninginvoice: itemized lines built", { count: incomeLines.length, itemizedTotal, summedTotal: total });
       if (!incomeLines.length) {
