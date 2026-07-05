@@ -738,6 +738,11 @@ exports.createmorninginvoice = onCall(
         ? _reqDate
         : new Date().toISOString().slice(0, 10);
       const typeSuffix = afterSchoolType ? " · " + (ASR_TYPE_LABELS[afterSchoolType] || afterSchoolType) : "";
+      // Detect if date is a past-dated request (>7 days ago) — if so, add speculative
+      // fields that MIGHT correspond to Morning's "issue for earlier date" UI toggle.
+      const _docDateMs = new Date(_docDate).getTime();
+      const _daysAgo = (Date.now() - _docDateMs) / 86400000;
+      const _needsBackdate = _daysAgo > 7;
       const payload = {
         type: docType,
         description: "חוגי בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
@@ -749,6 +754,16 @@ exports.createmorninginvoice = onCall(
         income: incomeLines,
         remarks: "הופק אוטומטית ע\"י אפליקציית בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
       };
+      if (_needsBackdate) {
+        // Speculative fields — Morning ignores unknown params, so safe to try.
+        // If one of these unlocks past-dating, we'll know from the successful response.
+        payload.openDate = true;
+        payload.openMonth = true;
+        payload.hidden = false;
+        payload.allowEarlyDate = true;
+        payload.docDate = _docDate;
+        logger.info("createmorninginvoice: backdate speculative fields added", { daysAgo: _daysAgo, docDate: _docDate });
+      }
       logger.info("createmorninginvoice: posting to Morning", { docType, total, clientId: garden.morningClientId, willEmailTo: gardenEmails });
 
       const docResponse = await fetch(`${MORNING_API_BASE}/documents`, {
