@@ -2,98 +2,155 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper: is the calling user an admin?
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
     function isAdmin() {
       return request.auth != null
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
-    // Helper: is the user signed in?
-    function isSignedIn() {
-      return request.auth != null;
+    function isSelf(uid) {
+      return request.auth != null && request.auth.uid == uid;
     }
 
-    // Users: each user reads/writes own profile, admin reads/writes everyone
+    function affectsOnly(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    // USERS
+    // Instructors may only update a small whitelist on their own doc (profile + push tokens).
+    // role, salary rates, gardens, adminSignature, unlockedMonths, camps* — ADMIN ONLY.
     match /users/{uid} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        isSelf(uid) && affectsOnly([
+          'name','phone','email','tz','address','gender',
+          'oneSignalSubscriptionIds','oneSignalSubscriptionId',
+          'fcmToken','lastSeen','pushEnabled',
+          'scheduleApprovedAt','scheduleApprovedBy'
+        ])
+      );
+      allow delete: if isAdmin();
     }
 
-    // Gardens: all read, admin writes
+    // GARDENS
     match /gardens/{gardenId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }
 
-    // Attendance records: all auth users
+    // RECORDS — instructors log their own attendance
     match /records/{recordId} {
       allow read: if isSignedIn();
       allow write: if isSignedIn();
     }
 
-    // Invoices: admin only
+    // INVOICES — ADMIN ONLY
     match /invoices/{invoiceId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
-    // Contracts: all auth users
+    // CONTRACTS — read own or admin, sign own, admin creates
     match /contracts/{contractId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow read: if isSignedIn() && (isAdmin() || resource.data.instructorUid == request.auth.uid);
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        resource.data.instructorUid == request.auth.uid
+        && resource.data.status == 'pending'
+      );
+      allow delete: if isAdmin();
     }
 
-    // Personal docs: all auth users (server enforces ownership via uid in path)
+    // PERSONAL DOCS — sensitive PII (id card, bank confirmation)
     match /personalDocs/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow read: if isSignedIn() && (isAdmin() || resource.data.instructorUid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.instructorUid == request.auth.uid;
+      allow update, delete: if isAdmin() || (
+        resource.data.instructorUid == request.auth.uid
+      );
     }
 
-    // Tasks
+    // RECEIPTS — instructor writes own; admin reads all
+    match /receipts/{docId} {
+      allow read: if isSignedIn() && (isAdmin() || resource.data.instructorUid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.instructorUid == request.auth.uid;
+      allow update, delete: if isAdmin() || (
+        resource.data.instructorUid == request.auth.uid
+      );
+    }
+
+    // TASKS
     match /tasks/{taskId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
-    }
-
-    // Notifications
-    match /notifications/{notifId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
-    }
-
-    // WhatsApp conversations + messages: admin only
-    match /waConversations/{convId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
-    }
-    match /waMessages/{msgId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
-    }
-
-    // Materials (lesson plans): all read, admin writes
-    match /materials/{matId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
-    }
-
-    // Weekly schedule
-    match /weeklySchedule/{weekId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
-    }
-
-    // Animal info
-    match /animals/{animalId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
-    }
-
-    // Catch-all: signed-in users have full access to anything else
-    // (safety net so we don't break collections we forgot to list)
-    match /{document=**} {
       allow read, write: if isSignedIn();
+    }
+
+    // NOTIFICATIONS — recipients read their own; anyone signed-in may create
+    match /notifications/{notifId} {
+      allow read: if isSignedIn() && (isAdmin() || resource.data.recipientUid == request.auth.uid);
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin() || (
+        resource.data.recipientUid == request.auth.uid
+      );
+    }
+
+    // CHAT MESSAGES — participants + admin
+    match /chatMessages/{msgId} {
+      allow read: if isSignedIn() && (
+        isAdmin()
+        || resource.data.instructorUid == request.auth.uid
+      );
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // WHATSAPP — ADMIN ONLY (both legacy and current naming)
+    match /waConversations/{convId}   { allow read, write: if isAdmin(); }
+    match /waMessages/{msgId}         { allow read, write: if isAdmin(); }
+    match /whatsapp_conversations/{convId} { allow read, write: if isAdmin(); }
+    match /whatsapp_messages/{msgId}       { allow read, write: if isAdmin(); }
+
+    // TENDERS + COMPANY DOCS — ADMIN ONLY
+    match /tenders/{docId}      { allow read, write: if isAdmin(); }
+    match /companyDocs/{docId}  { allow read: if isSignedIn(); allow write: if isAdmin(); }
+
+    // SETTINGS / SEND LOG / SCHEDULED NOTIFICATIONS / EXTERNAL SCHEDULES — ADMIN ONLY
+    match /settings/{docId}             { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /sendLog/{docId}              { allow read, write: if isAdmin(); }
+    match /customNotifications/{docId}  { allow read, write: if isAdmin(); }
+    match /external_schedules/{docId}   { allow read, write: if isAdmin(); }
+    match /regionRoutes/{docId}         { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rotationGroups/{docId}       { allow read: if isSignedIn(); allow write: if isAdmin(); }
+
+    // MATERIALS / WEEKLY SCHEDULE / ANIMALS — read all, write admin
+    match /materials/{matId}        { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /weeklySchedule/{weekId}  { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /animals/{animalId}       { allow read: if isSignedIn(); allow write: if isAdmin(); }
+
+    // CAMP SESSIONS — read/write for signed-in (self-service marking)
+    match /camp_sessions/{sessId}   { allow read, write: if isSignedIn(); }
+    match /camp_clients/{clientId}  { allow read: if isSignedIn(); allow write: if isAdmin(); }
+
+    // SUBSTITUTE ASSIGNMENTS — admin manages, all read
+    match /substituteAssignments/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // META (gardens, animals lists, etc.) — read all, write admin
+    match /meta/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // FINAL DENY — anything not matched above is closed.
+    // This replaces the previous permissive catch-all that allowed any signed-in user
+    // to read/write unlisted collections (including sensitive ones we hadn't declared).
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
