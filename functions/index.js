@@ -4198,18 +4198,35 @@ exports.analyzetender = onCall(
 - אם המסמך לא מכרז אלא חוזה רגיל / הודעה — אותו פורמט, מתואם לתוכן.
 - היה תמציתי אבל מקיף. החזר רק JSON.`;
 
-    const resp = await client.messages.create({
-      model: "claude-opus-4-7",
-      max_tokens: 8000,
-      system: SYSTEM,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
-          { type: "text", text: `נתח את המסמך הזה לפי הסכמה. החזר רק JSON. שם הקובץ: ${filename || 'unknown.pdf'}` }
-        ]
-      }]
-    });
+    let resp;
+    try {
+      resp = await client.messages.create({
+        model: "claude-opus-4-7",
+        max_tokens: 8000,
+        system: SYSTEM,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
+            { type: "text", text: `נתח את המסמך הזה לפי הסכמה. החזר רק JSON. שם הקובץ: ${filename || 'unknown.pdf'}` }
+          ]
+        }]
+      });
+    } catch (apiErr) {
+      const msg = String((apiErr && apiErr.message) || apiErr || "");
+      const errType = apiErr && apiErr.error && apiErr.error.error && apiErr.error.error.type;
+      logger.error("Anthropic API failed", { status: apiErr && apiErr.status, type: errType, msg: msg.slice(0, 300) });
+      if (/credit balance is too low|insufficient_quota/i.test(msg) || errType === "insufficient_quota") {
+        throw new HttpsError("resource-exhausted", "חשבון ה־Anthropic API אזל מקרדיטים. יש להוסיף אשראי ב־console.anthropic.com/settings/billing ולנסות שוב.");
+      }
+      if (apiErr && apiErr.status === 429) {
+        throw new HttpsError("resource-exhausted", "Rate limit של Anthropic. נסי שוב בעוד דקה.");
+      }
+      if (errType === "authentication_error" || (apiErr && apiErr.status === 401)) {
+        throw new HttpsError("failed-precondition", "מפתח Anthropic API לא תקין. פני למפתח לעדכן את הסיקרט.");
+      }
+      throw new HttpsError("internal", "Anthropic החזירה שגיאה: " + msg.slice(0, 200));
+    }
     const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
     let parsed;
     try {
