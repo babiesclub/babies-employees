@@ -4268,9 +4268,14 @@ exports.sendafterschoolreportemail = onCall(
 
     // --- Validate inputs (Hebrew errors, consistent with sibling functions) ---
     if (!recipientEmail) throw new HttpsError("invalid-argument", "חסר אימייל יעד (recipientEmail).");
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipientEmail)) {
-      throw new HttpsError("invalid-argument", "כתובת אימייל לא תקינה: " + recipientEmail);
+    // Support one or many recipients (comma/semicolon separated). Validate each.
+    const _recipParts = String(recipientEmail).split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
+    const _emailRe = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+    const _badRecips = _recipParts.filter((e) => !_emailRe.test(e));
+    if (_recipParts.length === 0 || _badRecips.length > 0) {
+      throw new HttpsError("invalid-argument", "כתובת אימייל לא תקינה: " + (_badRecips.join(", ") || recipientEmail));
     }
+    const _recipCombined = _recipParts.join(", ");
     if (!base64File) throw new HttpsError("invalid-argument", "חסר קובץ מצורף (base64File).");
     if (!fileName) throw new HttpsError("invalid-argument", "חסר שם קובץ (fileName).");
     if (!subject) throw new HttpsError("invalid-argument", "חסר נושא (subject).");
@@ -4304,7 +4309,7 @@ exports.sendafterschoolreportemail = onCall(
     try {
       await transporter.sendMail({
         from: gmailUser.value(),
-        to: recipientEmail,
+        to: _recipCombined,
         subject: subject,
         text: body || "",
         attachments: [{
@@ -4320,7 +4325,7 @@ exports.sendafterschoolreportemail = onCall(
         startedAt,
         finishedAt: Date.now(),
         status: "success",
-        recipient: recipientEmail,
+        recipient: _recipCombined,
         fileName,
         sizeBytes: fileBuffer.length,
         by: req.auth.uid,
