@@ -1135,19 +1135,24 @@ exports.resendmorninginvoiceemail = onCall(
       const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
       const monthName = monthParts[1] ? HE_MONTHS[parseInt(monthParts[1], 10) - 1] : "";
 
+      // Morning /documents/{id}/distribute expects `to` as an array of objects
+      // with { email, name } fields — passing bare strings returns errorCode 1102
+      // ("invalid email"), even when the string itself is a valid RFC address.
+      const distributePayload = {
+        to: emails.map((e) => ({ email: e })),
+        subject: "חשבונית חוגי בייביז - " + invoice.gardenName + " - " + monthName + " " + monthParts[0],
+        body: "שלום,\n\nמצורפת חשבונית עבור " + invoice.gardenName + " לחודש " + monthName + " " + monthParts[0] + ".\n\nבברכה,\nבייביז קלאב",
+      };
+      logger.info("resendmorninginvoiceemail: calling distribute", { morningDocId: invoice.morningDocId, to: emails });
       const distResponse = await fetch(`${MORNING_API_BASE}/documents/${invoice.morningDocId}/distribute`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          to: emails,
-          subject: "חשבונית חוגי בייביז - " + invoice.gardenName + " - " + monthName + " " + monthParts[0],
-          body: "שלום,\n\nמצורפת חשבונית עבור " + invoice.gardenName + " לחודש " + monthName + " " + monthParts[0] + ".\n\nבברכה,\nבייביז קלאב",
-        }),
+        body: JSON.stringify(distributePayload),
       });
 
       if (!distResponse.ok) {
         const errText = await distResponse.text();
-        logger.warn("resendmorninginvoiceemail: distribute failed", { status: distResponse.status, body: errText.slice(0, 200), to: emails });
+        logger.warn("resendmorninginvoiceemail: distribute failed (object format)", { status: distResponse.status, body: errText.slice(0, 300), payload: distributePayload });
         throw new HttpsError("internal", "מורנינג החזירה שגיאה: HTTP " + distResponse.status + ": " + errText.slice(0, 200));
       }
 
