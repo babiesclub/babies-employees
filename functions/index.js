@@ -1135,15 +1135,14 @@ exports.resendmorninginvoiceemail = onCall(
       const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
       const monthName = monthParts[1] ? HE_MONTHS[parseInt(monthParts[1], 10) - 1] : "";
 
-      // The correct Morning endpoint is POST /documents/{id}/send with body
-      // {"email":"user@example.com"} per recipient. It does not accept an array;
-      // /distribute doesn't exist and returns errorCode 1102 ("invalid email").
-      // Subject/body are not overridable — Morning uses its server-side template.
-      logger.info("resendmorninginvoiceemail: sending via /send", { morningDocId: invoice.morningDocId, recipients: emails });
+      // Morning API — /documents/{id}/send returns 404 (endpoint doesn't exist).
+      // /documents/{id}/distribute exists (returns 400/1102 with array formats).
+      // Trying singular `email` field on /distribute — likely the correct schema.
+      logger.info("resendmorninginvoiceemail: sending via /distribute (singular email)", { morningDocId: invoice.morningDocId, recipients: emails });
       const okEmails = [];
       const failures = [];
       for (const email of emails) {
-        const sendResp = await fetch(`${MORNING_API_BASE}/documents/${invoice.morningDocId}/send`, {
+        const sendResp = await fetch(`${MORNING_API_BASE}/documents/${invoice.morningDocId}/distribute`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ email }),
@@ -1152,8 +1151,8 @@ exports.resendmorninginvoiceemail = onCall(
           okEmails.push(email);
         } else {
           const errText = await sendResp.text();
-          logger.warn("resendmorninginvoiceemail: send failed for " + email, { status: sendResp.status, body: errText.slice(0, 200) });
-          failures.push({ email, status: sendResp.status, error: errText.slice(0, 200) });
+          logger.warn("resendmorninginvoiceemail: send failed for " + email, { status: sendResp.status, body: errText.slice(0, 300) });
+          failures.push({ email, status: sendResp.status, error: errText.slice(0, 300) });
         }
       }
       if (okEmails.length === 0) {
