@@ -1076,6 +1076,100 @@ exports.cancelmorninginvoice = onCall(
 );
 
 /**
+ * Resend a Morning invoice by email (admin only).
+ * Uses Morning's /documents/{id}/distribute endpoint to trigger the email again,
+ * either to the garden's saved emails or to a custom list provided by the caller.
+ */
+exports.resendmorninginvoiceemail = onCall(
+  {
+    secrets: [morningApiKeyId, morningApiSecret],
+    region: "us-central1",
+    timeoutSeconds: 30,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerUid = request.auth.uid;
+      const callerDoc = await admin.firestore().collection("users").doc(callerUid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+
+      const invoiceId = (request.data && request.data.invoiceId) ? String(request.data.invoiceId) : "";
+      const overrideEmails = Array.isArray(request.data && request.data.emails) ? request.data.emails : null;
+      if (!invoiceId) throw new HttpsError("invalid-argument", "חסר invoiceId");
+
+      const invRef = admin.firestore().collection("invoices").doc(invoiceId);
+      const invSnap = await invRef.get();
+      if (!invSnap.exists) throw new HttpsError("not-found", "החשבונית לא נמצאה במערכת המקומית");
+      const invoice = invSnap.data();
+
+      if (!invoice.morningDocId) {
+        throw new HttpsError("failed-precondition", "לחשבונית זו אין morningDocId — לא ניתן לשלוח באימייל דרך Morning. אולי זו חשבונית שנקלטה ידנית?");
+      }
+
+      let emails = [];
+      if (overrideEmails && overrideEmails.length > 0) {
+        emails = overrideEmails
+          .map((e) => String(e).trim())
+          .filter((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+      } else {
+        const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
+        let garden = null;
+        if (gardensDoc.exists) {
+          const items = gardensDoc.data().items || [];
+          garden = items.find((g) => (typeof g === "string" ? g : g.name) === invoice.gardenName);
+        }
+        if (!garden || typeof garden === "string") {
+          throw new HttpsError("failed-precondition", "לא נמצא אימייל לגן '" + invoice.gardenName + "'. הכניסי אימייל ידני.");
+        }
+        emails = parseEmails(garden.email);
+      }
+      if (emails.length === 0) {
+        throw new HttpsError("failed-precondition", "אין אימייל שמור לגן. הכניסי אימייל ידני.");
+      }
+
+      const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
+
+      const monthParts = String(invoice.month || "").split("-");
+      const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+      const monthName = monthParts[1] ? HE_MONTHS[parseInt(monthParts[1], 10) - 1] : "";
+
+      const distResponse = await fetch(`${MORNING_API_BASE}/documents/${invoice.morningDocId}/distribute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          to: emails,
+          subject: "חשבונית חוגי בייביז - " + invoice.gardenName + " - " + monthName + " " + monthParts[0],
+          body: "שלום,\n\nמצורפת חשבונית עבור " + invoice.gardenName + " לחודש " + monthName + " " + monthParts[0] + ".\n\nבברכה,\nבייביז קלאב",
+        }),
+      });
+
+      if (!distResponse.ok) {
+        const errText = await distResponse.text();
+        logger.warn("resendmorninginvoiceemail: distribute failed", { status: distResponse.status, body: errText.slice(0, 200), to: emails });
+        throw new HttpsError("internal", "מורנינג החזירה שגיאה: HTTP " + distResponse.status + ": " + errText.slice(0, 200));
+      }
+
+      const emailedTo = emails.join(", ");
+      const resentAt = new Date().toISOString();
+      await invRef.update({
+        emailedTo,
+        emailResentAt: resentAt,
+        emailResentBy: callerUid,
+      });
+      logger.info("resendmorninginvoiceemail: SUCCESS", { invoiceId, emailedTo });
+
+      return { success: true, emailedTo, resentAt };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("resendmorninginvoiceemail failed", err);
+      throw new HttpsError("internal", err.message || String(err));
+    }
+  }
+);
+
+/**
  * List invoices for a month (admin only) - returns simplified array for UI display
  */
 exports.listinvoices = onCall(
