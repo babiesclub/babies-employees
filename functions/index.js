@@ -1135,30 +1135,27 @@ exports.resendmorninginvoiceemail = onCall(
       const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
       const monthName = monthParts[1] ? HE_MONTHS[parseInt(monthParts[1], 10) - 1] : "";
 
-      // Morning API — /documents/{id}/send returns 404 (endpoint doesn't exist).
-      // /documents/{id}/distribute exists (returns 400/1102 with array formats).
-      // Trying singular `email` field on /distribute — likely the correct schema.
-      logger.info("resendmorninginvoiceemail: sending via /distribute (singular email)", { morningDocId: invoice.morningDocId, recipients: emails });
-      const okEmails = [];
-      const failures = [];
-      for (const email of emails) {
-        const sendResp = await fetch(`${MORNING_API_BASE}/documents/${invoice.morningDocId}/distribute`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ email }),
-        });
-        if (sendResp.ok) {
-          okEmails.push(email);
-        } else {
-          const errText = await sendResp.text();
-          logger.warn("resendmorninginvoiceemail: send failed for " + email, { status: sendResp.status, body: errText.slice(0, 300) });
-          failures.push({ email, status: sendResp.status, error: errText.slice(0, 300) });
-        }
+      // Morning /documents/{id}/distribute — exact payload discovered by
+      // inspecting the Morning UI's network request on 2026-07-07:
+      //   { attachment: false, recipients: ["..."], remarks: "" }
+      // Field is `recipients` (not `to`/`email`), array of bare strings.
+      const distributePayload = {
+        attachment: false,
+        recipients: emails,
+        remarks: "",
+      };
+      logger.info("resendmorninginvoiceemail: calling /distribute", { morningDocId: invoice.morningDocId, payload: distributePayload });
+      const sendResp = await fetch(`${MORNING_API_BASE}/documents/${invoice.morningDocId}/distribute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(distributePayload),
+      });
+      if (!sendResp.ok) {
+        const errText = await sendResp.text();
+        logger.warn("resendmorninginvoiceemail: /distribute failed", { status: sendResp.status, body: errText.slice(0, 300), payload: distributePayload });
+        throw new HttpsError("internal", "מורנינג החזירה שגיאה: HTTP " + sendResp.status + " · " + errText.slice(0, 200));
       }
-      if (okEmails.length === 0) {
-        throw new HttpsError("internal", "מורנינג החזירה שגיאה לכל הנמענים. פרטים: " +
-          failures.map((f) => f.email + " → " + f.error).join(" | "));
-      }
+      const okEmails = emails;
       const emailedTo = okEmails.join(", ");
       const resentAt = new Date().toISOString();
       await invRef.update({
