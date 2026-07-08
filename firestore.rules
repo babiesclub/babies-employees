@@ -140,6 +140,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ADMIN CALENDAR (הכשרות, פגישות, אירועים) — admin only
+    match /adminCalendarEvents/{eventId} {
+      allow read, write: if isAdmin();
+    }
+
     // META (gardens, animals lists, etc.) — read all, write admin
     match /meta/{docId} {
       allow read: if isSignedIn();
