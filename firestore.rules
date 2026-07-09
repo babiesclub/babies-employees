@@ -98,13 +98,17 @@ service cloud.firestore {
     }
 
     // CHAT MESSAGES — participants + admin
+    // Field is `threadUid` (the instructor whose thread this is), plus
+    // `senderUid`. Instructor queries only her own thread via
+    // .where('threadUid', '==', uid) — the get rule below matches per-doc.
     match /chatMessages/{msgId} {
       allow read: if isSignedIn() && (
         isAdmin()
-        || resource.data.instructorUid == request.auth.uid
+        || resource.data.threadUid == request.auth.uid
       );
       allow create: if isSignedIn();
-      allow update, delete: if isAdmin();
+      allow update: if isSignedIn();
+      allow delete: if isAdmin();
     }
 
     // WHATSAPP — ADMIN ONLY (both legacy and current naming)
