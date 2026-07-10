@@ -808,7 +808,11 @@ exports.createmorninginvoice = onCall(
       }
 
       const docNumber = docResult.number || docResult.documentNumber || null;
-      const docUrl = docResult.url ? (docResult.url.he || docResult.url.origin || null) : null;
+      // Morning returns two URL variants under `url`. `origin` is the direct customer
+      // viewer link (no login). `he` sometimes redirects into the admin panel and
+      // requires login. Prefer origin so WA/email links open the doc immediately.
+      const docUrl = docResult.url ? (docResult.url.origin || docResult.url.he || null) : null;
+      logger.info("createmorninginvoice: docResult.url shape", { url: docResult.url, chosen: docUrl });
       const morningActualType = docResult.type != null ? Number(docResult.type) : null;
       let emailedTo = null;
       if (gardenEmails.length > 0 && docResult.id) {
