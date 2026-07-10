@@ -2140,6 +2140,11 @@ exports.markinvoicepaid = onCall(
           remarks: "מבוסס על חשבון עסקה מס׳ " + (invoice.morningDocNumber || "") +
             (note ? " | " + note : ""),
         };
+        // Link to the original invoice so Morning closes the חשבון עסקה (300)
+        // and doesn't leave it open as if it were still awaiting payment.
+        if (invoice.morningDocId) {
+          payload.linkedDocumentIds = [invoice.morningDocId];
+        }
 
         const response = await fetch(`${MORNING_API_BASE}/documents`, {
           method: "POST",
