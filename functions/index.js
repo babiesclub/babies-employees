@@ -1080,6 +1080,94 @@ exports.cancelmorninginvoice = onCall(
 );
 
 /**
+ * Refresh morningDocUrl for ALL invoices that have morningDocId — fetches each
+ * doc from Morning API and stores the current customer-facing url.origin.
+ * Fixes invoices created before we switched preference away from url.he
+ * (which redirected into the admin panel and required login).
+ */
+exports.refreshallinvoiceurls = onCall(
+  {
+    secrets: [morningApiKeyId, morningApiSecret],
+    region: "us-central1",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+
+      const snap = await admin.firestore().collection("invoices").get();
+      const toRefresh = [];
+      snap.forEach((d) => {
+        const v = d.data();
+        if (v.morningDocId && v.status !== "cancelled") {
+          toRefresh.push({
+            id: d.id,
+            morningDocId: v.morningDocId,
+            currentUrl: v.morningDocUrl || null,
+          });
+        }
+      });
+      logger.info("refreshallinvoiceurls: START", { total: toRefresh.length });
+
+      if (toRefresh.length === 0) return { total: 0, updated: 0, unchanged: 0, failed: 0, errors: [] };
+
+      const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
+
+      let updated = 0;
+      let unchanged = 0;
+      let failed = 0;
+      const errors = [];
+
+      for (const inv of toRefresh) {
+        try {
+          const resp = await fetch(`${MORNING_API_BASE}/documents/${inv.morningDocId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!resp.ok) {
+            const errText = await resp.text();
+            failed++;
+            errors.push({ id: inv.id, morningDocId: inv.morningDocId, status: resp.status, body: errText.slice(0, 150) });
+            continue;
+          }
+          const data = await resp.json();
+          const newUrl = data.url ? (data.url.origin || data.url.he || null) : null;
+          if (!newUrl) {
+            failed++;
+            errors.push({ id: inv.id, morningDocId: inv.morningDocId, reason: "no-url-in-response" });
+            continue;
+          }
+          if (newUrl === inv.currentUrl) {
+            unchanged++;
+            continue;
+          }
+          await admin.firestore().collection("invoices").doc(inv.id).update({
+            morningDocUrl: newUrl,
+            morningDocUrlRefreshedAt: new Date().toISOString(),
+            morningDocUrlRefreshedBy: request.auth.uid,
+          });
+          updated++;
+        } catch (e) {
+          failed++;
+          errors.push({ id: inv.id, morningDocId: inv.morningDocId, error: String(e && e.message || e).slice(0, 150) });
+        }
+      }
+
+      logger.info("refreshallinvoiceurls: DONE", { total: toRefresh.length, updated, unchanged, failed });
+      return { total: toRefresh.length, updated, unchanged, failed, errors: errors.slice(0, 20) };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("refreshallinvoiceurls failed", err);
+      throw new HttpsError("internal", err.message || String(err));
+    }
+  }
+);
+
+/**
  * Resend a Morning invoice by email (admin only).
  * Uses Morning's /documents/{id}/distribute endpoint to trigger the email again,
  * either to the garden's saved emails or to a custom list provided by the caller.
