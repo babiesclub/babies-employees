@@ -149,6 +149,16 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // INSTRUCTOR REPORTS (monthly attendance PDF, published by admin)
+    // Admin writes; instructor reads only her own docs.
+    match /instructorReports/{reportId} {
+      allow read: if isSignedIn() && (
+        isAdmin()
+        || resource.data.instructorUid == request.auth.uid
+      );
+      allow write: if isAdmin();
+    }
+
     // META (gardens, animals lists, etc.) — read all, write admin
     match /meta/{docId} {
       allow read: if isSignedIn();
