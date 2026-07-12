@@ -48,6 +48,14 @@ service firebase.storage {
       allow read, write: if isAdmin();
     }
 
+    // Instructor monthly reports (PDF): admin uploads; instructor + admin can read.
+    // Read via getDownloadURL token also works for the instructor without login.
+    match /instructor-reports/{userId}/{allPaths=**} {
+      allow read: if request.auth != null
+        && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+
     // Default deny.
     match /{allPaths=**} {
       allow read, write: if false;
