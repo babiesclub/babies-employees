@@ -1123,6 +1123,56 @@ exports.cancelmorninginvoice = onCall(
       const creditDocNumber = creditResult.number || creditResult.documentNumber || null;
       const creditDocUrl = creditResult.url ? (creditResult.url.he || creditResult.url.origin || null) : null;
 
+      // ------------------------------------------------------------------------
+      // STEP 2 — Close the ORIGINAL tax invoice.
+      // linkedDocumentIds on the credit note is not enough — Morning still shows
+      // the original as "פתוח" (status 0) even when amountOpened is 0. We must
+      // call POST /documents/{origId}/close to flip it to "סגור" (status 2 =
+      // Manually Closed). This is best-effort: if it fails, the credit note is
+      // already legally issued, so we log a warning and keep going.
+      // Verified against Morning API 2026-07 with invoice 50347 / credit 70061:
+      // after /close the original showed status:2 and linkedDocuments intact.
+      // ------------------------------------------------------------------------
+      let originalClosedInMorning = false;
+      let originalCloseError = null;
+      try {
+        const origCloseResp = await fetch(
+          `${MORNING_API_BASE}/documents/${encodeURIComponent(invoice.morningDocId)}/close`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({}),
+          }
+        );
+        const origCloseText = await origCloseResp.text();
+        let origCloseResult;
+        try { origCloseResult = JSON.parse(origCloseText); } catch (e) { origCloseResult = { raw: origCloseText }; }
+        logger.info("cancelmorninginvoice: Morning close-original response", {
+          status: origCloseResp.status,
+          resultStatus: origCloseResult && origCloseResult.status,
+          errorCode: origCloseResult && origCloseResult.errorCode,
+        });
+        if (origCloseResp.ok && !(origCloseResult && origCloseResult.errorCode)) {
+          originalClosedInMorning = true;
+        } else {
+          originalCloseError = (origCloseResult && (origCloseResult.errorMessage || origCloseResult.message)) ||
+                               ("HTTP " + origCloseResp.status + ": " + origCloseText.slice(0, 200));
+          logger.warn("cancelmorninginvoice: original tax invoice close failed (credit note already issued)", {
+            morningDocId: invoice.morningDocId,
+            error: originalCloseError,
+          });
+        }
+      } catch (closeErr) {
+        originalCloseError = closeErr.message || String(closeErr);
+        logger.warn("cancelmorninginvoice: original tax invoice close threw (credit note already issued)", {
+          morningDocId: invoice.morningDocId,
+          error: originalCloseError,
+        });
+      }
+
       const updates = {
         status: "cancelled",
         cancelledAt: nowIso,
@@ -1130,12 +1180,15 @@ exports.cancelmorninginvoice = onCall(
         creditNoteDocId: creditDocId,
         creditNoteDocNumber: creditDocNumber,
         creditNoteDocUrl: creditDocUrl,
+        originalClosedInMorning,
       };
+      if (originalCloseError) updates.originalCloseError = originalCloseError;
       await invRef.update(updates);
       logger.info("cancelmorninginvoice: SUCCESS (tax invoice reversed via credit note)", {
         invoiceId,
         creditDocNumber,
         creditDocId,
+        originalClosedInMorning,
       });
 
       return {
@@ -1145,6 +1198,8 @@ exports.cancelmorninginvoice = onCall(
         creditNoteDocId: creditDocId,
         creditNoteDocNumber: creditDocNumber,
         creditNoteDocUrl: creditDocUrl,
+        originalClosedInMorning,
+        originalCloseError,
         cancelledAt: nowIso,
       };
     } catch (err) {
