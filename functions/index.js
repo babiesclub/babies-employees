@@ -2308,28 +2308,65 @@ exports.markinvoicepaid = onCall(
       if (!callerDoc.exists || callerDoc.data().role !== "admin") {
         throw new HttpsError("permission-denied", "Admin only");
       }
-      const { invoiceId, paidDate, paidAmount, note, createReceipt, sendWhatsApp } = request.data || {};
+      const { invoiceId, paidDate, paidAmount, note, createReceipt, sendWhatsApp, mode: modeRaw, discountAmount: discountAmountRaw } = request.data || {};
       if (!invoiceId) throw new HttpsError("invalid-argument", "invoiceId required");
       if (!paidDate) throw new HttpsError("invalid-argument", "paidDate required");
+      const mode = (modeRaw === "partial" || modeRaw === "discount") ? modeRaw : "full";
 
       const invoiceRef = admin.firestore().collection("invoices").doc(String(invoiceId));
       const invoiceSnap = await invoiceRef.get();
       if (!invoiceSnap.exists) throw new HttpsError("not-found", "Invoice not found");
       const invoice = invoiceSnap.data();
 
-      const finalAmount = paidAmount != null ? Number(paidAmount) : Number(invoice.totalAmount || 0);
+      // finalAmount = amount received in THIS transaction
+      const expectedTotal = Number(invoice.totalAmount || 0) + Number(invoice.vatAmount || 0);
+      const previousPaid = Number(invoice.amountPaid || 0);
+      const finalAmount = paidAmount != null ? Number(paidAmount) : Math.max(0, expectedTotal - previousPaid);
+      const discountAmount = mode === "discount" ? Math.max(0, Number(discountAmountRaw || 0)) : 0;
+      const cumulativePaid = previousPaid + finalAmount;
 
-      // Step 1 - Update invoice as paid
+      // Decide final paymentStatus per mode
+      // partial: if cumulative covers expected (±1 tolerance), auto-upgrade to paid
+      let paymentStatus;
+      let closesInMorning; // whether we tell Morning to close the proforma
+      if (mode === "partial") {
+        const covered = cumulativePaid >= expectedTotal - 1;
+        paymentStatus = covered ? "paid" : "partial";
+        closesInMorning = covered;
+      } else if (mode === "discount") {
+        paymentStatus = "paid";
+        closesInMorning = true;
+      } else {
+        paymentStatus = "paid";
+        closesInMorning = true;
+      }
+
+      // Step 1 - Update invoice with payment metadata
+      const historyEntry = {
+        date: paidDate,
+        amount: finalAmount,
+        mode,
+        note: note || "",
+        at: new Date().toISOString(),
+        by: request.auth.uid,
+      };
+      if (discountAmount > 0) historyEntry.discountAmount = discountAmount;
       const updateData = {
-        paymentStatus: "paid",
+        paymentStatus,
         paidDate,
-        paidAmount: finalAmount,
+        paidAmount: cumulativePaid, // legacy name — cumulative total
+        amountPaid: cumulativePaid, // spec name — cumulative total
         paymentNote: note || "",
         paymentMarkedAt: new Date().toISOString(),
         paymentMarkedBy: request.auth.uid,
+        paymentHistory: admin.firestore.FieldValue.arrayUnion(historyEntry),
       };
+      if (discountAmount > 0) {
+        updateData.discountAmount = Number(invoice.discountAmount || 0) + discountAmount;
+        updateData.discountedAt = new Date().toISOString();
+      }
       await invoiceRef.set(updateData, { merge: true });
-      logger.info("markinvoicepaid: marked", { invoiceId, finalAmount, paidDate });
+      logger.info("markinvoicepaid: marked", { invoiceId, mode, finalAmount, cumulativePaid, expectedTotal, paymentStatus, closesInMorning, discountAmount });
 
       let receipt = null;
 
@@ -2355,22 +2392,18 @@ exports.markinvoicepaid = onCall(
         if (receiptGardenEmails.length > 0) {
           receiptClientObj.emails = receiptGardenEmails;
         }
+        // partial → 400 (קבלה בלבד, לא חשבונית) so revenue isn't double-counted.
+        // full/discount → 320 (חשבונית מס/קבלה) as before.
+        const docTypeToCreate = mode === "partial" ? 400 : 320;
+        const remarksSuffix = mode === "partial" ? " | תשלום חלקי"
+          : (mode === "discount" ? (" | תשלום עם הנחה " + discountAmount.toFixed(2) + "₪") : "");
         const payload = {
-          type: 320, // חשבונית מס/קבלה
+          type: docTypeToCreate,
           date: paidDate,
           lang: "he",
           currency: "ILS",
           vatType: 0,
           client: receiptClientObj,
-          income: [
-            {
-              description,
-              quantity: 1,
-              price: Number(invoice.totalAmount || finalAmount),
-              currency: "ILS",
-              vatType: 0,
-            },
-          ],
           payment: [
             {
               date: paidDate,
@@ -2379,10 +2412,25 @@ exports.markinvoicepaid = onCall(
             },
           ],
           remarks: "מבוסס על חשבון עסקה מס׳ " + (invoice.morningDocNumber || "") +
-            (note ? " | " + note : ""),
+            remarksSuffix + (note ? " | " + note : ""),
         };
-        // Link to the original invoice so Morning closes the חשבון עסקה (300)
-        // and doesn't leave it open as if it were still awaiting payment.
+        // Income lines only for 320 (חשבונית מס/קבלה). Type 400 (קבלה) shouldn't
+        // create new revenue — the revenue was already recognized on the proforma.
+        if (docTypeToCreate === 320) {
+          payload.income = [
+            {
+              description,
+              quantity: 1,
+              price: finalAmount, // for discount/full, the receipt shows what was actually paid
+              currency: "ILS",
+              vatType: 0,
+            },
+          ];
+        }
+        // Link to the original proforma. For full → Morning marks it closed.
+        // For partial → Morning tracks the remaining balance on the proforma.
+        // For discount → we manually /close it below (linkedDocumentIds alone
+        // won't close it when amount < proforma total).
         if (invoice.morningDocId) {
           payload.linkedDocumentIds = [invoice.morningDocId];
         }
@@ -2431,7 +2479,7 @@ exports.markinvoicepaid = onCall(
         receipt = {
           id: result.id || null,
           number: result.number || result.documentNumber || null,
-          type: result.type != null ? Number(result.type) : 320,
+          type: result.type != null ? Number(result.type) : docTypeToCreate,
           url: result.url ? (result.url.he || result.url.origin || null) : null,
           emailedTo: receiptEmailedTo,
         };
@@ -2443,9 +2491,65 @@ exports.markinvoicepaid = onCall(
           receiptDocType: receipt.type,
           receiptDocUrl: receipt.url,
           receiptCreatedAt: new Date().toISOString(),
+          receiptHistory: admin.firestore.FieldValue.arrayUnion({
+            id: receipt.id,
+            number: receipt.number,
+            type: receipt.type,
+            url: receipt.url,
+            amount: finalAmount,
+            mode,
+            date: paidDate,
+            at: new Date().toISOString(),
+          }),
         }, { merge: true });
 
-        logger.info("markinvoicepaid: receipt created", { invoiceId, receiptNumber: receipt.number });
+        logger.info("markinvoicepaid: receipt created", { invoiceId, receiptNumber: receipt.number, type: docTypeToCreate, mode });
+
+        // For discount mode (and for partial→auto-upgrade), explicitly close the
+        // original proforma in Morning. linkedDocumentIds alone won't do it when
+        // the receipt amount is less than the proforma total.
+        if (closesInMorning && mode === "discount" && invoice.morningDocId) {
+          try {
+            const closeResp = await fetch(
+              `${MORNING_API_BASE}/documents/${encodeURIComponent(invoice.morningDocId)}/close`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                },
+              }
+            );
+            const closeText = await closeResp.text();
+            let closeResult;
+            try { closeResult = JSON.parse(closeText); } catch (e) { closeResult = { raw: closeText }; }
+            if (!closeResp.ok || (closeResult && closeResult.errorCode)) {
+              const cMsg = (closeResult && (closeResult.errorMessage || closeResult.message)) ||
+                ("HTTP " + closeResp.status);
+              logger.warn("markinvoicepaid: discount close failed", { status: closeResp.status, msg: cMsg });
+              // Non-fatal: firestore already marked paid; user can close manually in Morning.
+              await invoiceRef.set({
+                closedInMorning: false,
+                morningCloseError: cMsg,
+              }, { merge: true });
+            } else {
+              await invoiceRef.set({
+                closedInMorning: true,
+                closedInMorningAt: new Date().toISOString(),
+              }, { merge: true });
+              logger.info("markinvoicepaid: proforma closed with discount", { invoiceId, discountAmount });
+            }
+          } catch (closeErr) {
+            logger.warn("markinvoicepaid: discount close threw", { error: String(closeErr && closeErr.message || closeErr) });
+            await invoiceRef.set({ closedInMorning: false, morningCloseError: String(closeErr.message || closeErr) }, { merge: true });
+          }
+        } else if (closesInMorning && mode !== "partial") {
+          // For 'full' mode Morning auto-closes via linkedDocumentIds — just record the fact.
+          await invoiceRef.set({
+            closedInMorning: true,
+            closedInMorningAt: new Date().toISOString(),
+          }, { merge: true });
+        }
       }
 
       // Step 3 - Send via WhatsApp if requested
@@ -2530,7 +2634,12 @@ exports.markinvoicepaid = onCall(
       return {
         success: true,
         invoiceId,
-        paid: true,
+        paid: paymentStatus === "paid",
+        paymentStatus,
+        mode,
+        amountPaid: cumulativePaid,
+        expectedTotal,
+        discountAmount: discountAmount > 0 ? discountAmount : (Number(invoice.discountAmount || 0) || 0),
         receipt,
         whatsapp: whatsappResult,
       };
