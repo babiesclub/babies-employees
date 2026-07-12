@@ -2322,11 +2322,82 @@ exports.registerwhatsapp = onCall(
  *
  * Saves messages to Firestore: collection 'whatsapp_messages' with subcollection per conversation
  */
+/**
+ * Download a WhatsApp media_id to Firebase Storage and return a permanent public URL.
+ * Meta gives us media_id → GET /{media_id} returns short-lived URL (5 min) → we fetch
+ * the binary → save to Storage under whatsapp-media/{conv}/{msg}.{ext} → return firebase
+ * download URL that never expires.
+ * Returns null on any failure (we still save the media_id so the admin can retry later).
+ */
+async function saveWaMediaToStorage(mediaId, convPhone, msgId, wtoken) {
+  try {
+    if (!mediaId) return null;
+    // 1. Get short-lived Meta URL
+    const metaRes = await fetch(`${WHATSAPP_API_BASE}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${wtoken}` },
+    });
+    if (!metaRes.ok) {
+      logger.warn("saveWaMediaToStorage: meta URL fetch failed", { mediaId, status: metaRes.status });
+      return null;
+    }
+    const metaData = await metaRes.json();
+    const shortUrl = metaData.url;
+    const mimeType = metaData.mime_type || "application/octet-stream";
+    if (!shortUrl) return null;
+    // 2. Download binary
+    const binRes = await fetch(shortUrl, {
+      headers: { Authorization: `Bearer ${wtoken}` },
+    });
+    if (!binRes.ok) {
+      logger.warn("saveWaMediaToStorage: binary download failed", { mediaId, status: binRes.status });
+      return null;
+    }
+    const arrayBuf = await binRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuf);
+    // 3. Pick extension from mime
+    const extMap = {
+      "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
+      "video/mp4": "mp4", "video/3gpp": "3gp",
+      "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/amr": "amr", "audio/aac": "aac",
+      "application/pdf": "pdf", "application/msword": "doc",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+      "application/vnd.ms-excel": "xls",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    };
+    const ext = extMap[mimeType.split(";")[0].trim()] || "bin";
+    const safeConv = String(convPhone || "unknown").replace(/[^0-9]/g, "");
+    const safeMsg = String(msgId || Date.now()).replace(/[^A-Za-z0-9_-]/g, "");
+    const fileName = `whatsapp-media/${safeConv}/${safeMsg}.${ext}`;
+    // 4. Upload to Storage with a download token so we get a persistent public URL
+    const uuid = require("crypto").randomUUID();
+    const bucket = admin.storage().bucket(STORAGE_BUCKET);
+    const file = bucket.file(fileName);
+    await file.save(buffer, {
+      contentType: mimeType,
+      metadata: {
+        contentType: mimeType,
+        metadata: {
+          firebaseStorageDownloadTokens: uuid,
+          waMediaId: mediaId,
+          waConversationPhone: safeConv,
+          waMessageId: safeMsg,
+        },
+      },
+    });
+    const encodedName = encodeURIComponent(fileName);
+    const publicUrl = `https://firebasestorage.googleapis.com/v0/b/${STORAGE_BUCKET}/o/${encodedName}?alt=media&token=${uuid}`;
+    return { url: publicUrl, mimeType, storagePath: fileName, sizeBytes: buffer.length };
+  } catch (e) {
+    logger.error("saveWaMediaToStorage: exception", { mediaId, msgId, error: e.message });
+    return null;
+  }
+}
+
 exports.receivewhatsapp = onRequest(
   {
-    secrets: [whatsappWebhookVerifyToken],
+    secrets: [whatsappWebhookVerifyToken, whatsappAccessToken],
     region: "us-central1",
-    timeoutSeconds: 30,
+    timeoutSeconds: 60,
     cors: false,
   },
   async (req, res) => {
@@ -2394,10 +2465,36 @@ exports.receivewhatsapp = onRequest(
                   listReply: i.list_reply ? { id: i.list_reply.id, title: i.list_reply.title } : undefined,
                 };
               } else if (type === "image" || type === "document" || type === "audio" || type === "video") {
-                content = { mediaId: msg[type] && msg[type].id, caption: msg[type] && msg[type].caption, mimeType: msg[type] && msg[type].mime_type };
+                const mediaObj = msg[type] || {};
+                content = {
+                  mediaId: mediaObj.id,
+                  caption: mediaObj.caption,
+                  mimeType: mediaObj.mime_type,
+                  filename: mediaObj.filename,
+                };
+                // Download the media binary and upload to Firebase Storage
+                // (Meta's temp URL expires in 5 minutes → we need a permanent copy)
+                if (mediaObj.id) {
+                  try {
+                    const wtoken = String(whatsappAccessToken.value()).trim();
+                    const saved = await saveWaMediaToStorage(mediaObj.id, from, msgId, wtoken);
+                    if (saved) {
+                      content.mediaStorageUrl = saved.url;
+                      content.mediaStoragePath = saved.storagePath;
+                      content.mediaSizeBytes = saved.sizeBytes;
+                      if (!content.mimeType) content.mimeType = saved.mimeType;
+                    }
+                  } catch (mediaErr) {
+                    logger.warn("receivewhatsapp: media save failed (message still stored)", { error: mediaErr.message, msgId });
+                  }
+                }
               } else {
                 content = { raw: msg };
               }
+
+              // Meta sends msg.context.id when the customer replied to a specific
+              // message we previously sent them. This is what makes "quoted reply" work.
+              const repliedToMessageId = (msg.context && msg.context.id) || null;
 
               const doc = {
                 id: msgId,
@@ -2414,6 +2511,7 @@ exports.receivewhatsapp = onRequest(
                 createdAt: new Date(timestamp).toISOString(),
                 raw: msg,
               };
+              if (repliedToMessageId) doc.repliedToMessageId = repliedToMessageId;
 
               // Save to Firestore: messages indexed by ID, conversations grouped by phone
               await admin.firestore().collection("whatsapp_messages").doc(msgId).set(doc);
@@ -2555,33 +2653,58 @@ exports.getwhatsappmessages = onCall(
       if (!callerDoc.exists || callerDoc.data().role !== "admin") {
         throw new HttpsError("permission-denied", "Admin only");
       }
-      const { phone, limit } = request.data || {};
+      const { phone, limit, before } = request.data || {};
       if (!phone) throw new HttpsError("invalid-argument", "Missing 'phone'");
-      // Query without orderBy to avoid composite index requirement - sort in memory
-      const snap = await admin.firestore()
+      // Fetch newest N first (fast), then reverse to chat order (oldest→newest).
+      // `before` is a timestamp cursor for "load older" pagination.
+      const pageSize = Math.min(Number(limit || 50), 200);
+      let q = admin.firestore()
         .collection("whatsapp_messages")
         .where("conversationPhone", "==", phone)
-        .limit(Math.min(Number(limit || 200), 500))
-        .get();
+        .orderBy("timestamp", "desc");
+      if (before && Number(before) > 0) {
+        q = q.where("timestamp", "<", Number(before));
+      }
+      q = q.limit(pageSize);
+      let snap;
+      let usedOrderBy = true;
+      try {
+        snap = await q.get();
+      } catch (idxErr) {
+        // Fallback: composite index (conversationPhone + timestamp) not yet built.
+        // Return unsorted page — we still sort in memory below.
+        logger.warn("getwhatsappmessages: orderBy failed, falling back", { error: idxErr.message });
+        usedOrderBy = false;
+        snap = await admin.firestore()
+          .collection("whatsapp_messages")
+          .where("conversationPhone", "==", phone)
+          .limit(pageSize * 2)
+          .get();
+      }
       const messages = [];
       snap.forEach((d) => messages.push(d.data()));
-      // Fallback: messages saved before we added conversationPhone field
-      if (messages.length === 0) {
+      // Legacy fallback: messages saved before we added conversationPhone field
+      if (messages.length === 0 && !before) {
         const [inSnap, outSnap] = await Promise.all([
-          admin.firestore().collection("whatsapp_messages").where("from", "==", phone).limit(200).get(),
-          admin.firestore().collection("whatsapp_messages").where("to", "==", phone).limit(200).get(),
+          admin.firestore().collection("whatsapp_messages").where("from", "==", phone).limit(100).get(),
+          admin.firestore().collection("whatsapp_messages").where("to", "==", phone).limit(100).get(),
         ]);
         inSnap.forEach((d) => messages.push(d.data()));
         outSnap.forEach((d) => messages.push(d.data()));
       }
-      // Sort by timestamp ascending (oldest first for chat UI)
+      // Sort ascending for the chat UI (oldest first)
       messages.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
-      // Mark as read
-      await admin.firestore().collection("whatsapp_conversations").doc(phone).set(
-        { unreadCount: 0, lastReadAt: new Date().toISOString() },
-        { merge: true }
-      );
-      return { messages };
+      const hasMore = usedOrderBy && snap.size >= pageSize;
+      // Mark as read (only when opening latest page, not when loading older)
+      if (!before) {
+        try {
+          await admin.firestore().collection("whatsapp_conversations").doc(phone).set(
+            { unreadCount: 0, lastReadAt: new Date().toISOString() },
+            { merge: true }
+          );
+        } catch (e) { /* non-fatal */ }
+      }
+      return { messages, hasMore, pageSize };
     } catch (err) {
       if (err instanceof HttpsError) throw err;
       logger.error("getwhatsappmessages: UNCAUGHT", { message: err.message });

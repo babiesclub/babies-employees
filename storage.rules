@@ -56,6 +56,16 @@ service firebase.storage {
       allow write: if isAdmin();
     }
 
+    // WhatsApp incoming media (images / videos / audio / documents).
+    // The webhook Cloud Function writes via admin SDK (bypasses these rules).
+    // Admin users need read access to view media in the inbox UI.
+    // Public read via ?token= download URLs also works — the token itself is
+    // effectively a capability (URLs are only shared with admins over HTTPS).
+    match /whatsapp-media/{convPhone}/{allPaths=**} {
+      allow read: if isAdmin();
+      allow write: if false;  // only backend
+    }
+
     // Default deny.
     match /{allPaths=**} {
       allow read, write: if false;
