@@ -886,17 +886,25 @@ exports.createmorninginvoice = onCall(
 );
 
 /**
- * Cancel an existing Morning invoice by issuing a credit note (חשבונית זיכוי, type 330)
- * linked to the original document. Updates the local invoices/{id} record with
- * cancellation metadata (status, creditNoteDocId/Number/Url, cancelledAt).
+ * Cancel an existing Morning document. Behaviour depends on document type:
+ *
+ *   - חשבון עסקה / פרופורמה (type 300) — proforma is NOT a tax document, so we
+ *     must NOT issue a credit note (a credit note is legally a reversal of a tax
+ *     invoice). Instead we call Morning's POST /documents/{id}/close endpoint
+ *     to manually mark it as closed. No new document is created in Morning.
+ *
+ *   - חשבונית מס (type 305) — legally a tax document, so cancellation REQUIRES
+ *     issuing a חשבונית זיכוי (type 330) linked to the original. This preserves
+ *     the previous behaviour.
+ *
+ * In both cases we mark the local invoices/{id} record as cancelled with
+ * cancelledAt / cancelledBy metadata. For 305 we also store creditNote*
+ * fields; for 300 those fields stay null.
  *
  * Input: { invoiceId: string|number }
  * Notes:
  *   - Refuses if the invoice is already cancelled or missing morningDocId.
- *   - Credit note is dated today (Israeli tax convention — reversals are current-dated).
- *   - Mirrors the original invoice's income lines but with negative quantities so the
- *     total is a full reversal. Uses linkedDocumentIds so Morning attaches the זיכוי
- *     to the original in the client's account.
+ *   - Credit note (for 305) is dated today — Israeli tax convention.
  */
 exports.cancelmorninginvoice = onCall(
   {
@@ -943,22 +951,93 @@ exports.cancelmorninginvoice = onCall(
         throw new HttpsError("failed-precondition", "החשבונית כבר בוטלה ב-" + (invoice.cancelledAt || "תאריך לא ידוע"));
       }
       const docTypeNum = Number(invoice.morningActualType || invoice.docType || 300);
-      // Only "invoice" family documents can be reversed by a credit note. Receipts
-      // (400) and receipt-invoices (320) already collected money and would need a
-      // different reversal flow.
+      // 300 = חשבון עסקה (proforma, NOT a tax document — close only, no credit note)
+      // 305 = חשבונית מס (tax invoice — legally requires a credit note reversal)
+      // Other types (320 receipt-invoice, 400 receipt) need a different flow.
       if (docTypeNum !== 305 && docTypeNum !== 300) {
         throw new HttpsError(
           "failed-precondition",
-          "לא ניתן להוציא חשבונית זיכוי למסמך מסוג " + docTypeNum + ". רק חשבוניות מס (300/305) ניתנות לביטול בדרך זו."
+          "לא ניתן לבטל מסמך מסוג " + docTypeNum + ". רק חשבון עסקה (300) או חשבונית מס (305) נתמכים."
         );
       }
 
-      logger.info("cancelmorninginvoice: calling morningAuth");
+      logger.info("cancelmorninginvoice: calling morningAuth", { docTypeNum });
       const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
       logger.info("cancelmorninginvoice: morningAuth OK");
 
-      // Rebuild income lines from the original invoice, but negated. We need the
-      // original client id + income breakdown. Simplest approach: fetch the original
+      const nowIso = new Date().toISOString();
+
+      // ==========================================================================
+      // BRANCH A — חשבון עסקה (300): POST /documents/{id}/close
+      // No credit note is issued. Morning marks the proforma as "manually closed".
+      // ==========================================================================
+      if (docTypeNum === 300) {
+        logger.info("cancelmorninginvoice: closing proforma via /close endpoint", {
+          morningDocId: invoice.morningDocId,
+        });
+        const closeResp = await fetch(
+          `${MORNING_API_BASE}/documents/${encodeURIComponent(invoice.morningDocId)}/close`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({}),
+          }
+        );
+        const closeText = await closeResp.text();
+        let closeResult;
+        try { closeResult = JSON.parse(closeText); } catch (e) { closeResult = { raw: closeText }; }
+        logger.info("cancelmorninginvoice: Morning close response", {
+          status: closeResp.status,
+          result: closeResult,
+        });
+
+        // Morning returns 200/204 on success. If the document is already closed
+        // Morning returns errorCode ~ "document not in open status".
+        if (!closeResp.ok || (closeResult && closeResult.errorCode)) {
+          const msg = (closeResult && (closeResult.errorMessage || closeResult.message)) ||
+                      ("HTTP " + closeResp.status + ": " + closeText.slice(0, 200));
+          throw new HttpsError("internal", "מורנינג סירבה לסגור את חשבון העסקה: " + msg);
+        }
+
+        const updates = {
+          status: "cancelled",
+          cancelledAt: nowIso,
+          cancelledBy: callerUid,
+          // Explicitly null credit-note fields so downstream code (UI) knows
+          // no credit note exists for this cancellation.
+          creditNoteDocId: null,
+          creditNoteDocNumber: null,
+          creditNoteDocUrl: null,
+        };
+        await invRef.update(updates);
+        logger.info("cancelmorninginvoice: SUCCESS (proforma closed, no credit note)", {
+          invoiceId,
+          morningDocId: invoice.morningDocId,
+        });
+
+        return {
+          success: true,
+          invoiceId,
+          docType: 300,
+          closedInMorning: true,
+          creditNoteDocId: null,
+          creditNoteDocNumber: null,
+          creditNoteDocUrl: null,
+          cancelledAt: nowIso,
+        };
+      }
+
+      // ==========================================================================
+      // BRANCH B — חשבונית מס (305): issue חשבונית זיכוי (330) linked to original.
+      // This is the ORIGINAL behaviour, unchanged, since tax law requires a
+      // credit-note reversal — you cannot just "close" a tax invoice.
+      // ==========================================================================
+
+      // Rebuild income lines from the original invoice. We need the original
+      // client id + income breakdown. Simplest approach: fetch the original
       // doc from Morning to preserve exact line structure.
       const origResp = await fetch(`${MORNING_API_BASE}/documents/${encodeURIComponent(invoice.morningDocId)}`, {
         method: "GET",
@@ -1043,7 +1122,6 @@ exports.cancelmorninginvoice = onCall(
       const creditDocId = creditResult.id || null;
       const creditDocNumber = creditResult.number || creditResult.documentNumber || null;
       const creditDocUrl = creditResult.url ? (creditResult.url.he || creditResult.url.origin || null) : null;
-      const nowIso = new Date().toISOString();
 
       const updates = {
         status: "cancelled",
@@ -1054,7 +1132,7 @@ exports.cancelmorninginvoice = onCall(
         creditNoteDocUrl: creditDocUrl,
       };
       await invRef.update(updates);
-      logger.info("cancelmorninginvoice: SUCCESS", {
+      logger.info("cancelmorninginvoice: SUCCESS (tax invoice reversed via credit note)", {
         invoiceId,
         creditDocNumber,
         creditDocId,
@@ -1063,6 +1141,7 @@ exports.cancelmorninginvoice = onCall(
       return {
         success: true,
         invoiceId,
+        docType: 305,
         creditNoteDocId: creditDocId,
         creditNoteDocNumber: creditDocNumber,
         creditNoteDocUrl: creditDocUrl,
@@ -1122,6 +1201,7 @@ exports.refreshallinvoiceurls = onCall(
       let unchanged = 0;
       let failed = 0;
       const errors = [];
+      let didProbe = false;
 
       for (const inv of toRefresh) {
         try {
@@ -1135,6 +1215,20 @@ exports.refreshallinvoiceurls = onCall(
             continue;
           }
           const data = await resp.json();
+          if (!didProbe) {
+            didProbe = true;
+            const urlKeys = Object.keys(data).filter((k) => /url|link|share|pdf/i.test(k));
+            const urlSubKeys = data.url && typeof data.url === "object" ? Object.keys(data.url) : [];
+            logger.info("refreshallinvoiceurls: PROBE first doc", {
+              morningDocId: inv.morningDocId,
+              urlObject: data.url,
+              urlSubKeys,
+              topLevelUrlishKeys: urlKeys.reduce((acc, k) => { acc[k] = data[k]; return acc; }, {}),
+              status: data.status,
+              type: data.type,
+              number: data.number,
+            });
+          }
           const newUrl = data.url ? (data.url.origin || data.url.he || null) : null;
           if (!newUrl) {
             failed++;
