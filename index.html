@@ -484,6 +484,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
         <div class="atab" data-p="mat">מערכים</div>
         <div class="atab" data-p="wsch">שיבוצים</div>
         <div class="atab" data-p="rep">דוחות</div>
+        <div class="atab" data-p="ldg">📒 כרטסת</div>
         <div class="atab" data-p="chat">💬 צ'אטים</div>
         <div class="atab" data-p="ai">🤖 AI עוזר</div>
         <div class="atab" data-p="camp">🏕 קייטנות</div>
@@ -701,6 +702,36 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
           </div>
         </div>
       </div>
+      <div class="apanel" id="p-ldg">
+        <!-- LEDGER-MARKER-2026-07-12 -->
+        <div class="card">
+          <div class="card-title"><div class="card-icon">📒</div>כרטסת לקוחות</div>
+          <div style="background:#E0F2FE;border-right:4px solid #0EA5E9;padding:12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#0C4A6E;line-height:1.6">
+            <b>💡 מה זה?</b><br>
+            סיכום חובות פתוחים לכל הלקוחות. לחיצה על שם לקוח → פירוט כל החשבוניות שלו (מקומיות + היסטוריות ממורנינג).
+          </div>
+          <div id="ldg-summary" style="display:none;margin-bottom:14px"></div>
+          <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <button class="btn-sec ldg-tab active" data-tab="all" onclick="setLedgerTab('all')" style="flex:1;min-width:80px">הכל</button>
+            <button class="btn-sec ldg-tab" data-tab="debt" onclick="setLedgerTab('debt')" style="flex:1;min-width:80px">רק עם חוב</button>
+            <button class="btn-sec ldg-tab" data-tab="overdue" onclick="setLedgerTab('overdue')" style="flex:1;min-width:80px">🔴 באיחור</button>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+            <input type="text" id="ldg-search" placeholder="🔍 חיפוש לפי שם גן..." class="md-input" style="flex:1;min-width:180px;margin:0" oninput="renderCustomerLedger()">
+            <select id="ldg-sort" class="md-input" style="width:auto;margin:0" onchange="renderCustomerLedger()">
+              <option value="debt">מיון: חוב יורד</option>
+              <option value="name">מיון: לפי שם</option>
+              <option value="age">מיון: לפי איחור</option>
+            </select>
+            <input type="number" id="ldg-min-debt" placeholder="חוב מינימלי ₪" class="md-input" style="width:130px;margin:0" oninput="renderCustomerLedger()">
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:14px">
+            <button class="btn-sec" onclick="reloadCustomerLedger()" style="flex:1">🔄 רענן</button>
+            <button class="btn-sec" onclick="exportLedgerToExcel()" style="flex:1;background:#E8F5E9;border-color:#66BB6A;color:#1B5E20;font-weight:700">📥 ייצוא לאקסל</button>
+          </div>
+          <div id="ldg-list"><div class="emp"><div class="ei">📒</div><p>לחצי "רענן" לטעינת הכרטסת</p></div></div>
+        </div>
+      </div>
       <div class="apanel" id="p-chat">
         <div class="card">
           <div class="card-title"><div class="card-icon">💬</div>צ'אטים עם מדריכות</div>
@@ -904,6 +935,33 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
       <button id="acc-send-btn" class="btn-prim" style="flex:1 1 100%;margin-top:0;background:#0EA5E9" onclick="submitSendToAccountant()">📧 שלח במייל לרו"ח</button>
       <button class="btn-sec" style="flex:1" onclick="downloadAccountantPdf()">📥 הורד PDF</button>
       <button class="btn-sec" style="flex:1" onclick="closeSendToAccountant()">סגור</button>
+    </div>
+  </div>
+</div>
+
+<div class="mo" id="ldg-drill-mo">
+  <div class="md" style="max-width:820px;max-height:94vh;overflow-y:auto">
+    <div class="mt"><span id="ldg-drill-title">📒 כרטסת לקוח</span><span class="mc" onclick="closeLedgerDrill()">×</span></div>
+    <div id="ldg-drill-body"><div class="emp"><div class="ei">⏳</div><p>טוען...</p></div></div>
+  </div>
+</div>
+
+<div class="mo" id="ldg-histpay-mo">
+  <div class="md" style="max-width:480px">
+    <div class="mt"><span>📜 סמן כשולם ידנית (היסטוריה)</span><span class="mc" onclick="closeHistPayMo()">×</span></div>
+    <div style="background:#FFF8E1;border-right:4px solid #FBC02D;padding:10px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#7B5C00;line-height:1.6">
+      חשבונית זו מהיסטוריה — הסימון נשמר במערכת שלנו בלבד ולא נשלח למורנינג.
+    </div>
+    <div id="ldg-histpay-info" style="background:var(--bg);border-radius:8px;padding:10px;margin-bottom:14px;font-size:13px;color:var(--txt)"></div>
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">תאריך תשלום</label>
+    <input type="date" id="ldg-histpay-date" class="md-input">
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">סכום ששולם ₪</label>
+    <input type="number" id="ldg-histpay-amt" step="0.01" class="md-input" placeholder="0.00">
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:0.5px">הערה (אופציונלי)</label>
+    <textarea id="ldg-histpay-note" rows="2" class="md-input" placeholder="לדוגמה: התקבלה העברה בנקאית 30/6"></textarea>
+    <div class="ma" style="margin-top:14px">
+      <button class="btn-prim" style="margin-top:0;flex:1" onclick="submitHistoricalPayment()">💾 שמור</button>
+      <button class="btn-sec" onclick="closeHistPayMo()">ביטול</button>
     </div>
   </div>
 </div>
@@ -1700,7 +1758,7 @@ async function removeAdminPassword(){if(!cu||cu.role!=='admin'){alert('רק אד
 async function linkAdminToGoogle(){if(!cu||cu.role!=='admin'){alert('רק אדמין יכולה לקשר חשבון Google');return}if(!window.fbAuth||!fbAuth.currentUser){alert('צריך להיות מחוברת עם סיסמא לפני שקושרים Google');return}if(!window.firebase){alert('Firebase לא זמין');return}try{const provider=new firebase.auth.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});await fbAuth.currentUser.linkWithPopup(provider);const providers=(fbAuth.currentUser.providerData||[]).map(p=>p.providerId).join(', ');const gmail=(fbAuth.currentUser.providerData||[]).find(p=>p.providerId==='google.com');alert('✓ חשבון Google קושר בהצלחה!\n\nמעכשיו אפשר להיכנס גם עם:\n📧 '+(gmail?gmail.email:'הGmail שלך')+'\n\nשלב הבא — הפעילי 2FA בחשבון ה־Google עצמו:\nmyaccount.google.com/security → אימות דו־שלבי\n\nכשה־2FA פעיל שם, כל התחברות דרך Google תדרוש אותו אוטומטית — זה נותן לך את השכבה השנייה של האבטחה.');document.getElementById('myprofile-mo').style.display='none'}catch(e){console.error('link google failed:',e);if(e.code==='auth/popup-closed-by-user')return;if(e.code==='auth/credential-already-in-use'){alert('חשבון ה־Google הזה כבר קשור למשתמש אחר במערכת')}else if(e.code==='auth/provider-already-linked'){alert('כבר קשור. את יכולה להתחבר עם Google מדף ההתחברות')}else if(e.code==='auth/operation-not-allowed'){alert('ספק Google לא מופעל.\n\nלכי ל־Firebase Console:\nהאתחה → Sign-in method → Google → Enable')}else{alert('שגיאה: '+(e.message||e.code))}}}
 function tryRestoreSession(){const sess=DB.get('session');if(!sess||!sess.userId)return false;const user=(DB.get('users')||[]).find(u=>u.id===sess.userId||u.uid===sess.userId);if(!user){localStorage.removeItem('bz3_session');return false}enterApp(user);syncFromCloud().then(()=>{const act=document.querySelector('.screen.active')?.id;if(act==='s-his')renderHis();if(act==='s-adm')renderAdm();if(act==='s-rcp')renderReceipts();renderContractsBanner();renderPdocsBanner()}).catch(e=>console.warn('restore sync:',e));return true}
 document.querySelectorAll('.bnt').forEach(t=>{t.addEventListener('click',()=>{document.querySelectorAll('.bnt').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('s-'+t.dataset.s).classList.add('active');document.querySelector('.body').scrollTop=0;if(t.dataset.s==='att')renderMyWeeklyMaterial();if(t.dataset.s==='his')renderHis();if(t.dataset.s==='adm'){_instActiveTab='animals';_instShowAll=false;_grdActiveTab='all';_grdShowAll=false;renderAdm()}if(t.dataset.s==='wai')loadWaConversations();if(t.dataset.s==='tsk')loadTasks();if(t.dataset.s==='rcp'){syncReceipts().then(()=>renderReceipts())}if(t.dataset.s==='drv')renderDriverDashboard();if(t.dataset.s==='mygdns')renderMyGardens();if(t.dataset.s==='mycamp')renderMyCamp();if(t.dataset.s==='mysched')renderMySchedule();if(t.dataset.s==='myrpt')renderMyReports()})});
-document.querySelectorAll('.atab').forEach(t=>{t.addEventListener('click',()=>{document.querySelectorAll('.atab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.apanel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('p-'+t.dataset.p).classList.add('active');const p=t.dataset.p;if(p==='chat'){renderAdminChatList()}else if(p==='mzr'){renderTenders()}else if(p==='cal'){renderAdminCalendar()}else if(p==='ai'||p==='bkp'){/* static panels */}else{renderAdm()}})});
+document.querySelectorAll('.atab').forEach(t=>{t.addEventListener('click',()=>{document.querySelectorAll('.atab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.apanel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('p-'+t.dataset.p).classList.add('active');const p=t.dataset.p;if(p==='chat'){renderAdminChatList()}else if(p==='mzr'){renderTenders()}else if(p==='cal'){renderAdminCalendar()}else if(p==='ldg'){loadAllCustomersLedger()}else if(p==='ai'||p==='bkp'){/* static panels */}else{renderAdm()}})});
 function renderAttAsOptions(q){const sel=document.getElementById('att-as-instructor');const empty=document.getElementById('att-as-empty');if(!sel)return;const list=window._asInstrFull||[];const qn=String(q||'').trim().toLowerCase();const matches=qn?list.filter(u=>u.label.toLowerCase().includes(qn)||u.username.toLowerCase().includes(qn)):list;const cur=sel.value;sel.innerHTML='<option value="">— אני (אדמין) —</option>'+matches.map(u=>`<option value="${esc(u.uid)}">${esc(u.label)}</option>`).join('');if(cur&&matches.some(u=>u.uid===cur))sel.value=cur;sel.size=qn?Math.min(8,Math.max(2,matches.length+1)):1;if(empty)empty.style.display=(qn&&matches.length===0)?'block':'none'}
 function filterAttAsInstructor(){const s=document.getElementById('att-as-search');renderAttAsOptions(s?s.value:'')}
 function initApp(){const today=new Date(),earliest=earliestAllowedDate(),todayStr=ymd(today),earliestStr=ymd(earliest);const dEl=document.getElementById('att-d');dEl.min=earliestStr;dEl.value=todayStr<earliestStr?earliestStr:todayStr;resetPicker('att-g');resetPicker('att-an');showGardenInfo();const dpEl=document.getElementById('dur-pills');if(dpEl&&cu){const extras=[...(EXTRA_DURATIONS_BY_USER[cu.username]||[])];const gat=cu.gardenActivityType||{};const hasDog=cu.specialty==='dog'||Object.values(gat).some(v=>v==='dog');if(hasDog&&!extras.includes('20'))extras.unshift('20');dpEl.querySelectorAll('.pill[data-extra="1"]').forEach(p=>p.remove());extras.forEach(v=>{if(dpEl.querySelector(`.pill[data-v="${v}"]`))return;const pill=document.createElement('div');pill.className='pill';pill.dataset.v=v;pill.dataset.extra='1';pill.textContent=v+' דק׳';if(v==='20')dpEl.insertBefore(pill,dpEl.firstChild);else dpEl.appendChild(pill)})}document.querySelectorAll('#dur-pills .pill').forEach(p=>{p.onclick=()=>{document.querySelectorAll('#dur-pills .pill').forEach(x=>x.classList.remove('selected'));p.classList.add('selected');selDur=p.dataset.v;const c=document.getElementById('dur-custom');if(c)c.value=''}});document.querySelectorAll('#grp-pills .pill').forEach(p=>{p.onclick=()=>{document.querySelectorAll('#grp-pills .pill').forEach(x=>x.classList.remove('selected'));p.classList.add('selected');selGrp=p.dataset.v;const c=document.getElementById('grp-custom');if(c)c.value=''}});document.querySelectorAll('#cls-tags .tag').forEach(t=>{t.onclick=()=>{t.classList.toggle('selected');const v=t.dataset.v;if(t.classList.contains('selected'))selCls.push(v);else selCls=selCls.filter(c=>c!==v)}});const now=new Date(),m=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;document.getElementById('hmf').value=m;document.getElementById('rmf').value=m;document.getElementById('hmf').onchange=renderHis;document.getElementById('hgf').onchange=renderHis;const _hif=document.getElementById('hif');if(_hif)_hif.onchange=renderHis;if(cu&&cu.role==='admin'){const _asWrap=document.getElementById('att-as-wrap');const _asSel=document.getElementById('att-as-instructor');const _asSearch=document.getElementById('att-as-search');if(_asWrap)_asWrap.style.display='block';if(_asSearch)_asSearch.value='';if(_asSel){const _instrs=(DB.get('users')||[]).filter(u=>u.role!=='admin').sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));window._asInstrFull=_instrs.map(u=>({uid:String(u.uid||u.id),name:u.name||'',username:u.username||'',label:`${u.name||''}${u.username?' (@'+u.username+')':''}`}));renderAttAsOptions('')}}document.getElementById('rmf').onchange=renderAdm;document.getElementById('rif').onchange=renderAdm;const rcpMf=document.getElementById('rcp-mf');if(rcpMf){rcpMf.value=m;rcpMf.onchange=renderReceipts}const rcpIf=document.getElementById('rcp-if');if(rcpIf)rcpIf.onchange=renderReceipts}
@@ -2710,6 +2768,283 @@ function tourPrev(){showTourStep(_tourIdx-1)}
 function endTour(){document.getElementById('tour-overlay').style.display='none';document.getElementById('tour-highlight').style.display='none';document.getElementById('tour-tooltip').style.display='none';_tourSteps=[];_tourIdx=0;if(cu&&cu.uid){localStorage.setItem('bz3_tour_completed_'+cu.uid,'1')}}
 function maybeAutoTour(){if(!cu||!cu.uid)return;if(localStorage.getItem('bz3_tour_completed_'+cu.uid))return;setTimeout(()=>{if(cu&&!document.querySelector('.mo.open'))startAppTour()},1800)}
 async function bootApp(){initData();const restored=tryRestoreSession();if(!restored)document.getElementById('login-screen').style.display='flex';if(!window.fbDb)return;const authUser=await waitForAuthState();if(authUser&&(!cu||cu.uid!==authUser.uid)){const profile=await getFsUser(authUser.uid);if(profile){const prev=DB.get('session');if(!prev||String(prev.userId)!==String(authUser.uid)){clearSensitiveCaches()}DB.set('session',{userId:authUser.uid,ts:Date.now()});cu=profile;try{await syncFromCloud()}catch(e){console.warn('boot sync:',e)}enterApp(profile)}}if(!authUser&&cu&&isMigrated()){localStorage.removeItem('bz3_session');clearSensitiveCaches();cu=null;document.getElementById('login-screen').style.display='flex';document.getElementById('app').style.display='none';return}if(!authUser&&!cu)return;await ensureCloudSeed();const ok=await syncFromCloud();if(ok){if(!cu&&DB.get('session')){if(tryRestoreSession())return}if(cu){const act=document.querySelector('.screen.active')?.id;if(act==='s-his')renderHis();if(act==='s-adm')renderAdm();if(act==='s-rcp')renderReceipts();renderContractsBanner();renderPdocsBanner()}}}bootApp();
+
+/* ============================================================
+ * CUSTOMER LEDGER (כרטסת לקוחות) — admin sub-tab p-ldg
+ * ============================================================ */
+var _ledgerAll=null;
+var _ledgerAllAt=0;
+var _ledgerCurTab='all';
+var _ledgerDrillGarden=null;
+var _ledgerDrillData=null;
+var _ledgerHistPayCtx=null;
+const _LEDGER_CLIENT_TTL_MS=5*60*1000;
+
+function setLedgerTab(t){_ledgerCurTab=t;document.querySelectorAll('.ldg-tab').forEach(b=>{if(b.dataset.tab===t){b.classList.add('active');b.style.background='var(--p)';b.style.color='white';b.style.borderColor='var(--p)'}else{b.classList.remove('active');b.style.background='';b.style.color='';b.style.borderColor=''}});renderCustomerLedger()}
+
+async function loadAllCustomersLedger(force){
+  const list=document.getElementById('ldg-list');
+  if(!list)return;
+  // Use in-memory 5-min cache unless forced.
+  if(!force&&_ledgerAll&&(Date.now()-_ledgerAllAt)<_LEDGER_CLIENT_TTL_MS){
+    renderCustomerLedger();return
+  }
+  list.innerHTML='<div class="emp"><div class="ei">⏳</div><p>טוען נתוני חובות...</p></div>';
+  document.getElementById('ldg-summary').style.display='none';
+  if(!window.fbFunctions){list.innerHTML='<div class="emp"><div class="ei">❌</div><p>Firebase לא זמין</p></div>';return}
+  try{
+    const fn=window.fbFunctions.httpsCallable('getallcustomersledger');
+    const res=await fn({});
+    _ledgerAll=(res&&res.data)||{customers:[],summary:{}};
+    _ledgerAllAt=Date.now();
+    // set active tab styling on first render
+    setLedgerTab(_ledgerCurTab);
+  }catch(e){
+    console.error('loadAllCustomersLedger',e);
+    list.innerHTML='<div class="emp"><div class="ei">❌</div><p>שגיאה: '+esc(e.message||String(e))+'</p></div>'
+  }
+}
+function reloadCustomerLedger(){loadAllCustomersLedger(true)}
+
+function renderCustomerLedger(){
+  if(!_ledgerAll){return}
+  const listEl=document.getElementById('ldg-list');
+  const sumEl=document.getElementById('ldg-summary');
+  const {customers,summary}=_ledgerAll;
+
+  // Summary card
+  const largest=summary.largestDebt;
+  sumEl.style.display='block';
+  sumEl.innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
+    <div style="background:linear-gradient(135deg,#FFEBEE,#FFCDD2);border:1.5px solid #EF5350;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:11px;font-weight:700;color:#B71C1C;text-transform:uppercase;letter-spacing:0.4px">סה״כ חוב פתוח</div>
+      <div style="font-size:22px;font-weight:800;color:#B71C1C;margin-top:4px">${(summary.totalDebt||0).toLocaleString('he-IL',{style:'currency',currency:'ILS',maximumFractionDigits:0})}</div>
+    </div>
+    <div style="background:linear-gradient(135deg,#FFF8E1,#FFE082);border:1.5px solid #FBC02D;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:11px;font-weight:700;color:#7B5C00;text-transform:uppercase;letter-spacing:0.4px">לקוחות עם חוב</div>
+      <div style="font-size:22px;font-weight:800;color:#7B5C00;margin-top:4px">${summary.customersWithDebt||0}</div>
+    </div>
+    ${largest?`<div style="background:linear-gradient(135deg,#E3F2FD,#90CAF9);border:1.5px solid #1E88E5;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:11px;font-weight:700;color:#0D47A1;text-transform:uppercase;letter-spacing:0.4px">החוב הגדול ביותר</div>
+      <div style="font-size:13px;font-weight:700;color:#0D47A1;margin-top:4px">${esc(largest.gardenName)}</div>
+      <div style="font-size:16px;font-weight:800;color:#0D47A1">${(largest.amount||0).toLocaleString('he-IL',{style:'currency',currency:'ILS',maximumFractionDigits:0})}</div>
+    </div>`:''}
+  </div>`;
+
+  // Filter + sort
+  const q=(document.getElementById('ldg-search')?.value||'').trim().toLowerCase();
+  const sortBy=document.getElementById('ldg-sort')?.value||'debt';
+  const minDebt=parseFloat(document.getElementById('ldg-min-debt')?.value||'0')||0;
+  let rows=customers.slice();
+  if(_ledgerCurTab==='debt')rows=rows.filter(r=>r.totalDebt>0);
+  else if(_ledgerCurTab==='overdue')rows=rows.filter(r=>r.status==='overdue_severe');
+  if(q)rows=rows.filter(r=>(r.gardenName||'').toLowerCase().includes(q)||(r.networkName||'').toLowerCase().includes(q));
+  if(minDebt>0)rows=rows.filter(r=>r.totalDebt>=minDebt);
+  if(sortBy==='name')rows.sort((a,b)=>(a.gardenName||'').localeCompare(b.gardenName||'','he'));
+  else if(sortBy==='age')rows.sort((a,b)=>(b.oldestOpenAgeDays||0)-(a.oldestOpenAgeDays||0));
+  else rows.sort((a,b)=>b.totalDebt-a.totalDebt);
+
+  if(!rows.length){
+    listEl.innerHTML='<div class="emp"><div class="ei">✅</div><p>אין תוצאות לסינון הנוכחי</p></div>';return
+  }
+  const statusBadge=(s)=>{
+    if(s==='overdue_severe')return '<span style="background:#FFEBEE;color:#C62828;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">🔴 באיחור חמור</span>';
+    if(s==='has_debt')return '<span style="background:#FFF8E1;color:#7B5C00;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">🟡 יש חוב</span>';
+    return '<span style="background:#D8F3DC;color:#1B4332;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">🟢 שוטף</span>';
+  };
+  const fmtDate=(iso)=>{if(!iso)return '—';const s=String(iso).slice(0,10);const p=s.split('-');if(p.length!==3)return s;return `${p[2]}/${p[1]}/${p[0]}`};
+  const html='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:640px">'
+    +'<thead><tr style="background:var(--bg);text-align:right">'
+    +'<th style="padding:8px 10px;border-bottom:2px solid var(--brd)">לקוח</th>'
+    +'<th style="padding:8px 10px;border-bottom:2px solid var(--brd)">רשת</th>'
+    +'<th style="padding:8px 10px;border-bottom:2px solid var(--brd);text-align:left">חוב פתוח ₪</th>'
+    +'<th style="padding:8px 10px;border-bottom:2px solid var(--brd);text-align:center">#פתוחות</th>'
+    +'<th style="padding:8px 10px;border-bottom:2px solid var(--brd)">חשבונית ישנה</th>'
+    +'<th style="padding:8px 10px;border-bottom:2px solid var(--brd)">סטטוס</th>'
+    +'</tr></thead><tbody>'
+    +rows.map(r=>{
+      const age=r.oldestOpenAgeDays||0;
+      const ageStr=r.oldestOpenDate?fmtDate(r.oldestOpenDate)+' <span style="color:var(--mut);font-size:11px">('+age+' י)</span>':'—';
+      const debtStr=r.totalDebt>0?
+        '<b style="color:'+(r.status==='overdue_severe'?'#C62828':'#7B5C00')+'">'+r.totalDebt.toLocaleString('he-IL',{style:'currency',currency:'ILS'})+'</b>':
+        '<span style="color:var(--mut)">0 ₪</span>';
+      const safeName=(r.gardenName||'').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+      return `<tr style="cursor:pointer;transition:background 0.15s" onmouseover="this.style.background='#F5F5F5'" onmouseout="this.style.background=''" onclick="openLedgerDrill('${safeName}')">
+        <td style="padding:8px 10px;border-bottom:1px solid var(--brd);font-weight:600">${esc(r.gardenName||'')}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--brd);color:var(--mut);font-size:12px">${esc(r.networkName||'—')}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--brd);text-align:left">${debtStr}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--brd);text-align:center">${r.openCount||0}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--brd)">${ageStr}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--brd)">${statusBadge(r.status)}</td>
+      </tr>`
+    }).join('')
+    +'</tbody></table></div>'
+    +`<div style="margin-top:10px;font-size:11px;color:var(--mut);text-align:center">מציג ${rows.length} מתוך ${customers.length} לקוחות · נטען ב-${new Date(_ledgerAllAt).toLocaleTimeString('he-IL')}</div>`;
+  listEl.innerHTML=html;
+}
+
+async function openLedgerDrill(gardenName){
+  _ledgerDrillGarden=gardenName;
+  document.getElementById('ldg-drill-title').textContent='📒 '+gardenName;
+  document.getElementById('ldg-drill-body').innerHTML='<div class="emp"><div class="ei">⏳</div><p>טוען חשבוניות + היסטוריה ממורנינג...</p></div>';
+  document.getElementById('ldg-drill-mo').classList.add('open');
+  if(!window.fbFunctions){document.getElementById('ldg-drill-body').innerHTML='<div class="emp"><div class="ei">❌</div><p>Firebase לא זמין</p></div>';return}
+  try{
+    const fn=window.fbFunctions.httpsCallable('getcustomerledger');
+    const res=await fn({gardenName,historyMode:true,monthsBack:12});
+    _ledgerDrillData=(res&&res.data)||null;
+    renderLedgerDrill();
+  }catch(e){
+    console.error('openLedgerDrill',e);
+    document.getElementById('ldg-drill-body').innerHTML='<div class="emp"><div class="ei">❌</div><p>שגיאה: '+esc(e.message||String(e))+'</p></div>'
+  }
+}
+function closeLedgerDrill(){document.getElementById('ldg-drill-mo').classList.remove('open');_ledgerDrillGarden=null;_ledgerDrillData=null}
+
+function _ldgFmtDate(iso){if(!iso)return '—';const s=String(iso).slice(0,10);const p=s.split('-');if(p.length!==3)return s;return `${p[2]}/${p[1]}/${p[0]}`}
+function _ldgFmtType(t){const m={300:'חשבון עסקה',305:'חשבונית מס',320:'חשבונית מס/קבלה',330:'חשבונית זיכוי',400:'קבלה'};return m[Number(t)]||('סוג '+t)}
+function _ldgStatusBadge(row){
+  if(row.status==='cancelled')return '<span style="background:#F5F5F5;color:#666;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">🚫 בוטלה</span>';
+  if(row.effectiveStatus==='paid')return '<span style="background:#D8F3DC;color:#1B4332;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">✅ שולם</span>';
+  if(row.effectiveStatus==='partial')return '<span style="background:#FFF3E0;color:#9A3412;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">🟡 חלקי</span>';
+  if(row.effectiveStatus==='open')return '<span style="background:#FFEBEE;color:#C62828;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">🔴 פתוח</span>';
+  if(row.effectiveStatus==='info')return '<span style="background:#E3F2FD;color:#1565C0;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">ℹ מסמך</span>';
+  return '<span style="background:#F5F5F5;color:#666;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">'+esc(String(row.effectiveStatus||row.status||''))+'</span>';
+}
+function renderLedgerDrill(){
+  const body=document.getElementById('ldg-drill-body');
+  if(!_ledgerDrillData){body.innerHTML='<div class="emp"><div class="ei">❌</div><p>אין נתונים</p></div>';return}
+  const d=_ledgerDrillData;
+  const s=d.summary||{};
+  const historyNote=s.historyMode?
+    (s.historyError?'<div style="background:#FFEBEE;border:1px solid #EF5350;color:#C62828;padding:8px 10px;border-radius:8px;font-size:11px;margin-bottom:10px">⚠ טעינת היסטוריה נכשלה: '+esc(s.historyError)+'</div>':
+      '<div style="background:#F3E8FF;border:1px solid #C084FC;color:#6B21A8;padding:8px 10px;border-radius:8px;font-size:11px;margin-bottom:10px">📜 הרשימה כוללת גם חשבוניות היסטוריות ממורנינג (12 חודשים אחורה)</div>'):
+    '<div style="font-size:11px;color:var(--mut);margin-bottom:10px">הרשימה כוללת רק חשבוניות מהמערכת המקומית.</div>';
+  const summaryHtml=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-bottom:10px">
+    <div style="background:#FFEBEE;border:1.5px solid #EF5350;border-radius:8px;padding:8px 10px;text-align:center">
+      <div style="font-size:10px;color:#B71C1C;font-weight:700">חוב פתוח</div>
+      <div style="font-size:16px;font-weight:800;color:#B71C1C">${(s.totalOpen||0).toLocaleString('he-IL',{style:'currency',currency:'ILS',maximumFractionDigits:0})}</div>
+    </div>
+    <div style="background:#D8F3DC;border:1.5px solid #52B788;border-radius:8px;padding:8px 10px;text-align:center">
+      <div style="font-size:10px;color:#1B4332;font-weight:700">שולם עד היום</div>
+      <div style="font-size:16px;font-weight:800;color:#1B4332">${(s.totalPaid||0).toLocaleString('he-IL',{style:'currency',currency:'ILS',maximumFractionDigits:0})}</div>
+    </div>
+    <div style="background:#E3F2FD;border:1.5px solid #64B5F6;border-radius:8px;padding:8px 10px;text-align:center">
+      <div style="font-size:10px;color:#0D47A1;font-weight:700">חשבוניות</div>
+      <div style="font-size:16px;font-weight:800;color:#0D47A1">${s.invoiceCount||0}</div>
+    </div>
+    <div style="background:#FFF3E0;border:1.5px solid #FB923C;border-radius:8px;padding:8px 10px;text-align:center">
+      <div style="font-size:10px;color:#9A3412;font-weight:700">קבלות · זיכויים</div>
+      <div style="font-size:16px;font-weight:800;color:#9A3412">${s.receiptsCount||0} · ${s.creditNotesCount||0}</div>
+    </div>
+  </div>`;
+  const rows=(d.invoices||[]).map((r,i)=>{
+    const dateStr=_ldgFmtDate(r.documentDate);
+    const numStr=r.morningDocNumber?('#'+r.morningDocNumber):(r.id?('#'+r.id):'—');
+    const total=(r.totalAmount||0)+(r.vatAmount||0);
+    const url=r.morningDocUrl?`<a href="${esc(r.morningDocUrl)}" target="_blank" style="color:#1E88E5;text-decoration:none">🔗 פתח</a>`:'';
+    const histBadge=r.isHistory?'<span style="background:#F3E8FF;color:#6B21A8;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:700;margin-right:4px">📜</span>':'';
+    const markBtn=r.isHistory&&r.effectiveStatus==='open'?
+      `<button onclick="openHistPayMo(${i})" style="background:#FBC02D;color:#4A2E00;border:0;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-weight:600;font-family:inherit;margin-right:6px">💾 סמן שולם</button>`:'';
+    const payHistBtn=(r.paymentHistory&&r.paymentHistory.length)?
+      `<button onclick="togglePayHist(${i})" style="background:#E1F2FA;color:#0C4A6E;border:0;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;margin-right:6px">👁 היסטוריית תשלומים (${r.paymentHistory.length})</button>`:'';
+    const payHist=(r.paymentHistory&&r.paymentHistory.length)?
+      `<div id="ldg-payhist-${i}" style="display:none;margin-top:6px;padding:6px 8px;background:#F0F9FF;border-radius:6px;font-size:11px;line-height:1.6">${
+        r.paymentHistory.map(p=>`• ${_ldgFmtDate(p.date)} — ${(Number(p.amount)||0).toLocaleString('he-IL',{style:'currency',currency:'ILS'})} <span style="color:var(--mut)">(${esc(p.mode||'')})</span>${p.note?' · '+esc(p.note):''}`).join('<br>')
+      }</div>`:'';
+    return `<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--brd);white-space:nowrap">${histBadge}${dateStr}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--brd);font-weight:600;white-space:nowrap">${esc(numStr)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--brd);font-size:11px;color:var(--mut);white-space:nowrap">${_ldgFmtType(r.morningActualType||r.docType)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--brd);text-align:left;white-space:nowrap">${total.toLocaleString('he-IL',{style:'currency',currency:'ILS'})}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--brd);text-align:left;white-space:nowrap"><b>${(r.openBalance||0).toLocaleString('he-IL',{style:'currency',currency:'ILS'})}</b></td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--brd)">${_ldgStatusBadge(r)}${payHist}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--brd);white-space:nowrap">${url}${payHistBtn}${markBtn}</td>
+    </tr>`
+  }).join('');
+  body.innerHTML=historyNote+summaryHtml+
+    `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:720px">
+    <thead><tr style="background:var(--bg);text-align:right">
+      <th style="padding:6px 8px;border-bottom:2px solid var(--brd)">תאריך</th>
+      <th style="padding:6px 8px;border-bottom:2px solid var(--brd)">מספר</th>
+      <th style="padding:6px 8px;border-bottom:2px solid var(--brd)">סוג</th>
+      <th style="padding:6px 8px;border-bottom:2px solid var(--brd);text-align:left">סכום</th>
+      <th style="padding:6px 8px;border-bottom:2px solid var(--brd);text-align:left">יתרה פתוחה</th>
+      <th style="padding:6px 8px;border-bottom:2px solid var(--brd)">סטטוס</th>
+      <th style="padding:6px 8px;border-bottom:2px solid var(--brd)">פעולות</th>
+    </tr></thead><tbody>${rows||'<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--mut)">אין חשבוניות</td></tr>'}</tbody></table></div>`;
+}
+function togglePayHist(i){const e=document.getElementById('ldg-payhist-'+i);if(!e)return;e.style.display=e.style.display==='none'?'block':'none'}
+
+function openHistPayMo(rowIdx){
+  const r=_ledgerDrillData&&_ledgerDrillData.invoices&&_ledgerDrillData.invoices[rowIdx];
+  if(!r||!r.isHistory){alert('רק חשבוניות היסטוריות');return}
+  _ledgerHistPayCtx={morningDocId:r.morningDocId,gardenName:_ledgerDrillGarden,rowIdx};
+  document.getElementById('ldg-histpay-info').innerHTML=
+    '<b>'+esc(_ledgerDrillGarden)+'</b><br>חשבונית: '+esc(r.morningDocNumber||r.morningDocId)+' · '+_ldgFmtDate(r.documentDate)+'<br>סכום מלא: <b>'+((r.totalAmount||0)+(r.vatAmount||0)).toLocaleString('he-IL',{style:'currency',currency:'ILS'})+'</b>';
+  document.getElementById('ldg-histpay-date').value=new Date().toISOString().slice(0,10);
+  document.getElementById('ldg-histpay-amt').value=((r.totalAmount||0)+(r.vatAmount||0)).toFixed(2);
+  document.getElementById('ldg-histpay-note').value='';
+  document.getElementById('ldg-histpay-mo').classList.add('open');
+}
+function closeHistPayMo(){document.getElementById('ldg-histpay-mo').classList.remove('open');_ledgerHistPayCtx=null}
+async function submitHistoricalPayment(){
+  if(!_ledgerHistPayCtx){closeHistPayMo();return}
+  const paidDate=document.getElementById('ldg-histpay-date').value;
+  const amountPaid=parseFloat(document.getElementById('ldg-histpay-amt').value||'0');
+  const note=document.getElementById('ldg-histpay-note').value||'';
+  if(!paidDate){alert('חסר תאריך');return}
+  if(!amountPaid||amountPaid<=0){alert('חסר סכום תקף');return}
+  const {morningDocId,gardenName}=_ledgerHistPayCtx;
+  try{
+    const fn=window.fbFunctions.httpsCallable('markhistoricalinvoicepaid');
+    await fn({morningDocId,gardenName,paidDate,amountPaid,note});
+    closeHistPayMo();
+    // Reload drill + refresh main list
+    _ledgerAll=null;
+    await openLedgerDrill(gardenName);
+    loadAllCustomersLedger(true);
+  }catch(e){
+    alert('שגיאה: '+(e.message||e))
+  }
+}
+
+function exportLedgerToExcel(){
+  if(!_ledgerAll||!window.XLSX){alert('אין נתונים לייצוא. לחצי "רענן" קודם.');return}
+  const wb=XLSX.utils.book_new();
+  const HE_MN=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  // Sheet1: customers summary
+  const rows1=[['שם לקוח','רשת','חוב פתוח ₪','#פתוחות','#כל החשבוניות','חשבונית ישנה','ימי איחור','סטטוס']];
+  _ledgerAll.customers.forEach(c=>{
+    rows1.push([c.gardenName,c.networkName||'',c.totalDebt||0,c.openCount||0,c.invoicesCount||0,c.oldestOpenDate||'',c.oldestOpenAgeDays||0,
+      c.status==='overdue_severe'?'באיחור חמור':(c.status==='has_debt'?'יש חוב':'שוטף')])
+  });
+  const ws1=XLSX.utils.aoa_to_sheet(rows1);
+  ws1['!cols']=[{wch:30},{wch:16},{wch:14},{wch:10},{wch:14},{wch:12},{wch:10},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,ws1,'סיכום לקוחות');
+
+  // For Sheets 2+3 we need per-customer invoices. Rather than call the server
+  // for every garden (rate limit), export what we already have in local cache
+  // from any drill-downs the user opened. Also fall back to a summary line.
+  const rows2=[['לקוח','מקור','מסמך #','סוג','תאריך','חודש','סכום','שולם','יתרה','סטטוס']];
+  const rows3=[['לקוח','מסמך #','תאריך תשלום','סכום','אופן','הערה']];
+  // Include drill data if user opened it
+  if(_ledgerDrillData&&_ledgerDrillGarden){
+    _ledgerDrillData.invoices.forEach(r=>{
+      rows2.push([_ledgerDrillGarden,r.source||'local',r.morningDocNumber||'',_ldgFmtType(r.morningActualType||r.docType),r.documentDate||'',r.month||'',(r.totalAmount||0)+(r.vatAmount||0),r.amountPaid||0,r.openBalance||0,r.effectiveStatus||'']);
+      (r.paymentHistory||[]).forEach(p=>rows3.push([_ledgerDrillGarden,r.morningDocNumber||'',p.date||'',Number(p.amount)||0,p.mode||'',p.note||'']))
+    })
+  }
+  const ws2=XLSX.utils.aoa_to_sheet(rows2);
+  ws2['!cols']=[{wch:28},{wch:10},{wch:12},{wch:18},{wch:12},{wch:10},{wch:12},{wch:12},{wch:12},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,ws2,'פירוט חשבוניות');
+  const ws3=XLSX.utils.aoa_to_sheet(rows3);
+  ws3['!cols']=[{wch:28},{wch:12},{wch:12},{wch:12},{wch:14},{wch:30}];
+  XLSX.utils.book_append_sheet(wb,ws3,'פירוט תשלומים');
+  const today=new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb,'כרטסת_לקוחות_'+today+'.xlsx');
+  alert('📥 הורדתי את הכרטסת. שים לב: לפי הצגת גן — כדי לקבל פירוט חשבוניות בגליון 2/3, פתחי את הגן מהטבלה קודם.');
+}
 </script>
 </body>
 </html>

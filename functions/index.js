@@ -1482,6 +1482,480 @@ exports.deletelocalinvoice = onCall(
 
 /**
  * ============================================================================
+ * CUSTOMER LEDGER (כרטסת לקוחות) — admin overview of open balances per garden.
+ * ============================================================================
+ *
+ * getallcustomersledger — fast summary across ALL customers. Reads only from
+ *   Firestore /invoices — no Morning API calls, so it's safe to run on every
+ *   open of the ledger screen. Returns one row per gardenName with totalDebt,
+ *   openInvoicesCount, oldestOpenDate, status.
+ *
+ * getcustomerledger — drill-down for a single customer. Reads Firestore
+ *   /invoices for that garden, optionally fetches historical documents from
+ *   Morning (past monthsBack months) so the admin sees invoices issued
+ *   BEFORE the app existed. History docs are read-only; marking them paid
+ *   writes to /historicalPayments (does NOT touch Morning).
+ *
+ * markhistoricalinvoicepaid — record a manual "paid" mark for a historical
+ *   Morning invoice (one that has no local Firestore /invoices doc). Writes
+ *   /historicalPayments/{morningDocId}. Does NOT change anything in Morning.
+ */
+
+// In-memory caches (per instance). Cleared when instance recycles.
+const _ledgerAllCache = { data: null, at: 0 };
+const _ledgerPerGardenCache = new Map(); // key: gardenName -> { data, at }
+const _morningDocsPerClientCache = new Map(); // key: morningClientId -> { data, at }
+const LEDGER_TTL_MS = 30 * 1000;
+const MORNING_DOCS_TTL_MS = 60 * 1000;
+
+// Days threshold for "severely overdue" status.
+const SEVERE_OVERDUE_DAYS = 30;
+
+// Compute the effective open balance & status for a Firestore invoice.
+// Returns { openBalance, effectiveStatus } where effectiveStatus is one of:
+//   'paid' | 'partial' | 'open' | 'cancelled'
+function computeInvoiceOpenBalance(inv) {
+  const status = inv.status || "created";
+  if (status === "cancelled") {
+    return { openBalance: 0, effectiveStatus: "cancelled" };
+  }
+  const paymentStatus = inv.paymentStatus || "unpaid";
+  const expected =
+    Number(inv.totalAmount || 0) + Number(inv.vatAmount || 0);
+  const paid = Number(inv.amountPaid || inv.paidAmount || 0);
+  const discount = Number(inv.discountAmount || 0);
+  const remaining = Math.max(0, expected - paid - discount);
+  if (paymentStatus === "paid") {
+    return { openBalance: 0, effectiveStatus: "paid" };
+  }
+  if (paymentStatus === "partial") {
+    return { openBalance: remaining, effectiveStatus: "partial" };
+  }
+  // Not marked paid at all — full expected is open.
+  return { openBalance: expected, effectiveStatus: "open" };
+}
+
+// Days between an ISO date (YYYY-MM-DD or ISO string) and now (positive if in past).
+function daysSince(isoDate) {
+  if (!isoDate) return 0;
+  const t = new Date(isoDate).getTime();
+  if (isNaN(t)) return 0;
+  return Math.floor((Date.now() - t) / 86400000);
+}
+
+// Given rows of open invoices, decide the customer-level status.
+function customerStatus(openRows) {
+  if (!openRows.length) return "current";
+  const maxAge = openRows.reduce((mx, r) => Math.max(mx, r.ageDays || 0), 0);
+  if (maxAge >= SEVERE_OVERDUE_DAYS) return "overdue_severe";
+  return "has_debt";
+}
+
+/**
+ * Aggregate summary across ALL customers with any open invoice.
+ * Response: { customers: [ { gardenName, networkName, totalDebt, openCount, oldestOpenDate, oldestOpenAgeDays, status } ], generatedAt }
+ */
+exports.getallcustomersledger = onCall(
+  { region: "us-central1", timeoutSeconds: 60 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      // 30s cache — the client also caches 5m but a refresh button should be snappy.
+      if (_ledgerAllCache.data && (Date.now() - _ledgerAllCache.at) < LEDGER_TTL_MS) {
+        return _ledgerAllCache.data;
+      }
+
+      // Load all invoices in one shot (collection is bounded — one doc per garden×month).
+      const invSnap = await admin.firestore().collection("invoices").get();
+      // Also load gardens meta so we can join network names.
+      const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
+      const allGardens = gardensDoc.exists ? (gardensDoc.data().items || []) : [];
+      const gardenByName = new Map();
+      allGardens.forEach((g) => {
+        if (typeof g === "object" && g && g.name) gardenByName.set(g.name, g);
+      });
+
+      // Group by gardenName.
+      const byGarden = new Map();
+      invSnap.forEach((d) => {
+        const v = d.data();
+        if (!v || !v.gardenName) return;
+        const list = byGarden.get(v.gardenName) || [];
+        list.push(v);
+        byGarden.set(v.gardenName, list);
+      });
+
+      const customers = [];
+      for (const [gardenName, invoices] of byGarden.entries()) {
+        const openRows = [];
+        let totalDebt = 0;
+        let oldestOpenDate = null;
+        for (const inv of invoices) {
+          const { openBalance, effectiveStatus } = computeInvoiceOpenBalance(inv);
+          if (openBalance <= 0) continue;
+          totalDebt += openBalance;
+          const dateStr = inv.documentDate || inv.createdAt || null;
+          const ageDays = daysSince(dateStr);
+          openRows.push({ status: effectiveStatus, openBalance, ageDays, date: dateStr });
+          if (!oldestOpenDate || (dateStr && dateStr < oldestOpenDate)) {
+            oldestOpenDate = dateStr;
+          }
+        }
+        // Skip customers with zero debt from the "customers" array — the client can
+        // still see them via the "all" tab which will fetch differently, but for the
+        // default overview we only return those with debt.
+        // ACTUALLY: return every customer that has any invoice AT ALL, so the "all"
+        // filter can show them. The client filters by tab.
+        const g = gardenByName.get(gardenName);
+        const networkName = (g && g.networkName) || null;
+        customers.push({
+          gardenName,
+          networkName,
+          totalDebt: +totalDebt.toFixed(2),
+          openCount: openRows.length,
+          invoicesCount: invoices.length,
+          oldestOpenDate,
+          oldestOpenAgeDays: oldestOpenDate ? daysSince(oldestOpenDate) : 0,
+          status: openRows.length ? customerStatus(openRows) : "current",
+        });
+      }
+
+      // Sort default: highest debt first.
+      customers.sort((a, b) => b.totalDebt - a.totalDebt);
+
+      const summary = {
+        totalDebt: +customers.reduce((s, c) => s + c.totalDebt, 0).toFixed(2),
+        customersWithDebt: customers.filter((c) => c.totalDebt > 0).length,
+        largestDebt: customers[0] && customers[0].totalDebt > 0
+          ? { gardenName: customers[0].gardenName, amount: customers[0].totalDebt }
+          : null,
+      };
+      const result = { customers, summary, generatedAt: new Date().toISOString() };
+      _ledgerAllCache.data = result;
+      _ledgerAllCache.at = Date.now();
+      return result;
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("getallcustomersledger: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * Drill-down: full invoice/payment history for a single customer.
+ *   { gardenName, historyMode?: boolean, monthsBack?: number }
+ * Returns:
+ *   {
+ *     gardenName, networkName, morningClientId,
+ *     invoices: [ { source: 'local'|'history', ...unified fields... } ],
+ *     summary: { totalOpen, totalPaid, invoiceCount, receiptsCount, creditNotesCount }
+ *   }
+ * If historyMode=true and the garden has a morningClientId, we ALSO hit
+ * Morning /documents/search to pull historical documents up to monthsBack
+ * months back (default 12). Documents that already have a matching Firestore
+ * /invoices doc (by morningDocId) are merged with the local record. The rest
+ * are returned with source='history' and are read-only in the UI.
+ */
+exports.getcustomerledger = onCall(
+  {
+    secrets: [morningApiKeyId, morningApiSecret],
+    region: "us-central1",
+    timeoutSeconds: 60,
+  },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { gardenName, historyMode, monthsBack } = request.data || {};
+      if (!gardenName) throw new HttpsError("invalid-argument", "gardenName required");
+      const wantHistory = !!historyMode;
+      const historyMonths = Math.max(1, Math.min(60, Number(monthsBack) || 12));
+
+      const cacheKey = gardenName + "|" + (wantHistory ? "h" + historyMonths : "n");
+      const cached = _ledgerPerGardenCache.get(cacheKey);
+      if (cached && (Date.now() - cached.at) < LEDGER_TTL_MS) {
+        return cached.data;
+      }
+
+      // Load garden meta
+      const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
+      const allGardens = gardensDoc.exists ? (gardensDoc.data().items || []) : [];
+      const garden = allGardens.find((g) => (typeof g === "string" ? g : g.name) === gardenName);
+      if (!garden || typeof garden !== "object") {
+        throw new HttpsError("not-found", "Garden not found: " + gardenName);
+      }
+
+      // Load local Firestore invoices for this garden.
+      const localSnap = await admin.firestore().collection("invoices")
+        .where("gardenName", "==", gardenName).get();
+      const localInvoices = [];
+      const localByMorningDocId = new Map();
+      localSnap.forEach((d) => {
+        const v = d.data();
+        localInvoices.push(v);
+        if (v.morningDocId) localByMorningDocId.set(String(v.morningDocId), v);
+      });
+
+      // Optionally load historical documents from Morning.
+      let historyDocs = [];
+      let historyError = null;
+      let historyMode_used = false;
+      if (wantHistory && garden.morningClientId) {
+        historyMode_used = true;
+        try {
+          const clientId = String(garden.morningClientId);
+          const clientCacheKey = clientId + "|" + historyMonths;
+          const clientCache = _morningDocsPerClientCache.get(clientCacheKey);
+          let morningDocs;
+          if (clientCache && (Date.now() - clientCache.at) < MORNING_DOCS_TTL_MS) {
+            morningDocs = clientCache.data;
+          } else {
+            const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
+            const fromDate = new Date();
+            fromDate.setMonth(fromDate.getMonth() - historyMonths);
+            const fromStr = fromDate.toISOString().slice(0, 10);
+            // Morning /documents/search — paginate up to 5 pages of 50 to be safe.
+            morningDocs = [];
+            for (let page = 0; page < 5; page++) {
+              const searchBody = {
+                fromDate: fromStr,
+                pageSize: 50,
+                page,
+                sort: "documentDate",
+                order: "desc",
+                clientId: clientId,
+              };
+              const searchResp = await fetch(`${MORNING_API_BASE}/documents/search`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify(searchBody),
+              });
+              if (!searchResp.ok) {
+                const txt = await searchResp.text();
+                throw new Error("Morning /documents/search HTTP " + searchResp.status + ": " + txt.slice(0, 200));
+              }
+              const searchJson = await searchResp.json();
+              const items = Array.isArray(searchJson.items) ? searchJson.items :
+                (Array.isArray(searchJson) ? searchJson : []);
+              if (!items.length) break;
+              morningDocs.push(...items);
+              if (items.length < 50) break;
+            }
+            _morningDocsPerClientCache.set(clientCacheKey, { data: morningDocs, at: Date.now() });
+          }
+          historyDocs = morningDocs;
+        } catch (e) {
+          historyError = String(e && e.message || e).slice(0, 200);
+          logger.warn("getcustomerledger: history fetch failed", { gardenName, error: historyError });
+        }
+      }
+
+      // Load historicalPayments for this garden — manual "paid" marks on docs
+      // that have no local invoices/{id} record. Keyed by morningDocId.
+      const hpSnap = await admin.firestore().collection("historicalPayments")
+        .where("gardenName", "==", gardenName).get();
+      const hpByMorningDocId = new Map();
+      hpSnap.forEach((d) => {
+        const v = d.data();
+        if (v.morningDocId) hpByMorningDocId.set(String(v.morningDocId), v);
+      });
+
+      // === Merge: unified list ===
+      // Start with local. Then for each history doc that has no matching local,
+      // add a read-only 'history' row.
+      const unified = [];
+      for (const inv of localInvoices) {
+        const { openBalance, effectiveStatus } = computeInvoiceOpenBalance(inv);
+        unified.push({
+          source: "local",
+          id: inv.id,
+          morningDocId: inv.morningDocId || null,
+          morningDocNumber: inv.morningDocNumber || null,
+          morningActualType: inv.morningActualType != null ? inv.morningActualType : (inv.docType || null),
+          docType: inv.docType || null,
+          documentDate: inv.documentDate || (inv.createdAt ? inv.createdAt.slice(0, 10) : null),
+          month: inv.month || null,
+          totalAmount: Number(inv.totalAmount || 0),
+          vatAmount: Number(inv.vatAmount || 0),
+          amountPaid: Number(inv.amountPaid || inv.paidAmount || 0),
+          discountAmount: Number(inv.discountAmount || 0),
+          openBalance,
+          effectiveStatus,
+          status: inv.status || "created",
+          paymentStatus: inv.paymentStatus || "unpaid",
+          morningDocUrl: inv.morningDocUrl || null,
+          paymentHistory: Array.isArray(inv.paymentHistory) ? inv.paymentHistory : [],
+          receiptDocNumber: inv.receiptDocNumber || null,
+          receiptDocUrl: inv.receiptDocUrl || null,
+          creditNoteDocNumber: inv.creditNoteDocNumber || null,
+          creditNoteDocUrl: inv.creditNoteDocUrl || null,
+          cancelledAt: inv.cancelledAt || null,
+          isHistory: false,
+        });
+      }
+      // Track which morning ids are already covered
+      const coveredMorningIds = new Set();
+      for (const inv of localInvoices) {
+        if (inv.morningDocId) coveredMorningIds.add(String(inv.morningDocId));
+      }
+      // Add history-only docs
+      for (const md of historyDocs) {
+        const mdId = md.id ? String(md.id) : null;
+        if (mdId && coveredMorningIds.has(mdId)) continue;
+        const hp = mdId ? hpByMorningDocId.get(mdId) : null;
+        // Morning doc types: 300 proforma, 305 tax invoice, 320 tax invoice/receipt,
+        //   330 credit note, 400 receipt.
+        const t = Number(md.type);
+        const isReceiptOrCredit = (t === 320 || t === 330 || t === 400 || t === 305);
+        // Morning's `status` field: 0=open, 1=closed, 2=cancelled (best-effort).
+        const morningClosed = md.status === 1 || md.status === "closed" ||
+          md.status === "1" || md.paid === true;
+        const amount = Number(md.amount || md.paid || md.total || 0);
+        const vat = Number(md.vat || 0);
+        const paidByHp = hp ? Number(hp.amountPaid || amount + vat) : 0;
+        let openBal = 0;
+        let effective;
+        if (morningClosed || isReceiptOrCredit || hp) {
+          openBal = 0;
+          effective = hp ? "paid" : (morningClosed ? "paid" : "info");
+        } else {
+          openBal = amount + vat - paidByHp;
+          if (openBal < 0) openBal = 0;
+          effective = "open";
+        }
+        unified.push({
+          source: "history",
+          id: null,
+          morningDocId: mdId,
+          morningDocNumber: md.number || md.documentNumber || null,
+          morningActualType: t,
+          docType: t,
+          documentDate: md.documentDate || md.date || null,
+          month: (md.documentDate || md.date || "").slice(0, 7) || null,
+          totalAmount: amount,
+          vatAmount: vat,
+          amountPaid: paidByHp,
+          discountAmount: 0,
+          openBalance: +openBal.toFixed(2),
+          effectiveStatus: effective,
+          status: morningClosed ? "closed" : (md.status || "unknown"),
+          paymentStatus: hp ? "paid_manual" : (morningClosed ? "closed" : "unknown"),
+          morningDocUrl: md.url ? (md.url.origin || md.url.he || null) : null,
+          paymentHistory: hp && hp.markedAt ? [{
+            date: hp.paidDate || hp.markedAt.slice(0, 10),
+            amount: paidByHp,
+            mode: "history_manual",
+            note: hp.note || "סומן ידנית — היסטוריה",
+            at: hp.markedAt,
+            by: hp.markedBy || null,
+          }] : [],
+          isHistory: true,
+        });
+      }
+
+      // Sort newest date first
+      unified.sort((a, b) => {
+        const da = a.documentDate || "";
+        const db = b.documentDate || "";
+        return db.localeCompare(da);
+      });
+
+      // Summary
+      let totalOpen = 0;
+      let totalPaid = 0;
+      let invoiceCount = 0;
+      let receiptsCount = 0;
+      let creditNotesCount = 0;
+      for (const row of unified) {
+        totalOpen += row.openBalance;
+        totalPaid += row.amountPaid;
+        const t = Number(row.morningActualType);
+        if (t === 400) receiptsCount++;
+        else if (t === 330) creditNotesCount++;
+        else invoiceCount++;
+      }
+
+      const result = {
+        gardenName,
+        networkName: garden.networkName || null,
+        morningClientId: garden.morningClientId || null,
+        invoices: unified,
+        summary: {
+          totalOpen: +totalOpen.toFixed(2),
+          totalPaid: +totalPaid.toFixed(2),
+          invoiceCount,
+          receiptsCount,
+          creditNotesCount,
+          historyMode: historyMode_used,
+          historyError,
+        },
+        generatedAt: new Date().toISOString(),
+      };
+      _ledgerPerGardenCache.set(cacheKey, { data: result, at: Date.now() });
+      return result;
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("getcustomerledger: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * Manually mark a historical Morning invoice as paid — writes to
+ * /historicalPayments/{morningDocId}. Does NOT touch Morning.
+ * Input: { morningDocId, gardenName, paidDate, amountPaid, note? }
+ */
+exports.markhistoricalinvoicepaid = onCall(
+  { region: "us-central1", timeoutSeconds: 30 },
+  async (request) => {
+    try {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+        throw new HttpsError("permission-denied", "Admin only");
+      }
+      const { morningDocId, gardenName, paidDate, amountPaid, note } = request.data || {};
+      if (!morningDocId || !gardenName) {
+        throw new HttpsError("invalid-argument", "morningDocId & gardenName required");
+      }
+      const docId = String(morningDocId);
+      const nowIso = new Date().toISOString();
+      await admin.firestore().collection("historicalPayments").doc(docId).set({
+        morningDocId: docId,
+        gardenName,
+        paidDate: paidDate || nowIso.slice(0, 10),
+        amountPaid: Number(amountPaid || 0),
+        note: note || "",
+        markedAt: nowIso,
+        markedBy: request.auth.uid,
+      }, { merge: true });
+      // Invalidate caches so the next fetch reflects the change.
+      _ledgerAllCache.data = null;
+      _ledgerPerGardenCache.clear();
+      logger.info("markhistoricalinvoicepaid: OK", { morningDocId: docId, gardenName, amountPaid });
+      return { success: true };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("markhistoricalinvoicepaid: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
+ * ============================================================================
  * WhatsApp Cloud API Integration
  * ============================================================================
  */
