@@ -2388,13 +2388,37 @@ exports.markinvoicepaid = onCall(
         const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
 
         const receiptGardenEmails = parseEmails(garden.email);
+        // WIZO detection: prefer explicit networkName, fallback to name including "ויצו".
+        const isWizoGarden = (garden.networkName === "ויצו") ||
+          (typeof garden.name === "string" && garden.name.includes("ויצו"));
+        // WIZO billing contact — loaded from meta/networkContacts.items['ויצו'].email if set,
+        // otherwise default to kerend@wizo.org.
+        let wizoRecipientEmail = "kerend@wizo.org";
+        if (isWizoGarden) {
+          try {
+            const ncDoc = await admin.firestore().collection("meta").doc("networkContacts").get();
+            const items = (ncDoc.exists && ncDoc.data() && ncDoc.data().items) || {};
+            const wizoContact = items["ויצו"];
+            if (wizoContact && wizoContact.email) {
+              const parsed = parseEmails(wizoContact.email);
+              if (parsed.length > 0) wizoRecipientEmail = parsed[0];
+            }
+          } catch (e) {
+            logger.warn("markinvoicepaid: failed to load WIZO contact from meta", { error: String(e && e.message || e) });
+          }
+        }
         const receiptClientObj = { id: String(garden.morningClientId) };
-        if (receiptGardenEmails.length > 0) {
+        // For WIZO — DON'T pass emails on the client object. This prevents Morning from
+        // auto-emailing the garden's regular addresses upon document creation. We will
+        // explicitly /distribute to the WIZO billing contact below.
+        if (!isWizoGarden && receiptGardenEmails.length > 0) {
           receiptClientObj.emails = receiptGardenEmails;
         }
-        // partial → 400 (קבלה בלבד, לא חשבונית) so revenue isn't double-counted.
+        // For WIZO — always use 320 (חשבונית מס/קבלה): a single doc that closes the
+        // proforma and serves as receipt in one action. WIZO explicitly requires 320.
+        // Otherwise: partial → 400 (קבלה בלבד, לא חשבונית) so revenue isn't double-counted.
         // full/discount → 320 (חשבונית מס/קבלה) as before.
-        const docTypeToCreate = mode === "partial" ? 400 : 320;
+        const docTypeToCreate = isWizoGarden ? 320 : (mode === "partial" ? 400 : 320);
         const remarksSuffix = mode === "partial" ? " | תשלום חלקי"
           : (mode === "discount" ? (" | תשלום עם הנחה " + discountAmount.toFixed(2) + "₪") : "");
         const payload = {
@@ -2453,23 +2477,29 @@ exports.markinvoicepaid = onCall(
         }
 
         let receiptEmailedTo = null;
-        if (receiptGardenEmails.length > 0 && result.id) {
+        // For WIZO — override recipients to the WIZO billing contact ONLY (not the garden's emails).
+        // For non-WIZO — Morning already auto-emailed via clientObj.emails on creation; we
+        //   ALSO fire /distribute here to guarantee delivery (belt-and-suspenders, preserves prior behavior).
+        // Payload format: { attachment, recipients, remarks } (see resendmorninginvoiceemail).
+        const distributeRecipients = isWizoGarden ? [wizoRecipientEmail] : receiptGardenEmails;
+        if (distributeRecipients.length > 0 && result.id) {
           try {
+            const distributePayload = {
+              attachment: false,
+              recipients: distributeRecipients,
+              remarks: "",
+            };
             const distResponse = await fetch(`${MORNING_API_BASE}/documents/${result.id}/distribute`, {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({
-                to: receiptGardenEmails,
-                subject: "חשבונית מס/קבלה - " + invoice.gardenName + " - " + monthName + " " + (monthParts[0] || ""),
-                body: "שלום,\n\nמצורפת חשבונית מס/קבלה עבור " + invoice.gardenName + " לחודש " + monthName + " " + (monthParts[0] || "") + ".\n\nבברכה,\nבייביז קלאב",
-              }),
+              body: JSON.stringify(distributePayload),
             });
             if (distResponse.ok) {
-              receiptEmailedTo = receiptGardenEmails.join(", ");
-              logger.info("markinvoicepaid: receipt email sent to " + receiptEmailedTo);
+              receiptEmailedTo = distributeRecipients.join(", ");
+              logger.info("markinvoicepaid: receipt email sent", { to: receiptEmailedTo, wizo: isWizoGarden });
             } else {
               const t = await distResponse.text();
-              logger.warn("markinvoicepaid: receipt email failed", { status: distResponse.status, body: t.slice(0, 200), to: receiptGardenEmails });
+              logger.warn("markinvoicepaid: receipt email failed", { status: distResponse.status, body: t.slice(0, 200), to: distributeRecipients, wizo: isWizoGarden });
             }
           } catch (e) {
             logger.warn("markinvoicepaid: receipt email error", { error: String(e && e.message || e) });
@@ -2484,7 +2514,7 @@ exports.markinvoicepaid = onCall(
           emailedTo: receiptEmailedTo,
         };
 
-        await invoiceRef.set({
+        const receiptSaveData = {
           receiptCreated: true,
           receiptId: receipt.id,
           receiptDocNumber: receipt.number,
@@ -2501,7 +2531,13 @@ exports.markinvoicepaid = onCall(
             date: paidDate,
             at: new Date().toISOString(),
           }),
-        }, { merge: true });
+        };
+        if (isWizoGarden) {
+          receiptSaveData.receiptType = 320;
+          receiptSaveData.sentToWizoContact = wizoRecipientEmail;
+          receiptSaveData.sentAt = new Date().toISOString();
+        }
+        await invoiceRef.set(receiptSaveData, { merge: true });
 
         logger.info("markinvoicepaid: receipt created", { invoiceId, receiptNumber: receipt.number, type: docTypeToCreate, mode });
 
