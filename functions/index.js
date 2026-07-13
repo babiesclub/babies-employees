@@ -5378,3 +5378,168 @@ exports.sendafterschoolreportemail = onCall(
     }
   }
 );
+
+/**
+ * sendcalendarremindings — MARKER:CAL_REMINDERS_V1
+ * Runs every 5 minutes. Reads adminCalendarEvents where reminderMinutesBefore is set
+ * and reminderSentAt is null. If NOW is inside the reminder window
+ * (reminderTime ≤ now < eventStart + 5m), fans out an in-app notification to every
+ * admin user (users with role == 'admin'). Each notification doc triggers
+ * sendpushonnotification, which delivers the push via OneSignal.
+ *
+ * The event is marked with reminderSentAt so we don't send twice. If the admin edits
+ * the reminderMinutesBefore / date / startTime, the app resets reminderSentAt to null.
+ */
+exports.sendcalendarremindings = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const startedAt = Date.now();
+    logger.info("sendcalendarremindings: start");
+
+    // "now" in Israel time — we compare to date+startTime stored as local strings.
+    const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+    const WINDOW_MS = 5 * 60 * 1000; // must match the schedule cadence
+
+    let candidates;
+    try {
+      candidates = await admin.firestore()
+        .collection("adminCalendarEvents")
+        .where("reminderMinutesBefore", ">", 0)
+        .get();
+    } catch (e) {
+      logger.error("sendcalendarremindings: failed to query events", { error: e.message });
+      return;
+    }
+
+    if (candidates.empty) {
+      logger.info("sendcalendarremindings: no events with reminder");
+      return;
+    }
+
+    // Load admins once, reuse across all reminders in this run.
+    let adminIds = [];
+    try {
+      const adminsSnap = await admin.firestore().collection("users").where("role", "==", "admin").get();
+      adminsSnap.forEach(d => { adminIds.push(d.id); });
+    } catch (e) {
+      logger.error("sendcalendarremindings: failed to load admins", { error: e.message });
+      return;
+    }
+    if (!adminIds.length) {
+      logger.warn("sendcalendarremindings: no admins found — skipping all");
+      return;
+    }
+    logger.info("sendcalendarremindings: admins loaded", { count: adminIds.length });
+
+    let scanned = 0, sent = 0, skipped = 0, errors = 0;
+
+    for (const doc of candidates.docs) {
+      scanned++;
+      const ev = doc.data() || {};
+
+      if (ev.reminderSentAt) { skipped++; continue; }
+      if (!ev.date || !ev.startTime) { skipped++; continue; }
+
+      const mins = Number(ev.reminderMinutesBefore);
+      if (!isFinite(mins) || mins <= 0) { skipped++; continue; }
+
+      // event start as a local Date (Israel time). Format: YYYY-MM-DD + HH:MM
+      const startStr = String(ev.date) + "T" + String(ev.startTime) + ":00";
+      const eventStart = new Date(startStr);
+      if (isNaN(eventStart.getTime())) { skipped++; continue; }
+
+      const reminderTime = new Date(eventStart.getTime() - mins * 60 * 1000);
+
+      // Window: reminderTime ≤ nowIsrael < eventStart + WINDOW_MS
+      // (extra WINDOW_MS after start is a safety net in case scheduler was late)
+      if (nowIsrael < reminderTime) { skipped++; continue; }
+      if (nowIsrael >= eventStart.getTime() + WINDOW_MS) {
+        // Too late — mark as sent so we don't keep scanning stale events forever.
+        try {
+          await doc.ref.update({ reminderSentAt: new Date().toISOString(), reminderSentSkipped: "too_late" });
+        } catch (_) { /* noop */ }
+        skipped++;
+        continue;
+      }
+
+      // Compute a friendly "in X minutes" text.
+      const minsLeft = Math.max(0, Math.round((eventStart.getTime() - nowIsrael.getTime()) / 60000));
+      let leftTxt;
+      if (minsLeft <= 0) leftTxt = "עכשיו";
+      else if (minsLeft < 60) leftTxt = "עוד " + minsLeft + " דקות";
+      else if (minsLeft < 1440) leftTxt = "עוד " + Math.round(minsLeft / 60) + " שעות";
+      else leftTxt = "עוד " + Math.round(minsLeft / 1440) + " ימים";
+
+      const title = "🗓 " + (ev.title || "אירוע ביומן");
+      const bodyParts = [leftTxt];
+      if (ev.startTime) bodyParts.push("בשעה " + ev.startTime);
+      if (ev.location) bodyParts.push("📍 " + ev.location);
+      if (ev.contactPhone) bodyParts.push("📞 " + ev.contactPhone);
+      const body = bodyParts.join(" · ");
+
+      // Fan out to every admin.
+      const now = new Date().toISOString();
+      let fanoutOk = 0, fanoutFail = 0;
+      for (const uid of adminIds) {
+        try {
+          const notifId = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+          await admin.firestore().collection("notifications").doc(notifId).set({
+            id: notifId,
+            recipientUid: uid,
+            type: "calendar_reminder",
+            icon: "🗓",
+            title,
+            body,
+            link: { screen: "cal", eventId: doc.id },
+            eventId: doc.id,
+            createdAt: now,
+            createdBy: "system",
+            createdByName: "יומן אדמין",
+            read: false,
+            readAt: null,
+          });
+          fanoutOk++;
+        } catch (e) {
+          fanoutFail++;
+          logger.warn("sendcalendarremindings: notification create failed", { eventId: doc.id, uid, error: e.message });
+        }
+      }
+
+      try {
+        await doc.ref.update({
+          reminderSentAt: now,
+          reminderSentToCount: fanoutOk,
+        });
+      } catch (e) {
+        logger.warn("sendcalendarremindings: failed to mark event", { eventId: doc.id, error: e.message });
+      }
+
+      logger.info("sendcalendarremindings: reminder dispatched", {
+        eventId: doc.id,
+        title: ev.title || "(no title)",
+        eventStart: startStr,
+        reminderMinutesBefore: mins,
+        minsLeft,
+        admins: adminIds.length,
+        fanoutOk,
+        fanoutFail,
+      });
+      sent++;
+      if (fanoutFail) errors++;
+    }
+
+    logger.info("sendcalendarremindings: done", {
+      durationMs: Date.now() - startedAt,
+      scanned,
+      sent,
+      skipped,
+      errors,
+      adminCount: adminIds.length,
+    });
+  }
+);
