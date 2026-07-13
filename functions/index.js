@@ -3018,12 +3018,20 @@ exports.markinvoicepaid = onCall(
         const docTypeToCreate = isWizoGarden ? 320 : (mode === "partial" ? 400 : 320);
         const remarksSuffix = mode === "partial" ? " | תשלום חלקי"
           : (mode === "discount" ? (" | תשלום עם הנחה " + discountAmount.toFixed(2) + "₪") : "");
+        // finalAmount is the GROSS amount the client actually paid (with VAT if applicable).
+        // The original invoice may or may not have VAT — check invoice.vatAmount to know.
+        // If it had VAT: the receipt income must be BASE (finalAmount / 1.18), so Morning
+        //   adds 18% VAT and reaches finalAmount, matching the payment sum.
+        // If VAT-exempt: use vatType=1 (EXEMPT) so income sum stays finalAmount = payment sum.
+        const _invoiceHasVat = Number(invoice.vatAmount || 0) > 0;
+        const _docVatType = _invoiceHasVat ? 0 : 1; // 0=REGULAR (adds 18%), 1=EXEMPT
+        const _incomePrice = _invoiceHasVat ? +(finalAmount / 1.18).toFixed(2) : finalAmount;
         const payload = {
           type: docTypeToCreate,
           date: paidDate,
           lang: "he",
           currency: "ILS",
-          vatType: 0,
+          vatType: _docVatType,
           client: receiptClientObj,
           payment: [
             {
@@ -3042,9 +3050,9 @@ exports.markinvoicepaid = onCall(
             {
               description,
               quantity: 1,
-              price: finalAmount, // for discount/full, the receipt shows what was actually paid
+              price: _incomePrice,
               currency: "ILS",
-              vatType: 0,
+              vatType: _docVatType,
             },
           ];
         }
