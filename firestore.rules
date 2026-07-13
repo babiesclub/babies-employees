@@ -159,6 +159,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // SALARY PAYMENTS — admin-only. Tracks per-month payment status per instructor.
+    // Not exposed to the instructor (she sees only the published instructorReports PDF).
+    match /salaryPayments/{docId} {
+      allow read, write: if isAdmin();
+    }
+
     // META (gardens, animals lists, etc.) — read all, write admin
     match /meta/{docId} {
       allow read: if isSignedIn();
