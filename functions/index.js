@@ -5543,3 +5543,103 @@ exports.sendcalendarremindings = onSchedule(
     });
   }
 );
+
+/**
+ * generatepdfreport - server-side PDF rendering via Puppeteer + @sparticuz/chromium.
+ *
+ * Why: client-side html2pdf.js (html2canvas + jsPDF) breaks Hebrew text
+ * ("שיר דיין" -> "שירדיין") and produces blank pages on iOS Safari.
+ * Chromium renders Hebrew faithfully, and the output PDF is a real file
+ * the phone only needs to display, not generate.
+ *
+ * Input: { html, filename?, format?, orientation? }
+ * Output: { pdfBase64 } - base64-encoded PDF bytes
+ *
+ * Admin-only. Memory 1GiB, timeout 90s (cold start of headless Chromium is
+ * 10-30s). Region us-central1 to match the rest of the codebase.
+ */
+exports.generatepdfreport = onCall(
+  { region: "us-central1", timeoutSeconds: 90, memory: "1GiB" },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const { html, format, orientation } = req.data || {};
+    if (!html || typeof html !== "string") {
+      throw new HttpsError("invalid-argument", "missing html");
+    }
+    if (html.length > 5 * 1024 * 1024) {
+      throw new HttpsError("invalid-argument", "html too large (>5MB)");
+    }
+
+    const t0 = Date.now();
+    logger.info("generatepdfreport start", {
+      by: req.auth.uid,
+      htmlBytes: html.length,
+      format: format || "a4",
+      orientation: orientation || "portrait",
+    });
+
+    const chromium = require("@sparticuz/chromium");
+    const puppeteer = require("puppeteer-core");
+
+    // Wrap the HTML fragment (already includes dir="rtl" on the outer div)
+    // in a proper document so Chromium picks up Hebrew fonts + print styles.
+    const fullHtml = `<!doctype html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;padding:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  body{font-family:"Segoe UI","Arial Hebrew",Arial,sans-serif;}
+  @page{size:${(format || "a4").toUpperCase()} ${orientation === "landscape" ? "landscape" : "portrait"};margin:0;}
+</style>
+</head>
+<body>${html}</body>
+</html>`;
+
+    let browser = null;
+    try {
+      browser = await puppeteer.launch({
+        args: [
+          ...chromium.args,
+          "--font-render-hinting=none",
+          "--disable-lcd-text",
+        ],
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(),
+        headless: chromium.headless,
+      });
+
+      const page = await browser.newPage();
+      await page.setContent(fullHtml, { waitUntil: "networkidle0", timeout: 30000 });
+      await page.emulateMediaType("print");
+      const pdfBuffer = await page.pdf({
+        format: (format || "A4").toUpperCase(),
+        landscape: orientation === "landscape",
+        printBackground: true,
+        preferCSSPageSize: false,
+        margin: { top: "10mm", bottom: "10mm", left: "10mm", right: "10mm" },
+      });
+
+      const elapsed = Date.now() - t0;
+      logger.info("generatepdfreport done", {
+        by: req.auth.uid,
+        elapsedMs: elapsed,
+        pdfBytes: pdfBuffer.length,
+      });
+      return { pdfBase64: Buffer.from(pdfBuffer).toString("base64") };
+    } catch (e) {
+      logger.error("generatepdfreport failed", {
+        by: req.auth ? req.auth.uid : null,
+        elapsedMs: Date.now() - t0,
+        error: e && e.message,
+        stack: e && e.stack,
+      });
+      throw new HttpsError("internal", "PDF render failed: " + (e && e.message ? e.message : String(e)));
+    } finally {
+      if (browser) {
+        try { await browser.close(); } catch (_) {}
+      }
+    }
+  }
+);

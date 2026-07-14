@@ -12,9 +12,11 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@google-cloud/firestore": "^7.10.0",
+    "@sparticuz/chromium": "^131.0.1",
     "firebase-admin": "^12.6.0",
     "firebase-functions": "^6.0.1",
     "nodemailer": "^6.9.16",
+    "puppeteer-core": "^23.10.4",
     "xlsx": "^0.18.5"
   },
   "private": true
