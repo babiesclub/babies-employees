@@ -6040,6 +6040,44 @@ exports.refreshemailimporturl = onCall(
   }
 );
 
+// Batch-delete emailImports by scope. Admin only.
+// scope: 'unapproved' (pending+rejected) | 'all' | 'approved' | 'pending' | 'rejected'
+exports.deleteemailimports = onCall(
+  { region: "us-central1", timeoutSeconds: 300 },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const scope = String((req.data && req.data.scope) || "").trim();
+    if (!["pending", "rejected", "approved", "unapproved", "all"].includes(scope)) {
+      throw new HttpsError("invalid-argument", "invalid scope");
+    }
+    const db = admin.firestore();
+    const bucket = admin.storage().bucket();
+    const snap = await db.collection("emailImports").get();
+    let deleted = 0, kept = 0, storageDeleted = 0, storageErrors = 0;
+    let batch = db.batch();
+    let batchCount = 0;
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      let match;
+      if (scope === "all") match = true;
+      else if (scope === "unapproved") match = d.status !== "approved";
+      else match = d.status === scope;
+      if (!match) { kept++; continue; }
+      if (d.storagePath) {
+        try { await bucket.file(d.storagePath).delete(); storageDeleted++; }
+        catch (e) { storageErrors++; }
+      }
+      batch.delete(doc.ref);
+      deleted++;
+      batchCount++;
+      if (batchCount >= 400) { await batch.commit(); batch = db.batch(); batchCount = 0; }
+    }
+    if (batchCount > 0) await batch.commit();
+    logger.info("deleteemailimports: done", { scope, deleted, kept, storageDeleted, storageErrors });
+    return { deleted, kept, storageDeleted, storageErrors };
+  }
+);
+
 // Delete all emailImports whose sender matches the excluded domains
 // (Morning/GreenInvoice — these are OUTGOING invoice copies, not expenses).
 // Also removes their Storage files. Admin only.
