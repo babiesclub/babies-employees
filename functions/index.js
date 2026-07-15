@@ -5939,21 +5939,19 @@ exports.syncgmailimports = onCall(
             const safeName = att.filename.replace(/[^\w.\-א-ת ]+/g, "_").slice(0, 120);
             const storagePath = `email-imports/${accKey}/${m.id}/${safeName}`;
             const file = bucket.file(storagePath);
+            const downloadToken = require("crypto").randomBytes(16).toString("hex");
             await file.save(data, {
               contentType: att.mimeType,
               metadata: {
                 metadata: {
+                  firebaseStorageDownloadTokens: downloadToken,
                   emailFrom: fromEmail, emailSubject: headers.Subject.slice(0, 200),
                   msgId: m.id, account,
                 },
               },
               resumable: false,
             });
-            // Get a long-lived download URL (signed 7 days ahead; admin UI can refresh)
-            const [signedUrl] = await file.getSignedUrl({
-              action: "read",
-              expires: Date.now() + 7 * 86400_000,
-            });
+            const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(storagePath)}?alt=media&token=${downloadToken}`;
             await db.collection("emailImports").doc(docId).set({
               id: docId,
               account,
@@ -5965,8 +5963,8 @@ exports.syncgmailimports = onCall(
               attachmentFilename: att.filename,
               attachmentMimeType: att.mimeType,
               storagePath,
-              storageUrl: signedUrl,
-              storageUrlExpiresAt: Date.now() + 7 * 86400_000,
+              storageUrl: downloadUrl,
+              storageUrlExpiresAt: null,
               extractedAmount: null,
               extractedDate: null,
               ocrText: null,        // filled lazily by client OCR
@@ -6003,11 +6001,16 @@ exports.refreshemailimporturl = onCall(
     if (!snap.exists) throw new HttpsError("not-found", "doc not found");
     const path = snap.data().storagePath;
     if (!path) throw new HttpsError("failed-precondition", "no storagePath");
-    const [url] = await admin.storage().bucket().file(path).getSignedUrl({
-      action: "read",
-      expires: Date.now() + 7 * 86400_000,
-    });
-    await ref.update({ storageUrl: url, storageUrlExpiresAt: Date.now() + 7 * 86400_000 });
+    const bucket = admin.storage().bucket();
+    const file = bucket.file(path);
+    const [meta] = await file.getMetadata();
+    let token = meta.metadata && meta.metadata.firebaseStorageDownloadTokens;
+    if (!token) {
+      token = require("crypto").randomBytes(16).toString("hex");
+      await file.setMetadata({ metadata: { ...(meta.metadata || {}), firebaseStorageDownloadTokens: token } });
+    }
+    const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media&token=${token}`;
+    await ref.update({ storageUrl: url, storageUrlExpiresAt: null });
     return { url };
   }
 );
