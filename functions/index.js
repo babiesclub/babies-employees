@@ -5668,8 +5668,15 @@ const gmailOauthClientSecret = defineSecret("GMAIL_OAUTH_CLIENT_SECRET");
 
 const GMAIL_OAUTH_REDIRECT = "https://us-central1-babiez-app.cloudfunctions.net/oauthgmailcallback";
 const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
-const RECEIPT_KEYWORDS_HE = ["חשבונית", "קבלה", "מס-קבלה", "מס קבלה"];
-const RECEIPT_KEYWORDS_EN = ["invoice", "receipt", "tax invoice"];
+const RECEIPT_KEYWORDS_HE = [
+  "חשבונית", "קבלה", "מס-קבלה", "מס קבלה",
+  "חיוב", "פירוט חיוב", "דרישת תשלום", "דרישה לתשלום",
+  "אישור תשלום", "אסמכתא", "הזמנת רכש",
+];
+const RECEIPT_KEYWORDS_EN = [
+  "invoice", "receipt", "tax invoice", "bill", "billing",
+  "purchase order", "statement", "payment confirmation",
+];
 // Senders whose emails are NOT expenses: outgoing-invoice copies (Morning),
 // bank salary-slip copies, payment reminders from services, marketing, etc.
 const EXCLUDED_SENDER_DOMAINS = [
@@ -5854,12 +5861,15 @@ function buildGmailQuery(sinceDate, beforeDate) {
   const attachFilter = "(has:attachment AND (filename:pdf OR filename:jpg OR filename:jpeg OR filename:png))";
   const kwFilter = `(subject:(${kw}) OR ${kw})`;
   const excludeSenders = EXCLUDED_SENDER_DOMAINS.map(d => `-from:${d}`).join(" ");
+  // Match keyword in subject, body, OR filename (invoice_123.pdf still matches even
+  // if the email subject is generic like "מסמכים לחשבונך").
+  const filenameFilter = [...RECEIPT_KEYWORDS_HE, ...RECEIPT_KEYWORDS_EN]
+    .map(k => `filename:${JSON.stringify(k)}`).join(" OR ");
+  const kwFilterFull = `(${kwFilter} OR ${filenameFilter})`;
   // in:inbox — only her inbox (not Sent, not archived-to-label-only).
   // -from:me — exclude anything she sent herself.
   // -from:@greeninvoice.co.il etc — exclude Morning + bank + service noise.
-  // Require BOTH attachment AND a receipt/invoice keyword (removed the "OR has:attachment"
-  // fallback that let through payslips/tenders/reminders — anything with an attachment).
-  let q = `in:inbox -from:me ${excludeSenders} (${attachFilter}) AND ${kwFilter}`;
+  let q = `in:inbox -from:me ${excludeSenders} (${attachFilter}) AND ${kwFilterFull}`;
   const fmt = d => `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`;
   if (sinceDate) q += ` after:${fmt(sinceDate)}`;
   if (beforeDate) q += ` before:${fmt(beforeDate)}`;
