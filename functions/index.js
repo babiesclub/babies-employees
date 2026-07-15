@@ -5670,6 +5670,13 @@ const GMAIL_OAUTH_REDIRECT = "https://us-central1-babiez-app.cloudfunctions.net/
 const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 const RECEIPT_KEYWORDS_HE = ["חשבונית", "קבלה", "מס-קבלה", "מס קבלה"];
 const RECEIPT_KEYWORDS_EN = ["invoice", "receipt", "tax invoice"];
+// Senders whose emails are copies of OUTGOING invoices (Morning/GreenInvoice) —
+// not expenses. Also excludes anything sent by the user herself (from:me).
+const EXCLUDED_SENDER_DOMAINS = [
+  "greeninvoice.co.il",
+  "morning.co.il",
+  "morningaction.co.il",
+];
 const RECEIPT_MIME_ALLOWED = new Set([
   "application/pdf",
   "image/jpeg",
@@ -5838,7 +5845,11 @@ function buildGmailQuery(sinceDate, beforeDate) {
     .map(k => `"${k}"`).join(" OR ");
   const attachFilter = "(has:attachment AND (filename:pdf OR filename:jpg OR filename:jpeg OR filename:png))";
   const kwFilter = `(subject:(${kw}) OR ${kw})`;
-  let q = `(${attachFilter}) AND (${kwFilter} OR has:attachment)`;
+  const excludeSenders = EXCLUDED_SENDER_DOMAINS.map(d => `-from:${d}`).join(" ");
+  // in:inbox — only her inbox (not Sent, not archived-to-label-only).
+  // -from:me — exclude anything she sent herself.
+  // -from:@greeninvoice.co.il etc — exclude Morning outgoing invoice copies.
+  let q = `in:inbox -from:me ${excludeSenders} (${attachFilter}) AND (${kwFilter} OR has:attachment)`;
   const fmt = d => `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`;
   if (sinceDate) q += ` after:${fmt(sinceDate)}`;
   if (beforeDate) q += ` before:${fmt(beforeDate)}`;
@@ -5932,6 +5943,10 @@ exports.syncgmailimports = onCall(
           const headers = extractHeaders(payload);
           const { name: fromName, email: fromEmail } = parseFromHeader(headers.From);
           const emailDate = headers.Date ? new Date(headers.Date).toISOString() : new Date().toISOString();
+          // Belt-and-suspenders: even if the Gmail query missed it, skip senders on the exclude list.
+          const fromLower = String(fromEmail || "").toLowerCase();
+          const excluded = fromLower && EXCLUDED_SENDER_DOMAINS.some(d => fromLower.includes(d));
+          if (excluded) { skipped++; continue; }
           const atts = collectAttachments(payload)
             .filter(a => RECEIPT_MIME_ALLOWED.has((a.mimeType || "").toLowerCase()));
           if (!atts.length) { skipped++; continue; }
@@ -6022,6 +6037,39 @@ exports.refreshemailimporturl = onCall(
     const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media&token=${token}`;
     await ref.update({ storageUrl: url, storageUrlExpiresAt: null });
     return { url };
+  }
+);
+
+// Delete all emailImports whose sender matches the excluded domains
+// (Morning/GreenInvoice — these are OUTGOING invoice copies, not expenses).
+// Also removes their Storage files. Admin only.
+exports.cleanexcludedimports = onCall(
+  { region: "us-central1", timeoutSeconds: 300 },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const db = admin.firestore();
+    const bucket = admin.storage().bucket();
+    const snap = await db.collection("emailImports").get();
+    let deleted = 0, kept = 0, storageDeleted = 0, storageErrors = 0;
+    const batch = db.batch();
+    let batchCount = 0;
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      const from = String(d.emailFrom || "").toLowerCase();
+      const match = from && EXCLUDED_SENDER_DOMAINS.some(x => from.includes(x));
+      if (!match) { kept++; continue; }
+      if (d.storagePath) {
+        try { await bucket.file(d.storagePath).delete(); storageDeleted++; }
+        catch (e) { storageErrors++; }
+      }
+      batch.delete(doc.ref);
+      deleted++;
+      batchCount++;
+      if (batchCount >= 400) { await batch.commit(); batchCount = 0; }
+    }
+    if (batchCount > 0) await batch.commit();
+    logger.info("cleanexcludedimports: done", { deleted, kept, storageDeleted, storageErrors });
+    return { deleted, kept, storageDeleted, storageErrors };
   }
 );
 
