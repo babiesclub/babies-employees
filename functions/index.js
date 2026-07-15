@@ -5643,3 +5643,371 @@ exports.generatepdfreport = onCall(
     }
   }
 );
+
+/* ================================================================
+ * GMAIL INVOICE / RECEIPT IMPORT
+ *
+ * Two functions + one HTTP callback:
+ *   - getgmailauthurl (onCall, admin)  → returns OAuth consent URL
+ *   - oauthgmailcallback (onRequest)   → OAuth redirect handler, stores refresh_token
+ *   - syncgmailimports (onCall, admin) → pulls new emails for one Gmail account
+ *
+ * Storage layout:
+ *   gs://<bucket>/email-imports/<accountKey>/<msgId>/<filename>
+ *
+ * Firestore:
+ *   emailImports/{docId}    (per-attachment doc; keyed as `${msgId}_${attachmentIdx}`)
+ *   gmailTokens/{accountKey} (per-account refresh_token — admin-only via rules)
+ *
+ * accountKey is the sanitized email (dots kept, @ replaced with _at_) so
+ * doc IDs are safe. Example: babies.offices_at_gmail.com
+ * ================================================================ */
+
+const gmailOauthClientId = defineSecret("GMAIL_OAUTH_CLIENT_ID");
+const gmailOauthClientSecret = defineSecret("GMAIL_OAUTH_CLIENT_SECRET");
+
+const GMAIL_OAUTH_REDIRECT = "https://us-central1-babiez-app.cloudfunctions.net/oauthgmailcallback";
+const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
+const RECEIPT_KEYWORDS_HE = ["חשבונית", "קבלה", "מס-קבלה", "מס קבלה"];
+const RECEIPT_KEYWORDS_EN = ["invoice", "receipt", "tax invoice"];
+const RECEIPT_MIME_ALLOWED = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/heic",
+  "image/webp",
+]);
+
+function accountKey(email) {
+  return String(email || "").trim().toLowerCase().replace(/@/g, "_at_");
+}
+
+function decodeBase64Url(s) {
+  if (!s) return Buffer.alloc(0);
+  return Buffer.from(String(s).replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+function extractHeaders(payload) {
+  const out = { From: "", Subject: "", Date: "" };
+  if (!payload || !payload.headers) return out;
+  for (const h of payload.headers) {
+    if (h.name === "From") out.From = h.value || "";
+    else if (h.name === "Subject") out.Subject = h.value || "";
+    else if (h.name === "Date") out.Date = h.value || "";
+  }
+  return out;
+}
+
+// Walk MIME parts recursively; yields {filename, mimeType, attachmentId}
+function collectAttachments(payload) {
+  const out = [];
+  const walk = (part) => {
+    if (!part) return;
+    if (part.filename && part.body && part.body.attachmentId) {
+      out.push({
+        filename: part.filename,
+        mimeType: part.mimeType || "application/octet-stream",
+        attachmentId: part.body.attachmentId,
+        sizeBytes: part.body.size || 0,
+      });
+    }
+    if (Array.isArray(part.parts)) part.parts.forEach(walk);
+  };
+  walk(payload);
+  return out;
+}
+
+function parseFromHeader(from) {
+  // "John <john@x.com>" → {name:"John", email:"john@x.com"}
+  if (!from) return { name: "", email: "" };
+  const m = from.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  if (m) return { name: m[1].trim(), email: m[2].trim().toLowerCase() };
+  return { name: "", email: String(from).trim().toLowerCase() };
+}
+
+async function makeOAuthClient() {
+  const { google } = require("googleapis");
+  return new google.auth.OAuth2(
+    gmailOauthClientId.value(),
+    gmailOauthClientSecret.value(),
+    GMAIL_OAUTH_REDIRECT
+  );
+}
+
+exports.getgmailauthurl = onCall(
+  {
+    region: "us-central1",
+    secrets: [gmailOauthClientId, gmailOauthClientSecret],
+  },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const account = String(req.data && req.data.account || "").trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(account)) {
+      throw new HttpsError("invalid-argument", "invalid account email");
+    }
+    if (!gmailOauthClientId.value() || !gmailOauthClientSecret.value()) {
+      throw new HttpsError("failed-precondition",
+        "OAuth Client not configured — see setup docs");
+    }
+    const oauth2Client = await makeOAuthClient();
+    // state = accountKey + random nonce (verify on callback)
+    const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const state = accountKey(account) + "|" + nonce;
+    // Persist state so callback can validate + know which account it belongs to
+    await admin.firestore().collection("gmailOAuthState").doc(nonce).set({
+      accountKey: accountKey(account),
+      account,
+      createdAt: Date.now(),
+      createdBy: req.auth.uid,
+    });
+    const url = oauth2Client.generateAuthUrl({
+      access_type: "offline",
+      prompt: "consent",          // force refresh_token issuance
+      scope: GMAIL_SCOPES,
+      login_hint: account,
+      state,
+    });
+    return { url };
+  }
+);
+
+exports.oauthgmailcallback = onRequest(
+  {
+    region: "us-central1",
+    secrets: [gmailOauthClientId, gmailOauthClientSecret],
+    invoker: "public",
+  },
+  async (req, res) => {
+    try {
+      const code = req.query.code;
+      const state = String(req.query.state || "");
+      const err = req.query.error;
+      if (err) {
+        res.status(400).send(`<meta charset="utf-8"><h2 style="font-family:sans-serif;color:#b91c1c">שגיאת OAuth: ${err}</h2><p>סגרי חלון זה ונסי שוב.</p>`);
+        return;
+      }
+      if (!code || !state || !state.includes("|")) {
+        res.status(400).send("<meta charset='utf-8'><h2>Missing code/state.</h2>");
+        return;
+      }
+      const [accKey, nonce] = state.split("|");
+      const db = admin.firestore();
+      const stateDoc = await db.collection("gmailOAuthState").doc(nonce).get();
+      if (!stateDoc.exists) {
+        res.status(400).send("<meta charset='utf-8'><h2>State expired or invalid.</h2>");
+        return;
+      }
+      const stateData = stateDoc.data();
+      if (stateData.accountKey !== accKey) {
+        res.status(400).send("<meta charset='utf-8'><h2>State mismatch.</h2>");
+        return;
+      }
+      const oauth2Client = await makeOAuthClient();
+      const { tokens } = await oauth2Client.getToken(code);
+      if (!tokens.refresh_token) {
+        res.status(400).send(`<meta charset="utf-8"><h2>לא התקבל refresh_token</h2><p>לכי ל־<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>, מחקי את ההרשאה של "בייביז קלאב" ונסי שוב.</p>`);
+        return;
+      }
+      await db.collection("gmailTokens").doc(accKey).set({
+        account: stateData.account,
+        accountKey: accKey,
+        refreshToken: tokens.refresh_token,
+        scope: tokens.scope || GMAIL_SCOPES.join(" "),
+        connectedAt: Date.now(),
+        connectedBy: stateData.createdBy,
+      }, { merge: true });
+      await stateDoc.ref.delete().catch(() => {});
+      const returnUrl = "https://babiesclub.github.io/babies-employees/?gmailConnected=" + encodeURIComponent(stateData.account);
+      res.status(200).send(`<!doctype html><meta charset="utf-8"><title>חובר בהצלחה</title>
+<div style="font-family:sans-serif;text-align:center;padding:40px;line-height:1.6">
+  <h1 style="color:#16a34a">✓ חובר בהצלחה</h1>
+  <p>החשבון <b>${stateData.account}</b> מחובר כעת לבייביז קלאב.</p>
+  <p><a href="${returnUrl}" style="background:#16a34a;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;display:inline-block;margin-top:12px">חזרי לאפליקציה</a></p>
+</div>`);
+    } catch (e) {
+      logger.error("oauthgmailcallback failed", { error: e && e.message, stack: e && e.stack });
+      res.status(500).send(`<meta charset="utf-8"><h2 style="font-family:sans-serif;color:#b91c1c">שגיאה</h2><pre>${(e && e.message) || String(e)}</pre>`);
+    }
+  }
+);
+
+// Build a Gmail search query for the "since" date + attachment/keyword filter.
+function buildGmailQuery(sinceDate) {
+  const kw = [...RECEIPT_KEYWORDS_HE, ...RECEIPT_KEYWORDS_EN]
+    .map(k => `"${k}"`).join(" OR ");
+  // Attachment types we care about (Gmail supports has:attachment + filename:pdf etc.)
+  const attachFilter = "(has:attachment AND (filename:pdf OR filename:jpg OR filename:jpeg OR filename:png))";
+  const kwFilter = `(subject:(${kw}) OR ${kw})`;
+  let q = `(${attachFilter}) AND (${kwFilter} OR has:attachment)`;
+  if (sinceDate) {
+    const y = sinceDate.getFullYear();
+    const m = String(sinceDate.getMonth() + 1).padStart(2, "0");
+    const d = String(sinceDate.getDate()).padStart(2, "0");
+    q += ` after:${y}/${m}/${d}`;
+  }
+  return q;
+}
+
+exports.syncgmailimports = onCall(
+  {
+    region: "us-central1",
+    secrets: [gmailOauthClientId, gmailOauthClientSecret],
+    timeoutSeconds: 540,
+    memory: "1GiB",
+  },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const account = String(req.data && req.data.account || "").trim().toLowerCase();
+    const sinceDaysBack = Math.max(0, Math.min(3650, parseInt(req.data && req.data.sinceDaysBack, 10) || 30));
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(account)) {
+      throw new HttpsError("invalid-argument", "invalid account");
+    }
+    const accKey = accountKey(account);
+    const db = admin.firestore();
+    const tokenDoc = await db.collection("gmailTokens").doc(accKey).get();
+    if (!tokenDoc.exists) {
+      throw new HttpsError("failed-precondition", `Gmail account ${account} לא מחובר. חברי אותו קודם.`);
+    }
+    const refreshToken = tokenDoc.data().refreshToken;
+    if (!refreshToken) throw new HttpsError("failed-precondition", "missing refresh_token");
+
+    const oauth2Client = await makeOAuthClient();
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    const { google } = require("googleapis");
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+    const sinceDate = sinceDaysBack > 0 ? new Date(Date.now() - sinceDaysBack * 86400000) : null;
+    const q = buildGmailQuery(sinceDate);
+    logger.info("syncgmailimports: starting", { account, sinceDaysBack, q });
+
+    // Page through the results (Gmail returns up to 500 per page)
+    let pageToken = null;
+    let scanned = 0, imported = 0, skipped = 0, errors = 0;
+    const bucket = admin.storage().bucket();
+    const startedAt = Date.now();
+    const MAX_MS = 480_000;  // leave 60s buffer below CF 540s timeout
+
+    do {
+      if (Date.now() - startedAt > MAX_MS) {
+        logger.warn("syncgmailimports: hitting time budget, stopping paging", { scanned, imported });
+        break;
+      }
+      const listResp = await gmail.users.messages.list({
+        userId: "me",
+        q,
+        pageToken: pageToken || undefined,
+        maxResults: 100,
+      });
+      const msgs = (listResp.data && listResp.data.messages) || [];
+      pageToken = listResp.data && listResp.data.nextPageToken;
+
+      for (const m of msgs) {
+        if (Date.now() - startedAt > MAX_MS) break;
+        scanned++;
+        try {
+          // Cheap dedup: if any doc with this msgId already exists → skip full fetch
+          const dupQ = await db.collection("emailImports")
+            .where("msgId", "==", m.id)
+            .where("accountKey", "==", accKey)
+            .limit(1).get();
+          if (!dupQ.empty) { skipped++; continue; }
+
+          const full = await gmail.users.messages.get({
+            userId: "me",
+            id: m.id,
+            format: "full",
+          });
+          const payload = full.data.payload;
+          const headers = extractHeaders(payload);
+          const { name: fromName, email: fromEmail } = parseFromHeader(headers.From);
+          const emailDate = headers.Date ? new Date(headers.Date).toISOString() : new Date().toISOString();
+          const atts = collectAttachments(payload)
+            .filter(a => RECEIPT_MIME_ALLOWED.has((a.mimeType || "").toLowerCase()));
+          if (!atts.length) { skipped++; continue; }
+
+          let attIdx = 0;
+          for (const att of atts) {
+            attIdx++;
+            const docId = `${m.id}_${attIdx}`;
+            const attResp = await gmail.users.messages.attachments.get({
+              userId: "me",
+              messageId: m.id,
+              id: att.attachmentId,
+            });
+            const data = decodeBase64Url(attResp.data.data);
+            const safeName = att.filename.replace(/[^\w.\-א-ת ]+/g, "_").slice(0, 120);
+            const storagePath = `email-imports/${accKey}/${m.id}/${safeName}`;
+            const file = bucket.file(storagePath);
+            await file.save(data, {
+              contentType: att.mimeType,
+              metadata: {
+                metadata: {
+                  emailFrom: fromEmail, emailSubject: headers.Subject.slice(0, 200),
+                  msgId: m.id, account,
+                },
+              },
+              resumable: false,
+            });
+            // Get a long-lived download URL (signed 7 days ahead; admin UI can refresh)
+            const [signedUrl] = await file.getSignedUrl({
+              action: "read",
+              expires: Date.now() + 7 * 86400_000,
+            });
+            await db.collection("emailImports").doc(docId).set({
+              id: docId,
+              account,
+              accountKey: accKey,
+              emailFrom: fromEmail,
+              emailFromName: fromName,
+              emailSubject: headers.Subject || "",
+              emailDate,
+              attachmentFilename: att.filename,
+              attachmentMimeType: att.mimeType,
+              storagePath,
+              storageUrl: signedUrl,
+              storageUrlExpiresAt: Date.now() + 7 * 86400_000,
+              extractedAmount: null,
+              extractedDate: null,
+              ocrText: null,        // filled lazily by client OCR
+              status: "pending",
+              importedAt: new Date().toISOString(),
+              msgId: m.id,
+              attachmentIndex: attIdx,
+            });
+            imported++;
+          }
+        } catch (e) {
+          errors++;
+          logger.warn("syncgmailimports: msg failed", { msgId: m.id, error: e && e.message });
+        }
+      }
+    } while (pageToken);
+
+    logger.info("syncgmailimports: done", { account, scanned, imported, skipped, errors });
+    return { success: true, account, scanned, imported, skipped, errors };
+  }
+);
+
+// Refresh the storage signed URL for an imported email (client calls this
+// when a URL has expired). Admin only.
+exports.refreshemailimporturl = onCall(
+  { region: "us-central1" },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const docId = String(req.data && req.data.docId || "");
+    if (!docId) throw new HttpsError("invalid-argument", "docId required");
+    const db = admin.firestore();
+    const ref = db.collection("emailImports").doc(docId);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "doc not found");
+    const path = snap.data().storagePath;
+    if (!path) throw new HttpsError("failed-precondition", "no storagePath");
+    const [url] = await admin.storage().bucket().file(path).getSignedUrl({
+      action: "read",
+      expires: Date.now() + 7 * 86400_000,
+    });
+    await ref.update({ storageUrl: url, storageUrlExpiresAt: Date.now() + 7 * 86400_000 });
+    return { url };
+  }
+);

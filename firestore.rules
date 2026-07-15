@@ -171,6 +171,22 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // EMAIL IMPORTS (invoices/receipts pulled from Gmail) — ADMIN ONLY
+    match /emailImports/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // GMAIL TOKENS (refresh_token per connected Gmail account) — ADMIN ONLY
+    // Contains sensitive OAuth refresh_token; even read is admin-only.
+    match /gmailTokens/{accountKey} {
+      allow read, write: if isAdmin();
+    }
+
+    // GMAIL OAUTH STATE (short-lived CSRF nonces) — ADMIN ONLY
+    match /gmailOAuthState/{nonce} {
+      allow read, write: if isAdmin();
+    }
+
     // FINAL DENY — anything not matched above is closed.
     // This replaces the previous permissive catch-all that allowed any signed-in user
     // to read/write unlisted collections (including sensitive ones we hadn't declared).

@@ -66,6 +66,13 @@ service firebase.storage {
       allow write: if false;  // only backend
     }
 
+    // Email imports (invoices/receipts pulled from Gmail).
+    // Written only by backend syncgmailimports CF; read for admin UI review.
+    match /email-imports/{accountKey}/{allPaths=**} {
+      allow read: if isAdmin();
+      allow write: if false;  // only backend
+    }
+
     // Default deny.
     match /{allPaths=**} {
       allow read, write: if false;
