@@ -849,6 +849,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             • <b>מותאם אישית</b> — התראות שאת יוצרת בעצמך לפי תזמון שאת קובעת<br>
             • <b>היסטוריה</b> — כל ההתראות ש-יצאו ב-30 הימים האחרונים
           </div>
+          <button onclick="openBroadcastPushMo()" class="btn-prim" style="width:100%;background:#DC2626;box-shadow:0 4px 14px rgba(220,38,38,0.3);margin:0 0 14px 0;padding:12px;font-size:14px;font-weight:700;min-height:auto">📣 שלחי פוש עכשיו לכל המדריכות</button>
           <div id="notif-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:10px;border-bottom:1.5px solid var(--brd)">
             <button class="notif-tab" data-nt="scheduled" onclick="switchNotifTab('scheduled')" style="padding:6px 14px;border:1.5px solid #1565C0;background:#1565C0;color:white;border-radius:16px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit">⏰ מתוזמן</button>
             <button class="notif-tab" data-nt="custom" onclick="switchNotifTab('custom')" style="padding:6px 14px;border:1.5px solid var(--brd);background:white;color:var(--text);border-radius:16px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit">✏ מותאם אישית</button>
@@ -1269,6 +1270,47 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     <div class="mt"><span>🔔 התראות</span><span class="mc" onclick="closeNotifsMo()">×</span></div>
     <div style="display:flex;gap:8px;margin-bottom:12px"><button onclick="markAllNotifsRead()" class="btn-sec" style="font-size:12px;padding:6px 12px;margin:0;flex:1">✓ סמן הכל כנקרא</button><button onclick="deleteReadNotifs()" class="btn-sec" style="font-size:12px;padding:6px 12px;margin:0">🗑️ נקה שנקראו</button></div>
     <div id="notifs-list"></div>
+  </div>
+</div>
+
+<div class="mo" id="broadcast-push-mo">
+  <div class="md" style="max-width:560px;max-height:92vh;overflow-y:auto">
+    <div class="mt"><span>📣 שליחת פוש מיידית</span><span class="mc" onclick="closeBroadcastPushMo()">×</span></div>
+    <div style="background:#FEF2F2;border-right:4px solid #DC2626;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#7F1D1D;line-height:1.5">
+      <b>⚠ פעולה מיידית!</b> הפוש יגיע לטלפון של כל מדריכה תוך שניות. אין ביטול.
+    </div>
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">אייקון</label>
+    <input type="text" id="bp-icon" maxlength="3" class="md-input" placeholder="🔔" value="🔔" oninput="updateBroadcastPreview()">
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">כותרת *</label>
+    <input type="text" id="bp-title" class="md-input" maxlength="50" placeholder="למשל: תזכורת חשובה" oninput="updateBroadcastPreview()">
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">תוכן *</label>
+    <textarea id="bp-body" class="md-input" rows="3" maxlength="200" placeholder="הסבירי בקצרה..." style="font-family:inherit" oninput="updateBroadcastPreview()"></textarea>
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:4px">👥 נמענים</label>
+    <select id="bp-rec-type" class="md-input" onchange="renderBroadcastRecipientsFields();updateBroadcastPreview()" style="margin-bottom:6px">
+      <option value="all">כל המדריכות</option>
+      <option value="specialty">לפי התמחות</option>
+      <option value="specific">מדריכה ספציפית</option>
+    </select>
+    <div id="bp-rec-fields"></div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);margin:6px 0 10px;cursor:pointer">
+      <input type="checkbox" id="bp-only-active-push" style="width:16px;height:16px;cursor:pointer" onchange="updateBroadcastPreview()">
+      רק מדריכות שהפעילו התראות פוש
+    </label>
+    <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin:12px 0 4px;display:block">👁 תצוגה מקדימה</label>
+    <div id="bp-preview" style="background:linear-gradient(135deg,#1F2937,#374151);color:white;border-radius:14px;padding:12px 14px;margin-bottom:14px;box-shadow:0 4px 12px rgba(0,0,0,0.2);min-height:64px">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div id="bp-preview-icon" style="font-size:22px;flex-shrink:0">🔔</div>
+        <div style="flex:1;min-width:0">
+          <div id="bp-preview-title" style="font-weight:700;font-size:13px;color:white">כותרת ההודעה</div>
+          <div id="bp-preview-body" style="font-size:12px;color:#D1D5DB;margin-top:2px;line-height:1.4;white-space:pre-wrap">תוכן ההודעה יופיע כאן...</div>
+        </div>
+      </div>
+      <div id="bp-preview-count" style="font-size:11px;color:#93C5FD;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15);font-weight:600">👥 יישלח ל־0 מדריכות</div>
+    </div>
+    <div class="ma" style="margin-top:14px">
+      <button class="btn-prim" id="bp-send-btn" style="background:#16A34A;flex:1;margin:0;min-height:auto;padding:14px" onclick="sendBroadcastPush()">📤 שלחי מיד</button>
+      <button class="btn-sec" onclick="closeBroadcastPushMo()">ביטול</button>
+    </div>
   </div>
 </div>
 
@@ -2031,6 +2073,14 @@ function updateCnRecUids(){const checked=[...document.querySelectorAll('.cn-rec-
 async function saveCustomNotif(id){const title=document.getElementById('cn-title').value.trim();const body=document.getElementById('cn-body').value.trim();const icon=document.getElementById('cn-icon').value.trim()||'🔔';if(!title||!body){alert('שם ותוכן חובה');return}const data={icon,title,body,schedule:_cnSchDraft,recipients:_cnRecDraft,enabled:true,updatedAt:new Date().toISOString()};try{if(id){await fbDb.collection('customNotifications').doc(id).set(data,{merge:true})}else{data.createdAt=new Date().toISOString();data.createdBy=cu.uid||cu.username||'admin';await fbDb.collection('customNotifications').add(data)}document.getElementById('cn-edit-mo').style.display='none';renderNotifCustom()}catch(e){alert('שגיאה: '+(e.message||e))}}
 async function toggleCustomNotif(id,enabled){try{await fbDb.collection('customNotifications').doc(id).set({enabled,updatedAt:new Date().toISOString()},{merge:true});const n=_customNotifs.find(x=>x.id===id);if(n)n.enabled=enabled;renderNotifCustom()}catch(e){alert('שגיאה: '+(e.message||e))}}
 async function deleteCustomNotif(id,name){if(!confirm('למחוק את ההתראה "'+name+'"?'))return;try{await fbDb.collection('customNotifications').doc(id).delete();renderNotifCustom()}catch(e){alert('שגיאה: '+(e.message||e))}}
+/* === Broadcast Push (marker: broadcast-push-v1) === */
+function _bpActiveInstructors(){return(DB.get('users')||[]).filter(u=>u&&u.role!=='admin'&&!u.offboardedAt&&(u.uid||u.id))}
+function _bpResolveRecipients(){const type=(document.getElementById('bp-rec-type')||{}).value||'all';const onlyActivePush=!!(document.getElementById('bp-only-active-push')||{}).checked;let list=_bpActiveInstructors();if(type==='specialty'){const spec=(document.getElementById('bp-spec')||{}).value||'';if(!spec)return[];list=list.filter(u=>u.specialty===spec)}else if(type==='specific'){const uid=(document.getElementById('bp-uid')||{}).value||'';if(!uid)return[];list=list.filter(u=>String(u.uid||u.id)===String(uid))}if(onlyActivePush){list=list.filter(u=>u.uid&&(u.pushEnabled===true||(u.oneSignalPlayerIds&&u.oneSignalPlayerIds.length)||(u.oneSignalSubscriptionIds&&u.oneSignalSubscriptionIds.length)))}return list.filter(u=>u.uid)}
+function renderBroadcastRecipientsFields(){const type=(document.getElementById('bp-rec-type')||{}).value||'all';const box=document.getElementById('bp-rec-fields');if(!box)return;if(type==='specialty'){const opts=Object.keys(SPEC_LABELS).map(k=>`<option value="${esc(k)}">${esc(SPEC_LABELS[k])}</option>`).join('');box.innerHTML=`<select id="bp-spec" class="md-input" onchange="updateBroadcastPreview()" style="margin-bottom:6px"><option value="">— בחרי התמחות —</option>${opts}</select>`}else if(type==='specific'){const users=_bpActiveInstructors().slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));const opts=users.map(u=>`<option value="${esc(String(u.uid||u.id))}">${esc(u.name||'ללא שם')}</option>`).join('');box.innerHTML=`<select id="bp-uid" class="md-input" onchange="updateBroadcastPreview()" style="margin-bottom:6px"><option value="">— בחרי מדריכה —</option>${opts}</select>`}else{box.innerHTML=''}}
+function updateBroadcastPreview(){const icon=(document.getElementById('bp-icon')||{}).value||'🔔';const title=(document.getElementById('bp-title')||{}).value||'כותרת ההודעה';const body=(document.getElementById('bp-body')||{}).value||'תוכן ההודעה יופיע כאן...';const iconEl=document.getElementById('bp-preview-icon');const titleEl=document.getElementById('bp-preview-title');const bodyEl=document.getElementById('bp-preview-body');const cntEl=document.getElementById('bp-preview-count');if(iconEl)iconEl.textContent=icon;if(titleEl)titleEl.textContent=title;if(bodyEl)bodyEl.textContent=body;if(cntEl){const n=_bpResolveRecipients().length;cntEl.textContent=`👥 יישלח ל־${n} מדריכות`+(n===0?' (אין נמענים תואמים)':'')}}
+function openBroadcastPushMo(){const mo=document.getElementById('broadcast-push-mo');if(!mo){alert('שגיאה: מודל שידור לא נטען');return}['bp-title','bp-body'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});const iconEl=document.getElementById('bp-icon');if(iconEl)iconEl.value='🔔';const typeEl=document.getElementById('bp-rec-type');if(typeEl)typeEl.value='all';const activeEl=document.getElementById('bp-only-active-push');if(activeEl)activeEl.checked=false;renderBroadcastRecipientsFields();updateBroadcastPreview();mo.classList.add('open')}
+function closeBroadcastPushMo(){const mo=document.getElementById('broadcast-push-mo');if(mo)mo.classList.remove('open')}
+async function sendBroadcastPush(){const icon=(document.getElementById('bp-icon').value||'🔔').trim()||'🔔';const title=(document.getElementById('bp-title').value||'').trim();const body=(document.getElementById('bp-body').value||'').trim();if(!title){alert('כותרת חובה');return}if(!body){alert('תוכן חובה');return}if(title.length>50){alert('כותרת מוגבלת ל־50 תווים');return}if(body.length>200){alert('תוכן מוגבל ל־200 תווים');return}const recipients=_bpResolveRecipients();if(!recipients.length){alert('לא נמצאו נמענים תואמים לסינון');return}if(!confirm(`לשלוח פוש ל־${recipients.length} מדריכות?\n\nהפעולה מיידית ואינה ניתנת לביטול.`))return;const btn=document.getElementById('bp-send-btn');if(btn){btn.disabled=true;btn.textContent=`⏳ שולחת ל־${recipients.length}...`;btn.style.opacity='0.7'}console.log('[broadcast]',{sender:cu&&(cu.uid||cu.username),recipientCount:recipients.length,title,icon});let ok=0,fail=0;const results=await Promise.allSettled(recipients.map(u=>createNotification(u.uid,'admin_broadcast',icon,title,body,null)));results.forEach(r=>{if(r.status==='fulfilled')ok++;else{fail++;console.warn('[broadcast] send failed:',r.reason)}});if(btn){btn.disabled=false;btn.textContent='📤 שלחי מיד';btn.style.opacity='1'}const summary=fail?`✓ נשלח ל־${ok} מדריכות\n✗ נכשל ל־${fail}\n\nהפוש יגיע תוך שניות למי שההודעה נכתבה עבורה.`:`✓ נשלח ל־${ok} מדריכות · הפוש יגיע תוך שניות`;alert(summary);closeBroadcastPushMo();if(_notifActiveTab==='history')renderNotifHistory()}
 async function renderNotifHistory(){const el=document.getElementById('notif-content');if(!el)return;el.innerHTML='<div style="text-align:center;padding:20px;color:var(--mut)">⏳ טוען...</div>';try{const snap=await fbDb.collection('notifications').orderBy('createdAt','desc').limit(100).get();_notifHistory=[];snap.forEach(d=>_notifHistory.push({id:d.id,...d.data()}));if(!_notifHistory.length){el.innerHTML='<div style="padding:20px;text-align:center;color:var(--mut);background:var(--bg);border-radius:8px">אין היסטוריית התראות</div>';return}const users=DB.get('users')||[];const userByUid={};users.forEach(u=>{if(u.uid)userByUid[u.uid]=u;if(u.id)userByUid[String(u.id)]=u});const byDate={};_notifHistory.forEach(n=>{const dt=new Date(n.createdAt||Date.now());const k=dt.toISOString().slice(0,10);if(!byDate[k])byDate[k]=[];byDate[k].push(n)});const html=Object.keys(byDate).sort().reverse().map(date=>{const items=byDate[date];const dt=new Date(date);return `<div style="margin-bottom:14px"><div style="font-size:11px;font-weight:700;color:#1565C0;padding:6px 10px;background:#E1F2FA;border-radius:6px;margin-bottom:6px">📅 ${dt.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric',weekday:'long'})}  <span style="color:var(--mut);font-weight:400">(${items.length} התראות)</span></div>${items.map(n=>{const recipient=userByUid[n.recipientUid]?userByUid[n.recipientUid].name:'?';const time=new Date(n.createdAt).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});return`<div style="padding:8px 10px;border-bottom:1px solid #F0F0F0;display:flex;gap:8px;align-items:flex-start"><div style="font-size:18px;flex-shrink:0">${esc(n.icon||'🔔')}</div><div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;color:var(--text)">${esc(n.title||'')}</div><div style="font-size:10px;color:var(--mut);margin-top:2px">${esc((n.body||'').slice(0,120))}${(n.body||'').length>120?'...':''}</div><div style="font-size:10px;color:#0EA5E9;margin-top:3px">👤 ${esc(recipient)} · ${esc(n.createdByName||n.createdBy||'?')}</div></div><div style="font-size:10px;color:var(--mut);flex-shrink:0">${time}</div></div>`}).join('')}</div>`}).join('');el.innerHTML=html}catch(e){el.innerHTML='<div style="padding:20px;text-align:center;color:#C62828">⚠ '+esc(e.message||e)+'</div>'}}
 let _campActiveSub='guide',_campClients=[],_campSessions=[],_ccPending=null;
 function switchCampTab(name){_campActiveSub=name;document.querySelectorAll('.camp-tab').forEach(b=>{const active=b.dataset.ct===name;b.style.background=active?'#FB923C':'white';b.style.color=active?'white':'var(--text)';b.style.borderColor=active?'#FB923C':'var(--brd)'});renderCampActive()}
