@@ -5729,8 +5729,8 @@ function parseFromHeader(from) {
 async function makeOAuthClient() {
   const { google } = require("googleapis");
   return new google.auth.OAuth2(
-    gmailOauthClientId.value(),
-    gmailOauthClientSecret.value(),
+    String(gmailOauthClientId.value() || "").trim(),
+    String(gmailOauthClientSecret.value() || "").trim(),
     GMAIL_OAUTH_REDIRECT
   );
 }
