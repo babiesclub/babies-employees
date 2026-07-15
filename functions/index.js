@@ -5832,20 +5832,16 @@ exports.oauthgmailcallback = onRequest(
   }
 );
 
-// Build a Gmail search query for the "since" date + attachment/keyword filter.
-function buildGmailQuery(sinceDate) {
+// Build a Gmail search query. sinceDate = older bound (after:). beforeDate = newer bound (before:).
+function buildGmailQuery(sinceDate, beforeDate) {
   const kw = [...RECEIPT_KEYWORDS_HE, ...RECEIPT_KEYWORDS_EN]
     .map(k => `"${k}"`).join(" OR ");
-  // Attachment types we care about (Gmail supports has:attachment + filename:pdf etc.)
   const attachFilter = "(has:attachment AND (filename:pdf OR filename:jpg OR filename:jpeg OR filename:png))";
   const kwFilter = `(subject:(${kw}) OR ${kw})`;
   let q = `(${attachFilter}) AND (${kwFilter} OR has:attachment)`;
-  if (sinceDate) {
-    const y = sinceDate.getFullYear();
-    const m = String(sinceDate.getMonth() + 1).padStart(2, "0");
-    const d = String(sinceDate.getDate()).padStart(2, "0");
-    q += ` after:${y}/${m}/${d}`;
-  }
+  const fmt = d => `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`;
+  if (sinceDate) q += ` after:${fmt(sinceDate)}`;
+  if (beforeDate) q += ` before:${fmt(beforeDate)}`;
   return q;
 }
 
@@ -5860,8 +5856,14 @@ exports.syncgmailimports = onCall(
     await requireAdmin(req.auth);
     const account = String(req.data && req.data.account || "").trim().toLowerCase();
     const sinceDaysBack = Math.max(0, Math.min(3650, parseInt(req.data && req.data.sinceDaysBack, 10) || 30));
+    const fromMonth = String((req.data && req.data.fromMonth) || "").trim();  // "YYYY-MM"
+    const toMonth = String((req.data && req.data.toMonth) || "").trim();      // "YYYY-MM"
+    const monthRe = /^\d{4}-\d{2}$/;
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(account)) {
       throw new HttpsError("invalid-argument", "invalid account");
+    }
+    if ((fromMonth && !monthRe.test(fromMonth)) || (toMonth && !monthRe.test(toMonth))) {
+      throw new HttpsError("invalid-argument", "fromMonth/toMonth must be YYYY-MM");
     }
     const accKey = accountKey(account);
     const db = admin.firestore();
@@ -5877,9 +5879,17 @@ exports.syncgmailimports = onCall(
     const { google } = require("googleapis");
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    const sinceDate = sinceDaysBack > 0 ? new Date(Date.now() - sinceDaysBack * 86400000) : null;
-    const q = buildGmailQuery(sinceDate);
-    logger.info("syncgmailimports: starting", { account, sinceDaysBack, q });
+    let sinceDate = null, beforeDate = null;
+    if (fromMonth && toMonth) {
+      const [fy, fm] = fromMonth.split("-").map(n => parseInt(n, 10));
+      const [ty, tm] = toMonth.split("-").map(n => parseInt(n, 10));
+      sinceDate = new Date(fy, fm - 1, 1);            // 1st of fromMonth
+      beforeDate = new Date(ty, tm, 1);               // 1st of month AFTER toMonth (exclusive)
+    } else if (sinceDaysBack > 0) {
+      sinceDate = new Date(Date.now() - sinceDaysBack * 86400000);
+    }
+    const q = buildGmailQuery(sinceDate, beforeDate);
+    logger.info("syncgmailimports: starting", { account, sinceDaysBack, fromMonth, toMonth, q });
 
     // Page through the results (Gmail returns up to 500 per page)
     let pageToken = null;

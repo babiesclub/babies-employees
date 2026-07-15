@@ -1087,13 +1087,27 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
       <option value="daviddcpe@gmail.com">daviddcpe@gmail.com</option>
     </select>
     <label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-top:10px;margin-bottom:6px;display:block;text-transform:uppercase">טווח סריקה</label>
-    <select id="egm-bf-range" class="md-input">
+    <select id="egm-bf-range" class="md-input" onchange="toggleEgmBfCustom()">
       <option value="30">חודש אחורה</option>
       <option value="90" selected>3 חודשים אחורה</option>
       <option value="180">חצי שנה אחורה</option>
       <option value="365">שנה אחורה</option>
       <option value="1825">5 שנים (הכל)</option>
+      <option value="custom">🎯 טווח חודשים מותאם</option>
     </select>
+    <div id="egm-bf-custom" style="display:none;background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:8px;padding:10px;margin-top:8px">
+      <div style="font-size:11px;color:#075985;line-height:1.5;margin-bottom:8px">בחרי חודש התחלה וסיום. הסריקה תכלול את שני החודשים כולל.</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div style="flex:1;min-width:130px">
+          <label style="font-size:11px;font-weight:700;color:#075985;display:block;margin-bottom:3px">מ־</label>
+          <input type="month" id="egm-bf-from" class="md-input" style="margin:0;direction:ltr">
+        </div>
+        <div style="flex:1;min-width:130px">
+          <label style="font-size:11px;font-weight:700;color:#075985;display:block;margin-bottom:3px">עד</label>
+          <input type="month" id="egm-bf-to" class="md-input" style="margin:0;direction:ltr">
+        </div>
+      </div>
+    </div>
     <div id="egm-bf-status" style="display:none;text-align:center;padding:10px;color:var(--p);font-weight:600;background:#F0F9FF;border-radius:8px;margin-top:10px;font-size:12px"></div>
     <div class="ma" style="margin-top:14px">
       <button id="egm-bf-btn" class="btn-prim" style="flex:1;margin-top:0" onclick="submitEgmBackfill()">🔄 התחל סריקה</button>
@@ -1904,9 +1918,11 @@ function openEgmConnect(){document.getElementById('egm-connect-status').style.di
 function openEgmConnectFor(acc){document.getElementById('egm-connect-acc').value=acc;openEgmConnect()}
 function closeEgmConnect(){document.getElementById('egm-connect-mo').classList.remove('open')}
 async function submitEgmConnect(){const account=document.getElementById('egm-connect-acc').value;const btn=document.getElementById('egm-connect-btn');const stat=document.getElementById('egm-connect-status');btn.disabled=true;stat.style.display='block';stat.textContent='מבקש כתובת OAuth מהשרת...';const popup=window.open('about:blank','_blank','width=560,height=680');if(popup){try{popup.document.write('<meta charset="utf-8"><style>body{font-family:sans-serif;text-align:center;padding:60px;color:#374151;direction:rtl}h2{color:#2563EB}</style><h2>⏳ טוען חיבור ל־Google...</h2><p>אל תסגרי את החלון הזה.</p>')}catch(e){}}try{const fn=window.fbFunctions.httpsCallable('getgmailauthurl');const r=await fn({account});const url=r.data&&r.data.url;if(!url)throw new Error('no url returned');if(popup&&!popup.closed){popup.location.href=url;stat.textContent='✓ נפתח חלון Google — אשרי שם.'}else{stat.innerHTML=`חלון קופץ נחסם. <a href="${url}" target="_blank" style="color:#0EA5E9;font-weight:700;font-size:15px">🔗 לחצי כאן לפתיחה ידנית</a>`}btn.disabled=false}catch(e){if(popup&&!popup.closed)popup.close();stat.textContent='✗ '+(e.message||e.code||e);btn.disabled=false}}
-function openEgmBackfill(){document.getElementById('egm-bf-status').style.display='none';document.getElementById('egm-bf-btn').disabled=false;document.getElementById('egm-backfill-mo').classList.add('open')}
+function openEgmBackfill(){document.getElementById('egm-bf-status').style.display='none';document.getElementById('egm-bf-btn').disabled=false;const t=new Date();const ym=`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}`;const to=document.getElementById('egm-bf-to');const from=document.getElementById('egm-bf-from');if(to&&!to.value)to.value=ym;if(from&&!from.value){const d=new Date(t.getFullYear(),t.getMonth()-2,1);from.value=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}toggleEgmBfCustom();document.getElementById('egm-backfill-mo').classList.add('open')}
 function closeEgmBackfill(){document.getElementById('egm-backfill-mo').classList.remove('open')}
-async function submitEgmBackfill(){const account=document.getElementById('egm-bf-acc').value;const days=parseInt(document.getElementById('egm-bf-range').value,10);await egmSyncAccount(account,days,'egm-bf-status','egm-bf-btn');await renderEmailImports()}
+function toggleEgmBfCustom(){const v=document.getElementById('egm-bf-range').value;document.getElementById('egm-bf-custom').style.display=(v==='custom')?'block':'none'}
+async function submitEgmBackfill(){const account=document.getElementById('egm-bf-acc').value;const rangeVal=document.getElementById('egm-bf-range').value;if(rangeVal==='custom'){const fromMonth=document.getElementById('egm-bf-from').value;const toMonth=document.getElementById('egm-bf-to').value;if(!fromMonth||!toMonth){alert('בחרי חודש התחלה וסיום');return}if(fromMonth>toMonth){alert('חודש התחלה חייב להיות לפני חודש הסיום');return}await egmSyncAccountRange(account,fromMonth,toMonth,'egm-bf-status','egm-bf-btn')}else{const days=parseInt(rangeVal,10);await egmSyncAccount(account,days,'egm-bf-status','egm-bf-btn')}await renderEmailImports()}
+async function egmSyncAccountRange(account,fromMonth,toMonth,statusElId,btnElId){const stat=statusElId?document.getElementById(statusElId):document.getElementById('egm-status');const btn=btnElId?document.getElementById(btnElId):null;if(btn)btn.disabled=true;if(stat){stat.style.display='block';stat.textContent=`🔄 סורק את ${account} מ־${fromMonth} עד ${toMonth}... זה יכול לקחת עד 8 דקות.`;stat.style.background='#F0F9FF';stat.style.color='var(--p)'}try{const fn=window.fbFunctions.httpsCallable('syncgmailimports',{timeout:540000});const r=await fn({account,fromMonth,toMonth});const d=r.data||{};if(stat){stat.textContent=`✓ סורקו ${d.scanned||0} מיילים · יובאו ${d.imported||0} קבצים · דילוגים ${d.skipped||0}${d.errors?' · שגיאות '+d.errors:''}`;stat.style.background='#DCFCE7';stat.style.color='#166534'}}catch(e){if(stat){stat.textContent='✗ '+(e.message||e.code||e);stat.style.background='#FEE2E2';stat.style.color='#991B1B'}}finally{if(btn)btn.disabled=false}}
 async function egmSyncAccount(account,days,statusElId,btnElId){const stat=statusElId?document.getElementById(statusElId):document.getElementById('egm-status');const btn=btnElId?document.getElementById(btnElId):null;if(btn)btn.disabled=true;if(stat){stat.style.display='block';stat.textContent=`🔄 סורק את ${account} (${days} ימים)... זה יכול לקחת עד 8 דקות.`}try{const fn=window.fbFunctions.httpsCallable('syncgmailimports',{timeout:540000});const r=await fn({account,sinceDaysBack:days});const d=r.data||{};if(stat){stat.textContent=`✓ סורקו ${d.scanned||0} מיילים · יובאו ${d.imported||0} קבצים · דילוגים ${d.skipped||0}${d.errors?' · שגיאות '+d.errors:''}`;stat.style.background='#DCFCE7';stat.style.color='#166534'}}catch(e){if(stat){stat.textContent='✗ '+(e.message||e.code||e);stat.style.background='#FEE2E2';stat.style.color='#991B1B'}}finally{if(btn)btn.disabled=false}}
 async function egmSyncNow(){const stat=document.getElementById('egm-status');stat.style.display='block';stat.textContent='🔄 סורק את כל החשבונות המחוברים...';await loadEgmTokens();const connected=EGM_ACCOUNTS.filter(a=>_egmTokensCache[egmAccKey(a)]&&_egmTokensCache[egmAccKey(a)].refreshToken);if(!connected.length){stat.textContent='⚠ אין חשבונות מחוברים. לחצי "חבר/י חשבון" קודם.';stat.style.background='#FEF3C7';stat.style.color='#78350F';return}let totalImported=0;for(const acc of connected){try{const fn=window.fbFunctions.httpsCallable('syncgmailimports',{timeout:540000});const r=await fn({account:acc,sinceDaysBack:30});totalImported+=(r.data&&r.data.imported)||0;stat.textContent=`🔄 ${acc}: יובאו ${(r.data&&r.data.imported)||0}. סה"כ ${totalImported} עד כה...`}catch(e){console.error('sync',acc,e);stat.textContent=`⚠ ${acc} נכשל: ${e.message||e}`}}stat.textContent=`✓ סנכרון הושלם. סה"כ ${totalImported} קבצים חדשים.`;stat.style.background='#DCFCE7';stat.style.color='#166534';await renderEmailImports()}
 // Auto-refresh page state if we just returned from OAuth flow.
