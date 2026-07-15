@@ -5670,12 +5670,20 @@ const GMAIL_OAUTH_REDIRECT = "https://us-central1-babiez-app.cloudfunctions.net/
 const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 const RECEIPT_KEYWORDS_HE = ["חשבונית", "קבלה", "מס-קבלה", "מס קבלה"];
 const RECEIPT_KEYWORDS_EN = ["invoice", "receipt", "tax invoice"];
-// Senders whose emails are copies of OUTGOING invoices (Morning/GreenInvoice) —
-// not expenses. Also excludes anything sent by the user herself (from:me).
+// Senders whose emails are NOT expenses: outgoing-invoice copies (Morning),
+// bank salary-slip copies, payment reminders from services, marketing, etc.
 const EXCLUDED_SENDER_DOMAINS = [
   "greeninvoice.co.il",
   "morning.co.il",
   "morningaction.co.il",
+  "poalim.co.il",           // תלושי שכר של בנק הפועלים
+  "leumi.co.il",            // תלושי שכר של בנק לאומי
+  "mizrahi-tefahot.co.il",  // תלושי שכר של בנק מזרחי
+  "discountbank.co.il",     // תלושי שכר של בנק דיסקונט
+  "viacord.com",            // תזכורות תשלום
+  "docs.google.com",        // מסמכי גוגל משותפים
+  "noreply@youtube.com",
+  "no-reply@accounts.google.com",
 ];
 const RECEIPT_MIME_ALLOWED = new Set([
   "application/pdf",
@@ -5848,8 +5856,10 @@ function buildGmailQuery(sinceDate, beforeDate) {
   const excludeSenders = EXCLUDED_SENDER_DOMAINS.map(d => `-from:${d}`).join(" ");
   // in:inbox — only her inbox (not Sent, not archived-to-label-only).
   // -from:me — exclude anything she sent herself.
-  // -from:@greeninvoice.co.il etc — exclude Morning outgoing invoice copies.
-  let q = `in:inbox -from:me ${excludeSenders} (${attachFilter}) AND (${kwFilter} OR has:attachment)`;
+  // -from:@greeninvoice.co.il etc — exclude Morning + bank + service noise.
+  // Require BOTH attachment AND a receipt/invoice keyword (removed the "OR has:attachment"
+  // fallback that let through payslips/tenders/reminders — anything with an attachment).
+  let q = `in:inbox -from:me ${excludeSenders} (${attachFilter}) AND ${kwFilter}`;
   const fmt = d => `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`;
   if (sinceDate) q += ` after:${fmt(sinceDate)}`;
   if (beforeDate) q += ` before:${fmt(beforeDate)}`;
