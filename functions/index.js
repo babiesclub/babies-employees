@@ -9,7 +9,7 @@
  * Web (desktop). The function is the trigger; OneSignal handles delivery.
  */
 
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentWritten, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
@@ -6009,5 +6009,583 @@ exports.refreshemailimporturl = onCall(
     });
     await ref.update({ storageUrl: url, storageUrlExpiresAt: Date.now() + 7 * 86400_000 });
     return { url };
+  }
+);
+
+/* =========================================================================
+ * SALARY MONTHLY FLOW — 6 Cloud Functions
+ *
+ * 1. remindfillfuture — 22 of month 12:00 → push all instructors to fill
+ *    future attendance up to end of month.
+ * 2. watchfutureeditsalert — Firestore trigger on records/*. When date is
+ *    23..end-of-month and record is edited (not new), push admins with the
+ *    exact old→new diff.
+ * 3. sendmonthlyendreport — last day of month 12:00 → create per-instructor
+ *    monthlyReports/{uid_month} doc + push "אשרי דוח סופי עד 20:00".
+ * 4. enforcemonthlyapprovaldeadline — hourly → auto-approve monthlyReports
+ *    still 'pending_approval' after 20:00 on the deadline date.
+ * 5. remindpaymentreceipt — trigger on salaryPayments/*.paid false→true →
+ *    schedule a task to push the instructor 24h later to upload receipt.
+ * 6. runscheduledtasks — hourly → run due entries in scheduledTasks/*.
+ * ========================================================================= */
+
+// Helper: last day of a YYYY-MM month (returns day-of-month as number 28..31)
+function _lastDayOfMonth(year, monthIdx0) {
+  return new Date(year, monthIdx0 + 1, 0).getDate();
+}
+
+// Helper: format YYYY-MM-DD in Asia/Jerusalem
+function _israelYMD(d) {
+  const s = d.toLocaleString("en-US", {
+    timeZone: "Asia/Jerusalem",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = s.split("/"); // MM/DD/YYYY
+  return parts[2] + "-" + parts[0] + "-" + parts[1];
+}
+
+// Helper: create a notification doc (fires sendpushonnotification)
+async function _createNotif(db, recipientUid, type, icon, title, body, link) {
+  const id = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+  const now = new Date().toISOString();
+  await db.collection("notifications").doc(id).set({
+    id,
+    recipientUid,
+    type,
+    icon: icon || "🔔",
+    title,
+    body,
+    link: link || null,
+    createdAt: now,
+    createdBy: "system",
+    createdByName: "מערכת בייביז",
+    read: false,
+    readAt: null,
+  });
+}
+
+/**
+ * 1. remindfillfuture
+ * Runs on 22nd of every month at 12:00 Israel time.
+ * Pushes all non-admin, non-offboarded instructors to fill future attendance.
+ */
+exports.remindfillfuture = onSchedule(
+  {
+    schedule: "0 12 22 * *",
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    timeoutSeconds: 300,
+  },
+  async () => {
+    const db = admin.firestore();
+    const startedAt = Date.now();
+    logger.info("remindfillfuture: start");
+    let sent = 0, failed = 0;
+
+    // Compute current month label
+    const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+    const monthNamesHe = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+    const monthLabel = monthNamesHe[nowIsrael.getMonth()];
+    const monthKey = nowIsrael.getFullYear() + "-" + String(nowIsrael.getMonth() + 1).padStart(2, "0");
+
+    try {
+      const usersSnap = await db.collection("users").get();
+      for (const doc of usersSnap.docs) {
+        const u = doc.data() || {};
+        if (u.role === "admin") continue;
+        if (u.offboardedAt) continue;
+        try {
+          await _createNotif(
+            db,
+            doc.id,
+            "fill_future_reminder",
+            "📅",
+            "זמן למלא נוכחות עתידית",
+            `שלום ${u.name || ""}! נשארו לנו כמה ימים בחודש ${monthLabel}. אנא מלאי את הנוכחות עד סוף החודש. את יכולה לתקן דיווחים עד סוף החודש.`,
+            { screen: "att" }
+          );
+          sent++;
+        } catch (e) {
+          failed++;
+          logger.warn("remindfillfuture: notify failed", { uid: doc.id, error: e.message });
+        }
+      }
+    } catch (e) {
+      logger.error("remindfillfuture: fatal", { error: e.message });
+      throw e;
+    }
+
+    logger.info("remindfillfuture", { sent, failed, month: monthKey, durationMs: Date.now() - startedAt });
+  }
+);
+
+/**
+ * 2. watchfutureeditsalert
+ * Firestore trigger on records/{recordId}. When the record's date is between
+ * the 23rd and end of the current month, and it's an update (not create), and
+ * any of {date, duration, groups, garden} changed — push all admins with the
+ * exact old→new diff.
+ */
+exports.watchfutureeditsalert = onDocumentWritten(
+  { document: "records/{recordId}", region: "us-central1" },
+  async (event) => {
+    const before = event.data && event.data.before && event.data.before.exists ? event.data.before.data() : null;
+    const after = event.data && event.data.after && event.data.after.exists ? event.data.after.data() : null;
+
+    // Only care about updates: skip creates and deletes
+    if (!before || !after) {
+      logger.info("watchfutureeditsalert: skip (not an update)");
+      return;
+    }
+
+    // Only monitored fields
+    const changedFields = [];
+    if (String(before.date || "") !== String(after.date || "")) changedFields.push("date");
+    if (String(before.duration || "") !== String(after.duration || "")) changedFields.push("duration");
+    if (String(before.groups || "") !== String(after.groups || "")) changedFields.push("groups");
+    if (String(before.garden || "") !== String(after.garden || "")) changedFields.push("garden");
+    if (!changedFields.length) {
+      logger.info("watchfutureeditsalert: skip (no monitored field change)");
+      return;
+    }
+
+    // Determine "today" in Israel, and last day of current month
+    const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+    const dayOfMonth = nowIsrael.getDate();
+    if (dayOfMonth < 23) {
+      logger.info("watchfutureeditsalert: skip (outside 23..end-of-month window)", { dayOfMonth });
+      return;
+    }
+
+    // The record's date should be within the future edit window: from today onwards
+    // (or same current month) — we're monitoring edits to future reports
+    const recDateStr = String(after.date || before.date || "");
+    if (!recDateStr) {
+      logger.info("watchfutureeditsalert: skip (no date)");
+      return;
+    }
+    const todayStr = _israelYMD(nowIsrael);
+    const currentMonthStr = todayStr.slice(0, 7);
+    // Interested if the record is in current month AND the record was reported
+    // before today (i.e., it was a future report) OR is still in the future.
+    // Simplest useful signal: record's date is within current month.
+    if (!recDateStr.startsWith(currentMonthStr)) {
+      logger.info("watchfutureeditsalert: skip (record not in current month)", { recDate: recDateStr, month: currentMonthStr });
+      return;
+    }
+
+    const db = admin.firestore();
+
+    // Find instructor name from record.instructorUid
+    let instructorName = "מדריכה";
+    const instructorUid = after.instructorUid || before.instructorUid || null;
+    try {
+      if (instructorUid) {
+        const uSnap = await db.collection("users").doc(String(instructorUid)).get();
+        if (uSnap.exists) instructorName = uSnap.data().name || instructorName;
+      }
+    } catch (e) { /* noop */ }
+
+    // Build human-readable diff
+    const diffParts = [];
+    if (changedFields.includes("date")) {
+      diffParts.push(`תאריך ${before.date || "?"} → ${after.date || "?"}`);
+    }
+    if (changedFields.includes("garden")) {
+      diffParts.push(`גן ${before.garden || "?"} → ${after.garden || "?"}`);
+    }
+    if (changedFields.includes("duration")) {
+      diffParts.push(`${before.duration || "?"}דק → ${after.duration || "?"}דק`);
+    }
+    if (changedFields.includes("groups")) {
+      diffParts.push(`קבוצות ${before.groups || "?"}→${after.groups || "?"}`);
+    }
+    const diffTxt = diffParts.join(" · ");
+    const body = `${instructorName} שינתה דיווח: ${after.garden || before.garden || "?"} · ${after.date || before.date || "?"} · ${diffTxt}`;
+
+    logger.info("watchfutureeditsalert: alerting admins", {
+      instructorUid,
+      instructorName,
+      recordId: event.params.recordId,
+      changedFields,
+      diff: diffTxt,
+    });
+
+    // Fan out to admins
+    let admins = [];
+    try {
+      const snap = await db.collection("users").where("role", "==", "admin").get();
+      snap.forEach((d) => admins.push(d.id));
+    } catch (e) {
+      logger.error("watchfutureeditsalert: failed to load admins", { error: e.message });
+      return;
+    }
+    let ok = 0, fail = 0;
+    for (const adminUid of admins) {
+      try {
+        await _createNotif(
+          db,
+          adminUid,
+          "future_edit_alert",
+          "⚠",
+          "⚠ שינוי בדיווח עתידי",
+          body,
+          { screen: "slr", filter: instructorUid }
+        );
+        ok++;
+      } catch (e) {
+        fail++;
+        logger.warn("watchfutureeditsalert: notify failed", { adminUid, error: e.message });
+      }
+    }
+    logger.info("watchfutureeditsalert: done", { ok, fail, adminCount: admins.length });
+  }
+);
+
+/**
+ * 3. sendmonthlyendreport
+ * Runs daily at 12:00 on days 28..31. Only proceeds if today IS the last
+ * day of the current month (since GCP Scheduler cron has no `L` symbol).
+ * Creates monthlyReports/{uid_month} for every instructor who has records
+ * this month, and pushes them "approve final report by 20:00".
+ */
+exports.sendmonthlyendreport = onSchedule(
+  {
+    schedule: "0 12 28-31 * *",
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    timeoutSeconds: 540,
+  },
+  async () => {
+    const db = admin.firestore();
+    const nowIsrael = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+    const dayOfMonth = nowIsrael.getDate();
+    const lastDay = _lastDayOfMonth(nowIsrael.getFullYear(), nowIsrael.getMonth());
+    if (dayOfMonth !== lastDay) {
+      logger.info("sendmonthlyendreport: not last day, skipping", { dayOfMonth, lastDay });
+      return;
+    }
+    const monthKey = nowIsrael.getFullYear() + "-" + String(nowIsrael.getMonth() + 1).padStart(2, "0");
+    const monthNamesHe = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+    const monthLabel = monthNamesHe[nowIsrael.getMonth()] + " " + nowIsrael.getFullYear();
+    // Deadline: today 20:00 Israel time (ISO)
+    const deadlineIsrael = new Date(nowIsrael);
+    deadlineIsrael.setHours(20, 0, 0, 0);
+    // Convert deadline back to real UTC: nowIsrael was already an Israel-time-clock Date,
+    // so we compute the actual UTC by treating it as an Israel wall-clock.
+    // Simpler: today's date in Israel, at 20:00 local → build ISO with +03:00 offset.
+    // Israel is UTC+2 (winter) or UTC+3 (summer). We use the string form to avoid offset math.
+    const yStr = String(nowIsrael.getFullYear());
+    const mStr = String(nowIsrael.getMonth() + 1).padStart(2, "0");
+    const dStr = String(dayOfMonth).padStart(2, "0");
+    const deadlineIsoLocal = `${yStr}-${mStr}-${dStr}T20:00:00+03:00`; // best-effort; DST edge cases OK for reminders
+    const startedAt = Date.now();
+    logger.info("sendmonthlyendreport: starting", { monthKey, deadline: deadlineIsoLocal });
+
+    let created = 0, skipped = 0, failed = 0;
+
+    try {
+      // Load all instructors
+      const usersSnap = await db.collection("users").get();
+      const instructors = [];
+      usersSnap.forEach((d) => {
+        const u = d.data() || {};
+        if (u.role === "admin") return;
+        if (u.offboardedAt) return;
+        instructors.push({ uid: d.id, name: u.name, id: u.id || null });
+      });
+
+      // Load all records in this month
+      const recordsSnap = await db.collection("records").get();
+      const monthRecordsByUid = {};
+      recordsSnap.forEach((d) => {
+        const r = d.data() || {};
+        if (!r.date || !r.date.startsWith(monthKey)) return;
+        const key = String(r.instructorUid || r.instructorId || "");
+        if (!key) return;
+        if (!monthRecordsByUid[key]) monthRecordsByUid[key] = [];
+        monthRecordsByUid[key].push({ id: d.id, ...r });
+      });
+
+      for (const inst of instructors) {
+        const records = monthRecordsByUid[String(inst.uid)] || monthRecordsByUid[String(inst.id)] || [];
+        if (!records.length) { skipped++; continue; }
+
+        const docId = `${inst.uid}_${monthKey}`;
+        // Idempotent: skip if already exists (created earlier same day)
+        try {
+          const existing = await db.collection("monthlyReports").doc(docId).get();
+          if (existing.exists && (existing.data().status === "approved" || existing.data().status === "rejected")) {
+            skipped++; continue;
+          }
+        } catch (e) { /* noop */ }
+
+        const totalMin = records.reduce((s, r) => s + (Number(r.duration) || 0), 0);
+        const totalGroups = records.reduce((s, r) => s + (Number(r.groups) || 0), 0);
+
+        const doc = {
+          id: docId,
+          instructorUid: inst.uid,
+          instructorName: inst.name || "",
+          month: monthKey,
+          monthLabel,
+          records: records.map(r => ({
+            id: r.id,
+            date: r.date,
+            garden: r.garden || "",
+            duration: r.duration || 0,
+            groups: r.groups || 0,
+            notes: r.notes || "",
+          })),
+          recordCount: records.length,
+          totalMin,
+          totalGroups,
+          status: "pending_approval",
+          deadline: deadlineIsoLocal,
+          createdAt: new Date().toISOString(),
+          createdBy: "system",
+          approvedAt: null,
+          approvedByUid: null,
+          rejectionReason: null,
+        };
+        try {
+          await db.collection("monthlyReports").doc(docId).set(doc, { merge: true });
+          await _createNotif(
+            db,
+            inst.uid,
+            "monthly_report_ready",
+            "📋",
+            "📋 אישור דוח סופי — עד 20:00 היום",
+            `שלום ${inst.name || ""}! הדוח החודשי שלך ל־${monthLabel} מוכן לאישור. אנא היכנסי למסך "אישור דוח חודשי" ואשרי או דחי עד 20:00 היום.`,
+            { screen: "monthly_approval" }
+          );
+          created++;
+        } catch (e) {
+          failed++;
+          logger.warn("sendmonthlyendreport: create failed", { uid: inst.uid, error: e.message });
+        }
+      }
+    } catch (e) {
+      logger.error("sendmonthlyendreport: fatal", { error: e.message, stack: e.stack });
+      throw e;
+    }
+    logger.info("sendmonthlyendreport: done", { created, skipped, failed, month: monthKey, durationMs: Date.now() - startedAt });
+  }
+);
+
+/**
+ * 4. enforcemonthlyapprovaldeadline
+ * Runs hourly. Finds monthlyReports still 'pending_approval' whose deadline
+ * has passed → sets status to 'auto_approved_past_deadline' (locks records).
+ */
+exports.enforcemonthlyapprovaldeadline = onSchedule(
+  {
+    schedule: "every 60 minutes",
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    timeoutSeconds: 300,
+  },
+  async () => {
+    const db = admin.firestore();
+    const nowIso = new Date().toISOString();
+    let scanned = 0, updated = 0, failed = 0;
+    logger.info("enforcemonthlyapprovaldeadline: start");
+    try {
+      const snap = await db.collection("monthlyReports").where("status", "==", "pending_approval").get();
+      for (const d of snap.docs) {
+        scanned++;
+        const data = d.data() || {};
+        if (!data.deadline) continue;
+        if (String(nowIso) < String(data.deadline)) continue;
+        try {
+          await d.ref.update({
+            status: "auto_approved_past_deadline",
+            approvedAt: nowIso,
+            approvedByUid: "system_deadline",
+          });
+          // Notify instructor
+          await _createNotif(
+            db,
+            data.instructorUid,
+            "monthly_report_auto_approved",
+            "⏰",
+            "הדוח שלך אושר אוטומטית",
+            `הדוח החודשי ל־${data.monthLabel || data.month} עבר את זמן האישור (20:00) ואושר אוטומטית. הדיווחים נעולים כעת.`,
+            { screen: "monthly_approval" }
+          );
+          updated++;
+        } catch (e) {
+          failed++;
+          logger.warn("enforcemonthlyapprovaldeadline: update failed", { docId: d.id, error: e.message });
+        }
+      }
+    } catch (e) {
+      logger.error("enforcemonthlyapprovaldeadline: fatal", { error: e.message });
+      throw e;
+    }
+    logger.info("enforcemonthlyapprovaldeadline: done", { scanned, updated, failed });
+  }
+);
+
+/**
+ * 5. remindpaymentreceipt
+ * Trigger: salaryPayments/{docId} is updated to paid=true.
+ * Creates a scheduledTasks entry to remind the instructor 24h later to
+ * upload a receipt. The actual push is sent by runscheduledtasks.
+ */
+exports.remindpaymentreceipt = onDocumentUpdated(
+  { document: "salaryPayments/{docId}", region: "us-central1" },
+  async (event) => {
+    const before = event.data && event.data.before ? event.data.before.data() : null;
+    const after = event.data && event.data.after ? event.data.after.data() : null;
+    if (!before || !after) return;
+    // Only when paid transitions false → true
+    if (before.paid === true) return;
+    if (after.paid !== true) return;
+    const uid = after.userId || after.uid;
+    const month = after.month;
+    if (!uid || !month) {
+      logger.warn("remindpaymentreceipt: missing uid/month", { after });
+      return;
+    }
+    const paidAt = after.paidAt ? new Date(after.paidAt) : new Date();
+    if (isNaN(paidAt.getTime())) {
+      logger.warn("remindpaymentreceipt: invalid paidAt", { paidAt: after.paidAt });
+      return;
+    }
+    const runAt = new Date(paidAt.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    const db = admin.firestore();
+    const taskDocId = `payment_receipt_${uid}_${month}`;
+    try {
+      await db.collection("scheduledTasks").doc(taskDocId).set({
+        id: taskDocId,
+        type: "payment_receipt_reminder",
+        uid,
+        month,
+        runAt,
+        salaryPaymentDocId: event.params.docId,
+        createdAt: new Date().toISOString(),
+        status: "pending",
+      });
+      logger.info("remindpaymentreceipt: scheduled", { taskDocId, runAt, uid, month });
+    } catch (e) {
+      logger.error("remindpaymentreceipt: schedule failed", { error: e.message });
+    }
+  }
+);
+
+/**
+ * 6. runscheduledtasks
+ * Runs hourly. Picks up scheduledTasks whose runAt has passed and status is
+ * 'pending', executes them, marks them 'done' or 'failed'.
+ */
+exports.runscheduledtasks = onSchedule(
+  {
+    schedule: "every 60 minutes",
+    timeZone: "Asia/Jerusalem",
+    region: "us-central1",
+    timeoutSeconds: 300,
+  },
+  async () => {
+    const db = admin.firestore();
+    const nowIso = new Date().toISOString();
+    let scanned = 0, ran = 0, failed = 0;
+    logger.info("runscheduledtasks: start");
+    try {
+      const snap = await db.collection("scheduledTasks")
+        .where("status", "==", "pending")
+        .get();
+      for (const d of snap.docs) {
+        scanned++;
+        const t = d.data() || {};
+        if (!t.runAt || String(nowIso) < String(t.runAt)) continue;
+        try {
+          if (t.type === "payment_receipt_reminder" && t.uid) {
+            await _createNotif(
+              db,
+              t.uid,
+              "upload_receipt_after_payment",
+              "🧾",
+              "הועבר לך תשלום — נא להעלות קבלה",
+              "שלום! אתמול הועבר לך תשלום השכר. אנא העלי לחשבוניות באפליקציה קבלה עבור הסכום שהתקבל.",
+              { screen: "rcp" }
+            );
+          }
+          await d.ref.update({ status: "done", executedAt: nowIso });
+          ran++;
+        } catch (e) {
+          failed++;
+          logger.warn("runscheduledtasks: task failed", { docId: d.id, error: e.message });
+          try { await d.ref.update({ status: "failed", error: e.message, executedAt: nowIso }); } catch (_) {}
+        }
+      }
+    } catch (e) {
+      logger.error("runscheduledtasks: fatal", { error: e.message });
+      throw e;
+    }
+    logger.info("runscheduledtasks: done", { scanned, ran, failed });
+  }
+);
+
+/**
+ * Helper endpoint: instructor calls this to approve/reject their monthly
+ * report. Also triggers push to admin on rejection.
+ */
+exports.submitmonthlyapproval = onCall(
+  { region: "us-central1" },
+  async (req) => {
+    if (!req.auth || !req.auth.uid) {
+      throw new HttpsError("unauthenticated", "Sign in required");
+    }
+    const { docId, action, rejectionReason } = req.data || {};
+    if (!docId || !action) throw new HttpsError("invalid-argument", "missing docId or action");
+    if (!["approve", "reject"].includes(action)) throw new HttpsError("invalid-argument", "invalid action");
+    const db = admin.firestore();
+    const ref = db.collection("monthlyReports").doc(docId);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "report not found");
+    const data = snap.data();
+    if (String(data.instructorUid) !== String(req.auth.uid)) {
+      throw new HttpsError("permission-denied", "not your report");
+    }
+    if (data.status !== "pending_approval") {
+      throw new HttpsError("failed-precondition", `already ${data.status}`);
+    }
+    const now = new Date().toISOString();
+    if (action === "approve") {
+      await ref.update({
+        status: "approved",
+        approvedAt: now,
+        approvedByUid: req.auth.uid,
+      });
+      return { success: true, status: "approved" };
+    }
+    // reject
+    await ref.update({
+      status: "rejected",
+      rejectionReason: rejectionReason || "(ללא הסבר)",
+      rejectedAt: now,
+      rejectedByUid: req.auth.uid,
+    });
+    // Notify all admins with the reason
+    try {
+      const adminsSnap = await db.collection("users").where("role", "==", "admin").get();
+      for (const a of adminsSnap.docs) {
+        await _createNotif(
+          db,
+          a.id,
+          "monthly_report_rejected",
+          "❌",
+          `❌ ${data.instructorName || "מדריכה"} דחתה דוח ל־${data.monthLabel || data.month}`,
+          `סיבה: ${rejectionReason || "(ללא הסבר)"}`,
+          { screen: "slr", filter: data.instructorUid }
+        );
+      }
+    } catch (e) {
+      logger.warn("submitmonthlyapproval: admin notify failed", { error: e.message });
+    }
+    return { success: true, status: "rejected" };
   }
 );

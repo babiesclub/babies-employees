@@ -165,6 +165,33 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // MONTHLY REPORTS — instructor reads her own + updates status via submitmonthlyapproval CF.
+    // Admin has full access. Direct client update on status by the instructor is blocked;
+    // she must call the callable Cloud Function (which sets it server-side under admin creds).
+    match /monthlyReports/{docId} {
+      allow read: if isSignedIn() && (
+        isAdmin()
+        || resource.data.instructorUid == request.auth.uid
+      );
+      allow create, update, delete: if isAdmin();
+    }
+
+    // SALARY ADJUSTMENTS — bonuses / deductions applied to a future month's salary.
+    // Instructor may READ her own to see her expected paycheck; only admin writes.
+    match /salaryAdjustments/{docId} {
+      allow read: if isSignedIn() && (
+        isAdmin()
+        || resource.data.uid == request.auth.uid
+      );
+      allow write: if isAdmin();
+    }
+
+    // SCHEDULED TASKS — deferred work items processed by runscheduledtasks CF.
+    // Admin only from client; the CF runs under admin credentials.
+    match /scheduledTasks/{docId} {
+      allow read, write: if isAdmin();
+    }
+
     // META (gardens, animals lists, etc.) — read all, write admin
     match /meta/{docId} {
       allow read: if isSignedIn();

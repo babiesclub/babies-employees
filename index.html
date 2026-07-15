@@ -446,6 +446,16 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
         <div id="myrpt-list"></div>
       </div>
     </div>
+    <div id="s-monthly_approval" class="screen">
+      <div class="card">
+        <div class="card-title"><div class="card-icon">📋</div>אישור דוח חודשי</div>
+        <div style="background:#FEF3C7;border-right:4px solid #F59E0B;padding:12px;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#78350F;line-height:1.6">
+          <b>💡 מה זה:</b> ביום האחרון של כל חודש בשעה 12:00 נשלח לך הדוח החודשי לאישור.<br>
+          יש לך זמן עד 20:00 באותו היום לאשר או לדחות. לאחר האישור לא יהיה ניתן לתקן דיווחים.
+        </div>
+        <div id="monthly-approval-list"></div>
+      </div>
+    </div>
     <div id="s-wai" class="screen">
       <div class="ph"><h2>💬 הודעות WhatsApp</h2></div>
       <input type="text" id="wai-search" class="md-input" placeholder="🔍 חיפוש בשיחות (שם, טלפון, תוכן)..." oninput="renderWaConversations()" style="margin:10px 0">
@@ -933,6 +943,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     <button class="bnt non-driver" data-s="ani"><span class="bnt-icon">🐾</span>בע"ח</button>
     <button class="bnt non-driver" data-s="rcp"><span class="bnt-icon">🧾</span>חשבוניות</button>
     <button class="bnt instructor-only" data-s="myrpt" style="display:none"><span class="bnt-icon">📄</span>דוח שכר</button>
+    <button class="bnt instructor-only" data-s="monthly_approval" style="display:none"><span class="bnt-icon">📋</span>אישור דוח</button>
     <button class="bnt non-driver" data-s="mygdns"><span class="bnt-icon">🏫</span>הגנים שלי</button>
     <button class="bnt instructor-only" data-s="mysched" style="display:none"><span class="bnt-icon">🗓</span>המערכת</button>
     <button class="bnt camp-only" data-s="mycamp" style="display:none"><span class="bnt-icon">🏕️</span>קייטנות</button>
@@ -2034,7 +2045,7 @@ async function doGoogleSignIn(){if(!window.fbAuth||!window.firebase){alert('Fire
 async function removeAdminPassword(){if(!cu||cu.role!=='admin'){alert('רק אדמין');return}if(!window.fbAuth||!fbAuth.currentUser){alert('צריך להיות מחוברת');return}const providers=(fbAuth.currentUser.providerData||[]).map(p=>p.providerId);if(!providers.includes('google.com')){alert('קודם צריך לקשר חשבון Google. בלי זה לא תוכלי להיכנס בכלל.');return}if(!providers.includes('password')){alert('אין שיטת סיסמא בחשבון שלך — כבר רק Google.');return}const msg='⚠ שימי לב היטב לפני שאת ממשיכה:\n\nמהרגע שתלחצי OK:\n• לא תוכלי יותר להיכנס עם שם משתמש וסיסמא\n• רק כניסה עם Google תעבוד\n• אם תאבדי גישה לחשבון ה־Google — לא תוכלי להיכנס\n\nוודאי:\n1. יש לך את קודי הגיבוי של Google שמורים במקום בטוח\n2. בדקת שכניסה עם Google עובדת (חלון בסתר)\n\nלהמשיך?';if(!confirm(msg))return;const typed=prompt('הקלידי "מחקי סיסמא" כדי לאשר:');if(typed!=='מחקי סיסמא'){alert('הפעולה בוטלה');return}try{await fbAuth.currentUser.unlink('password');try{await fbDb.collection('users').doc(cu.uid).update({password:firebase.firestore.FieldValue.delete()});delete cu.password;const users=DB.get('users')||[];const idx=users.findIndex(u=>u.uid===cu.uid);if(idx>=0){delete users[idx].password;localStorage.setItem('bz3_users',JSON.stringify(users))}}catch(cleanupErr){console.warn('doc password cleanup:',cleanupErr)}alert('✓ שיטת הסיסמא נמחקה!\n\nמעכשיו רק כניסה עם Google תעבוד — עם ה־2FA שהגדרת ב־Google.\n\nזה השלב האחרון והחזק ביותר של האבטחה. חשבון האדמין שלך מוגן עכשיו מלא.');document.getElementById('myprofile-mo').style.display='none'}catch(e){console.error('unlink password failed:',e);if(e.code==='auth/no-such-provider'){alert('אין שיטת סיסמא בחשבון — כבר רק Google.')}else{alert('שגיאה: '+(e.message||e.code))}}}
 async function linkAdminToGoogle(){if(!cu||cu.role!=='admin'){alert('רק אדמין יכולה לקשר חשבון Google');return}if(!window.fbAuth||!fbAuth.currentUser){alert('צריך להיות מחוברת עם סיסמא לפני שקושרים Google');return}if(!window.firebase){alert('Firebase לא זמין');return}try{const provider=new firebase.auth.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});await fbAuth.currentUser.linkWithPopup(provider);const providers=(fbAuth.currentUser.providerData||[]).map(p=>p.providerId).join(', ');const gmail=(fbAuth.currentUser.providerData||[]).find(p=>p.providerId==='google.com');alert('✓ חשבון Google קושר בהצלחה!\n\nמעכשיו אפשר להיכנס גם עם:\n📧 '+(gmail?gmail.email:'הGmail שלך')+'\n\nשלב הבא — הפעילי 2FA בחשבון ה־Google עצמו:\nmyaccount.google.com/security → אימות דו־שלבי\n\nכשה־2FA פעיל שם, כל התחברות דרך Google תדרוש אותו אוטומטית — זה נותן לך את השכבה השנייה של האבטחה.');document.getElementById('myprofile-mo').style.display='none'}catch(e){console.error('link google failed:',e);if(e.code==='auth/popup-closed-by-user')return;if(e.code==='auth/credential-already-in-use'){alert('חשבון ה־Google הזה כבר קשור למשתמש אחר במערכת')}else if(e.code==='auth/provider-already-linked'){alert('כבר קשור. את יכולה להתחבר עם Google מדף ההתחברות')}else if(e.code==='auth/operation-not-allowed'){alert('ספק Google לא מופעל.\n\nלכי ל־Firebase Console:\nהאתחה → Sign-in method → Google → Enable')}else{alert('שגיאה: '+(e.message||e.code))}}}
 function tryRestoreSession(){const sess=DB.get('session');if(!sess||!sess.userId)return false;const user=(DB.get('users')||[]).find(u=>u.id===sess.userId||u.uid===sess.userId);if(!user){localStorage.removeItem('bz3_session');return false}enterApp(user);syncFromCloud().then(()=>{const act=document.querySelector('.screen.active')?.id;if(act==='s-his')renderHis();if(act==='s-adm')renderAdm();if(act==='s-rcp')renderReceipts();renderContractsBanner();renderPdocsBanner()}).catch(e=>console.warn('restore sync:',e));return true}
-document.querySelectorAll('.bnt').forEach(t=>{t.addEventListener('click',()=>{document.querySelectorAll('.bnt').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('s-'+t.dataset.s).classList.add('active');document.querySelector('.body').scrollTop=0;if(t.dataset.s==='att')renderMyWeeklyMaterial();if(t.dataset.s==='his')renderHis();if(t.dataset.s==='adm'){_instActiveTab='animals';_instShowAll=false;_grdActiveTab='all';_grdShowAll=false;renderAdm()}if(t.dataset.s==='wai')loadWaConversations();if(t.dataset.s==='tsk')loadTasks();if(t.dataset.s==='rcp'){syncReceipts().then(()=>renderReceipts())}if(t.dataset.s==='drv')renderDriverDashboard();if(t.dataset.s==='mygdns')renderMyGardens();if(t.dataset.s==='mycamp')renderMyCamp();if(t.dataset.s==='mysched')renderMySchedule();if(t.dataset.s==='myrpt')renderMyReports()})});
+document.querySelectorAll('.bnt').forEach(t=>{t.addEventListener('click',()=>{document.querySelectorAll('.bnt').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('s-'+t.dataset.s).classList.add('active');document.querySelector('.body').scrollTop=0;if(t.dataset.s==='att')renderMyWeeklyMaterial();if(t.dataset.s==='his')renderHis();if(t.dataset.s==='adm'){_instActiveTab='animals';_instShowAll=false;_grdActiveTab='all';_grdShowAll=false;renderAdm()}if(t.dataset.s==='wai')loadWaConversations();if(t.dataset.s==='tsk')loadTasks();if(t.dataset.s==='rcp'){syncReceipts().then(()=>renderReceipts())}if(t.dataset.s==='drv')renderDriverDashboard();if(t.dataset.s==='mygdns')renderMyGardens();if(t.dataset.s==='mycamp')renderMyCamp();if(t.dataset.s==='mysched')renderMySchedule();if(t.dataset.s==='myrpt')renderMyReports();if(t.dataset.s==='monthly_approval')renderMonthlyApprovalScreen()})});
 document.querySelectorAll('.atab').forEach(t=>{t.addEventListener('click',()=>{document.querySelectorAll('.atab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.apanel').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('p-'+t.dataset.p).classList.add('active');const p=t.dataset.p;if(p==='chat'){renderAdminChatList()}else if(p==='mzr'){renderTenders()}else if(p==='cal'){renderAdminCalendar()}else if(p==='ldg'){loadAllCustomersLedger()}else if(p==='slr'){renderSalaryScreen()}else if(p==='egm'){renderEmailImports()}else if(p==='ai'||p==='bkp'){/* static panels */}else{renderAdm()}})});
 function renderAttAsOptions(q){const sel=document.getElementById('att-as-instructor');const empty=document.getElementById('att-as-empty');if(!sel)return;const list=window._asInstrFull||[];const qn=String(q||'').trim().toLowerCase();const matches=qn?list.filter(u=>u.label.toLowerCase().includes(qn)||u.username.toLowerCase().includes(qn)):list;const cur=sel.value;sel.innerHTML='<option value="">— אני (אדמין) —</option>'+matches.map(u=>`<option value="${esc(u.uid)}">${esc(u.label)}</option>`).join('');if(cur&&matches.some(u=>u.uid===cur))sel.value=cur;sel.size=qn?Math.min(8,Math.max(2,matches.length+1)):1;if(empty)empty.style.display=(qn&&matches.length===0)?'block':'none'}
 function filterAttAsInstructor(){const s=document.getElementById('att-as-search');renderAttAsOptions(s?s.value:'')}
@@ -3382,6 +3393,464 @@ function exportLedgerToExcel(){
   XLSX.writeFile(wb,'כרטסת_לקוחות_'+today+'.xlsx');
   alert('📥 הורדתי את הכרטסת. שים לב: לפי הצגת גן — כדי לקבל פירוט חשבוניות בגליון 2/3, פתחי את הגן מהטבלה קודם.');
 }
+</script>
+<script>
+/* ===================================================================
+ * SALARY FLOW EXTENSIONS — 2026-07-15
+ * Monthly approval screen for instructors, salary adjustments UI for
+ * admins, "filled future" badge, and hooks into existing salary render.
+ * =================================================================== */
+
+/* ---------- Salary adjustments cache ---------- */
+window._slrAdjustmentsCache = window._slrAdjustmentsCache || {}; // uid → array of adjustments
+window._slrAdjustmentsAllCache = window._slrAdjustmentsAllCache || null; // month → uid → array
+
+async function _slrLoadAdjustmentsForMonth(month) {
+  if (!window.fbDb || !month) return {};
+  try {
+    const snap = await fbDb.collection('salaryAdjustments').where('effectiveMonth','==',month).get();
+    const map = {};
+    snap.forEach(d => {
+      const data = d.data();
+      const uid = String(data.uid || '');
+      if (!uid) return;
+      if (!map[uid]) map[uid] = [];
+      map[uid].push({ id: d.id, ...data });
+    });
+    window._slrAdjustmentsCache = map;
+    window._slrAdjustmentsMonth = month;
+    return map;
+  } catch (e) { console.warn('load adjustments failed', e); return {}; }
+}
+
+function _slrSumAdjustments(uid) {
+  const arr = (window._slrAdjustmentsCache[String(uid)] || []);
+  let bonuses = 0, deductions = 0;
+  arr.forEach(a => {
+    const amt = Number(a.amount) || 0;
+    if (a.type === 'bonus') bonuses += amt;
+    else if (a.type === 'deduction') deductions += amt;
+  });
+  return { bonuses, deductions, net: bonuses - deductions, items: arr };
+}
+
+/* ---------- Wrap _slrCalcForUser to layer adjustments on top ---------- */
+if (typeof _slrCalcForUser === 'function' && !window._slrCalcForUser_wrapped) {
+  window._slrCalcForUser_wrapped = true;
+  const _origCalc = _slrCalcForUser;
+  window._slrCalcForUser = function(user, month) {
+    const base = _origCalc(user, month);
+    try {
+      const adj = _slrSumAdjustments(user.uid || user.id);
+      base.bonuses = adj.bonuses;
+      base.deductions = adj.deductions;
+      base.adjustmentsNet = adj.net;
+      base.adjustments = adj.items;
+      base.total = (Number(base.total) || 0) + adj.net;
+    } catch (e) { console.warn('adjustments layer failed', e); }
+    return base;
+  };
+}
+
+/* ---------- Detect future records for a user in a month ---------- */
+function _slrHasFutureRecords(user, month) {
+  try {
+    const records = _getInstrMonthRecords(user, month);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    return records.filter(r => r.date && r.date >= todayStr);
+  } catch (e) { return []; }
+}
+
+/* ---------- Wrap renderSalaryScreen to prime adjustments cache ---------- */
+if (typeof renderSalaryScreen === 'function' && !window._renderSalaryScreen_wrapped) {
+  window._renderSalaryScreen_wrapped = true;
+  const _origRender = renderSalaryScreen;
+  window.renderSalaryScreen = function() {
+    if (!cu || cu.role !== 'admin') return;
+    const monthEl = document.getElementById('slr-month');
+    const month = monthEl ? monthEl.value : null;
+    // Also load NEXT month adjustments (that's where new ones default to)
+    if (month && window._slrAdjustmentsMonth !== month) {
+      _slrLoadAdjustmentsForMonth(month).then(() => {
+        if (typeof _slrRenderList === 'function') _slrRenderList(month, _instrRptMonthLabel(month));
+      });
+    }
+    _origRender();
+  };
+}
+
+/* ---------- Wrap _slrRenderList to inject "filled future" badge + adjustments UI ---------- */
+if (typeof _slrRenderList === 'function' && !window._slrRenderList_wrapped) {
+  window._slrRenderList_wrapped = true;
+  const _origRenderList = _slrRenderList;
+  window._slrRenderList = function(month, monthLabel) {
+    _origRenderList(month, monthLabel);
+    // Post-process: inject "filled future" badge + adjustments button into each card
+    try {
+      const list = document.getElementById('slr-list');
+      if (!list) return;
+      const cards = list.querySelectorAll('.ir');
+      const users = (DB.get('users') || []).filter(u => u.role !== 'admin' && !u.offboardedAt);
+      // Build lookup by name (best-effort — same order as filtered list)
+      // Also gather info via card DOM data: no data attr present, so we recompute from users list
+      // Because sort/filter may reorder, we re-derive by matching name text.
+      cards.forEach(card => {
+        const nameEl = card.querySelector('div[style*="font-size:15px"]');
+        if (!nameEl) return;
+        const name = (nameEl.textContent || '').trim();
+        const u = users.find(x => (x.name || '').trim() === name);
+        if (!u) return;
+        const uidKey = String(u.uid || u.id);
+        // Skip if already injected
+        if (card.dataset.slrExtInjected === '1') return;
+        card.dataset.slrExtInjected = '1';
+        // 1) Filled-future badge
+        const future = _slrHasFutureRecords(u, month);
+        const badge = document.createElement('span');
+        badge.style.cssText = 'font-size:10px;padding:3px 8px;border-radius:10px;font-weight:700;margin-inline-start:4px;'
+          + (future.length
+              ? 'background:#D8F3DC;color:#1B4332;border:1px solid #52B788;'
+              : 'background:#FEF3C7;color:#78350F;border:1px solid #F59E0B;');
+        badge.textContent = future.length
+          ? `📅 מילאה קדימה (${future.length})`
+          : '⏳ טרם מילאה עתידיות';
+        // Insert next to name
+        const nameRow = nameEl.parentElement;
+        if (nameRow) nameRow.appendChild(badge);
+
+        // 2) Adjustments button + inline summary
+        const calc = window._slrCalcForUser(u, month);
+        const adjBtn = document.createElement('button');
+        adjBtn.type = 'button';
+        adjBtn.onclick = () => openSalaryAdjustmentsModal(uidKey, month);
+        adjBtn.style.cssText = 'padding:7px 12px;background:#F3E8FF;color:#5B21B6;border:1.5px solid #C4B5FD;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer';
+        adjBtn.textContent = '➕ תוספות/קיזוזים';
+        // Append to buttons row (last flex row in card)
+        const rows = card.querySelectorAll('div[style*="flex-wrap:wrap"]');
+        if (rows.length) rows[rows.length - 1].appendChild(adjBtn);
+
+        // 3) If there are adjustments this month → add a small line under totals
+        if ((calc.bonuses || 0) > 0 || (calc.deductions || 0) > 0) {
+          const summary = document.createElement('div');
+          summary.style.cssText = 'font-size:11px;color:#5B21B6;margin-top:4px;font-weight:700';
+          const parts = [];
+          if (calc.bonuses > 0) parts.push(`בונוסים: +${calc.bonuses.toFixed(2)}₪`);
+          if (calc.deductions > 0) parts.push(`קיזוזים: −${calc.deductions.toFixed(2)}₪`);
+          summary.textContent = parts.join(' · ');
+          // Put after the payment total
+          const totalEl = card.querySelector('div[style*="font-size:24px"]');
+          if (totalEl && totalEl.parentElement) totalEl.parentElement.appendChild(summary);
+        }
+      });
+    } catch (e) { console.warn('slr ext inject failed', e); }
+  };
+}
+
+/* ---------- Salary adjustments modal ---------- */
+async function openSalaryAdjustmentsModal(uidKey, currentMonth) {
+  const users = DB.get('users') || [];
+  const u = users.find(x => String(x.uid || x.id) === String(uidKey));
+  if (!u) { alert('לא נמצאה מדריכה'); return; }
+  // Default target month = NEXT month (so adjustments go into next payroll)
+  const [y, m] = currentMonth.split('-').map(Number);
+  const next = new Date(y, m, 1); // m is already 1-indexed, so this gives next month
+  const nextMonth = next.toISOString().slice(0, 7);
+  let mo = document.getElementById('slr-adj-mo');
+  if (!mo) { mo = document.createElement('div'); mo.id = 'slr-adj-mo'; mo.className = 'mo'; document.body.appendChild(mo); }
+
+  // Load all adjustments for this user (any month)
+  let items = [];
+  try {
+    const snap = await fbDb.collection('salaryAdjustments').where('uid', '==', uidKey).get();
+    snap.forEach(d => items.push({ id: d.id, ...d.data() }));
+  } catch (e) { console.warn('load adj list failed', e); }
+  items.sort((a, b) => String(b.effectiveMonth || '').localeCompare(String(a.effectiveMonth || '')));
+
+  const rowsHtml = items.length
+    ? items.map(a => {
+        const type = a.type === 'bonus' ? '🟢 בונוס' : '🔴 קיזוז';
+        const amt = (Number(a.amount) || 0).toFixed(2);
+        return `<tr style="border-bottom:1px solid #E5E7EB">
+          <td style="padding:6px 8px">${esc(a.effectiveMonth || '')}</td>
+          <td style="padding:6px 8px">${type}</td>
+          <td style="padding:6px 8px;text-align:center;font-weight:700;color:${a.type==='bonus'?'#065F46':'#991B1B'}">${amt}₪</td>
+          <td style="padding:6px 8px;font-size:11px;color:#4B5563">${esc(a.reason || '')}</td>
+          <td style="padding:6px 8px;text-align:center">
+            <button onclick="deleteSalaryAdjustment('${esc(a.id)}','${esc(uidKey)}','${esc(currentMonth)}')" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer">🗑</button>
+          </td>
+        </tr>`;
+      }).join('')
+    : `<tr><td colspan="5" style="padding:20px;text-align:center;color:#6B7280;font-style:italic">אין תוספות/קיזוזים למדריכה זו</td></tr>`;
+
+  mo.innerHTML = `<div class="md" style="max-width:800px;max-height:92vh;overflow-y:auto">
+    <div class="mt"><span>➕ תוספות/קיזוזים — ${esc(u.name||'')}</span><span class="mc" onclick="document.getElementById('slr-adj-mo').style.display='none'">×</span></div>
+    <div style="background:#EDE7F6;border-right:4px solid #7C3AED;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#4527A0;line-height:1.6">
+      <b>💡 מה זה:</b> תוספות (בונוס) או קיזוזים (חוב, עונש, מקדמה) שיתווספו/יופחתו מהשכר של המדריכה בחודש שתבחרי.<br>
+      ברירת מחדל: החודש הבא (<b>${esc(nextMonth)}</b>). את יכולה לבחור חודש אחר.
+    </div>
+    <div style="background:white;border:1.5px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:12px">
+      <div style="font-weight:800;margin-bottom:8px">➕ הוספה</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+        <div>
+          <label style="font-size:11px;color:#6B7280;font-weight:700">סוג</label>
+          <select id="slr-adj-type" style="width:100%;padding:8px;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit">
+            <option value="bonus">🟢 בונוס (תוספת)</option>
+            <option value="deduction">🔴 קיזוז (הפחתה)</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:#6B7280;font-weight:700">סכום ₪</label>
+          <input type="number" id="slr-adj-amount" min="0" step="0.01" placeholder="0.00" style="width:100%;padding:8px;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit">
+        </div>
+        <div>
+          <label style="font-size:11px;color:#6B7280;font-weight:700">חודש (YYYY-MM)</label>
+          <input type="month" id="slr-adj-month" value="${esc(nextMonth)}" style="width:100%;padding:8px;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit">
+        </div>
+      </div>
+      <div>
+        <label style="font-size:11px;color:#6B7280;font-weight:700">סיבה</label>
+        <input type="text" id="slr-adj-reason" placeholder="למשל: חוב מקדמה, בונוס איכות, פיצוי נסיעה מיוחדת..." style="width:100%;padding:8px;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit">
+      </div>
+      <button onclick="saveSalaryAdjustment('${esc(uidKey)}','${esc(currentMonth)}')" style="margin-top:10px;width:100%;padding:10px;background:#7C3AED;color:white;border:none;border-radius:8px;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer">💾 שמור</button>
+    </div>
+    <div style="font-weight:800;margin-bottom:8px">📋 תוספות/קיזוזים קיימים</div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="background:#F3F4F6;border-bottom:2px solid #D1D5DB">
+            <th style="padding:8px;text-align:right">חודש</th>
+            <th style="padding:8px;text-align:right">סוג</th>
+            <th style="padding:8px;text-align:center">סכום</th>
+            <th style="padding:8px;text-align:right">סיבה</th>
+            <th style="padding:8px;text-align:center">פעולה</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    <div class="ma" style="margin-top:14px">
+      <button class="btn-sec" onclick="document.getElementById('slr-adj-mo').style.display='none'" style="width:100%">סגור</button>
+    </div>
+  </div>`;
+  mo.style.display = 'flex';
+  mo.style.alignItems = 'center';
+  mo.style.justifyContent = 'center';
+}
+
+async function saveSalaryAdjustment(uidKey, currentMonth) {
+  const type = document.getElementById('slr-adj-type').value;
+  const amount = Number(document.getElementById('slr-adj-amount').value);
+  const monthEl = document.getElementById('slr-adj-month');
+  const month = monthEl ? monthEl.value : '';
+  const reason = document.getElementById('slr-adj-reason').value.trim();
+  if (!amount || amount <= 0) { alert('נא להזין סכום גדול מ־0'); return; }
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) { alert('נא לבחור חודש (YYYY-MM)'); return; }
+  if (!reason) { alert('נא להזין סיבה'); return; }
+  const users = DB.get('users') || [];
+  const u = users.find(x => String(x.uid || x.id) === String(uidKey));
+  if (!u) { alert('לא נמצאה מדריכה'); return; }
+  const id = 'adj_' + uidKey + '_' + month + '_' + Date.now();
+  const doc = {
+    id, uid: uidKey,
+    instructorName: u.name || '',
+    effectiveMonth: month,
+    type, amount,
+    reason,
+    createdAt: new Date().toISOString(),
+    createdBy: (cu && cu.uid) || null,
+    createdByName: (cu && cu.name) || '',
+  };
+  try {
+    await fbDb.collection('salaryAdjustments').doc(id).set(doc);
+    // Refresh cache if this affects the current view month
+    if (window._slrAdjustmentsMonth === month) {
+      if (!window._slrAdjustmentsCache[uidKey]) window._slrAdjustmentsCache[uidKey] = [];
+      window._slrAdjustmentsCache[uidKey].push(doc);
+    }
+    // Reload adjustments for current month (in case month was the target month) + reopen modal
+    await _slrLoadAdjustmentsForMonth(currentMonth);
+    openSalaryAdjustmentsModal(uidKey, currentMonth);
+    if (typeof _slrRenderList === 'function') _slrRenderList(currentMonth, _instrRptMonthLabel(currentMonth));
+  } catch (e) {
+    alert('שגיאה בשמירה: ' + (e.message || e));
+  }
+}
+
+async function deleteSalaryAdjustment(adjId, uidKey, currentMonth) {
+  if (!confirm('למחוק את התוספת/קיזוז?')) return;
+  try {
+    await fbDb.collection('salaryAdjustments').doc(adjId).delete();
+    await _slrLoadAdjustmentsForMonth(currentMonth);
+    openSalaryAdjustmentsModal(uidKey, currentMonth);
+    if (typeof _slrRenderList === 'function') _slrRenderList(currentMonth, _instrRptMonthLabel(currentMonth));
+  } catch (e) {
+    alert('שגיאה במחיקה: ' + (e.message || e));
+  }
+}
+
+/* ---------- Instructor's monthly approval screen ---------- */
+async function renderMonthlyApprovalScreen() {
+  const list = document.getElementById('monthly-approval-list');
+  if (!list || !cu) return;
+  if (!window.fbDb) {
+    list.innerHTML = '<div class="emp"><div class="ei">☁</div><p>אין חיבור לענן</p></div>';
+    return;
+  }
+  list.innerHTML = '<div class="emp"><div class="ei">⏳</div><p>טוען...</p></div>';
+  try {
+    const snap = await fbDb.collection('monthlyReports').where('instructorUid', '==', cu.uid).get();
+    if (snap.empty) {
+      list.innerHTML = '<div class="emp"><div class="ei">📋</div><p>עדיין אין דוח חודשי לאישור</p><p style="font-size:12px;color:var(--mut);margin-top:6px">ביום האחרון של החודש בשעה 12:00 תישלח לך התראה עם דוח לאישור.</p></div>';
+      return;
+    }
+    const docs = [];
+    snap.forEach(d => docs.push(d.data()));
+    docs.sort((a, b) => String(b.month || '').localeCompare(String(a.month || '')));
+    list.innerHTML = docs.map(rec => _renderMonthlyApprovalCard(rec)).join('');
+  } catch (e) {
+    console.error('renderMonthlyApprovalScreen failed', e);
+    list.innerHTML = `<div class="emp"><div class="ei">⚠</div><p>שגיאה בטעינה</p><p style="font-size:11px;color:var(--mut);margin-top:6px">${esc(e.message || e)}</p></div>`;
+  }
+}
+
+function _renderMonthlyApprovalCard(rec) {
+  const statusMap = {
+    'pending_approval':          { color:'#F59E0B', bg:'#FEF3C7', txt:'#78350F', label:'⏳ ממתין לאישור', showButtons:true },
+    'approved':                  { color:'#22C55E', bg:'#D1FAE5', txt:'#065F46', label:'✅ אושר', showButtons:false },
+    'rejected':                  { color:'#EF4444', bg:'#FEE2E2', txt:'#991B1B', label:'❌ נדחה', showButtons:false },
+    'auto_approved_past_deadline': { color:'#6B7280', bg:'#E5E7EB', txt:'#374151', label:'⏰ אושר אוטומטית (עבר הדדליין)', showButtons:false },
+  };
+  const st = statusMap[rec.status] || statusMap['pending_approval'];
+  const records = Array.isArray(rec.records) ? rec.records : [];
+  const rowsHtml = records.length
+    ? records.map(r => `<tr>
+        <td style="border:1px solid var(--brd);padding:5px 8px;white-space:nowrap">${esc(r.date || '')}</td>
+        <td style="border:1px solid var(--brd);padding:5px 8px">${esc(r.garden || '—')}</td>
+        <td style="border:1px solid var(--brd);padding:5px 8px;text-align:center">${r.groups || '—'}</td>
+        <td style="border:1px solid var(--brd);padding:5px 8px;text-align:center">${r.duration ? r.duration + "'" : '—'}</td>
+        <td style="border:1px solid var(--brd);padding:5px 8px;font-size:11px;color:var(--mut)">${esc(r.notes || '')}</td>
+      </tr>`).join('')
+    : `<tr><td colspan="5" style="padding:20px;text-align:center;color:#6B7280;font-style:italic">אין דיווחים</td></tr>`;
+  const totalHours = (Number(rec.totalMin) || 0) / 60;
+  const rejBanner = rec.status === 'rejected'
+    ? `<div style="background:#FEE2E2;border:1.5px solid #FCA5A5;border-radius:8px;padding:10px 12px;margin-top:12px;font-size:12px;color:#991B1B"><b>סיבת דחייה:</b> ${esc(rec.rejectionReason || '')}</div>`
+    : '';
+  const deadlineTxt = rec.deadline
+    ? `<div style="font-size:11px;color:#78350F;margin-top:4px">דדליין אישור: ${esc(new Date(rec.deadline).toLocaleString('he-IL'))}</div>`
+    : '';
+  const btnsHtml = st.showButtons
+    ? `<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+        <button onclick="openMonthlyApproveConfirm('${esc(rec.id)}')" style="flex:1;min-width:150px;padding:14px;background:#22C55E;color:white;border:none;border-radius:10px;font-family:inherit;font-size:16px;font-weight:800;cursor:pointer">✅ מאושר</button>
+        <button onclick="openMonthlyRejectMo('${esc(rec.id)}')" style="flex:1;min-width:150px;padding:14px;background:#EF4444;color:white;border:none;border-radius:10px;font-family:inherit;font-size:16px;font-weight:800;cursor:pointer">❌ לא מאושר</button>
+      </div>`
+    : '';
+  return `<div style="background:white;border:1.5px solid var(--brd);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <div style="font-size:18px;font-weight:800;color:#1B4332">דוח ${esc(rec.monthLabel || rec.month || '')}</div>
+        <div style="font-size:12px;color:var(--mut);margin-top:2px">${records.length} דיווחים · ${(rec.totalGroups || 0)} קבוצות · ${totalHours.toFixed(1)} שעות</div>
+        ${deadlineTxt}
+      </div>
+      <span style="background:${st.bg};color:${st.txt};font-weight:800;font-size:12px;padding:6px 14px;border-radius:14px;border:1.5px solid ${st.color}">${st.label}</span>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;background:white">
+        <thead><tr style="background:#E8F5E9;color:#1B4332">
+          <th style="border:1px solid var(--brd);padding:6px 8px;text-align:right">תאריך</th>
+          <th style="border:1px solid var(--brd);padding:6px 8px;text-align:right">גן</th>
+          <th style="border:1px solid var(--brd);padding:6px 8px;text-align:center">קבוצות</th>
+          <th style="border:1px solid var(--brd);padding:6px 8px;text-align:center">משך</th>
+          <th style="border:1px solid var(--brd);padding:6px 8px;text-align:right">הערות</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    ${rejBanner}
+    ${btnsHtml}
+  </div>`;
+}
+
+function openMonthlyApproveConfirm(docId) {
+  let mo = document.getElementById('monthly-approve-mo');
+  if (!mo) { mo = document.createElement('div'); mo.id = 'monthly-approve-mo'; mo.className = 'mo'; document.body.appendChild(mo); }
+  mo.innerHTML = `<div class="md" style="max-width:520px">
+    <div class="mt"><span>✅ אישור סופי של הדוח</span><span class="mc" onclick="document.getElementById('monthly-approve-mo').style.display='none'">×</span></div>
+    <div style="background:#FEF3C7;border-right:4px solid #F59E0B;padding:12px;border-radius:8px;margin:10px 0;font-size:13px;color:#78350F;line-height:1.6">
+      <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="monthly-approve-cb" style="margin-top:3px;width:16px;height:16px">
+        <span><b>אני מבינה שעל סמך הדיווח מחושבת התמורה.</b><br>
+        <b>שים לב</b> — זהו אישור סופי ולא תהיה אפשרות לשינויים רטרואקטיביים.</span>
+      </label>
+    </div>
+    <div class="ma" style="gap:10px">
+      <button class="btn-sec" onclick="document.getElementById('monthly-approve-mo').style.display='none'" style="flex:1">ביטול</button>
+      <button id="monthly-approve-final-btn" onclick="submitMonthlyApproval('${esc(docId)}')" style="flex:1;padding:12px;background:#22C55E;color:white;border:none;border-radius:8px;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer">אשר סופית</button>
+    </div>
+  </div>`;
+  mo.style.display = 'flex';
+  mo.style.alignItems = 'center';
+  mo.style.justifyContent = 'center';
+}
+
+async function submitMonthlyApproval(docId) {
+  const cb = document.getElementById('monthly-approve-cb');
+  if (!cb || !cb.checked) { alert('נא לסמן את תיבת ההסכמה'); return; }
+  const btn = document.getElementById('monthly-approve-final-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ שולח...'; }
+  try {
+    const fn = firebase.app().functions('us-central1').httpsCallable('submitmonthlyapproval');
+    await fn({ docId, action: 'approve' });
+    const mo = document.getElementById('monthly-approve-mo');
+    if (mo) mo.style.display = 'none';
+    alert('✅ הדוח אושר סופית. תודה!');
+    renderMonthlyApprovalScreen();
+  } catch (e) {
+    alert('שגיאה: ' + (e.message || e));
+    if (btn) { btn.disabled = false; btn.textContent = 'אשר סופית'; }
+  }
+}
+
+function openMonthlyRejectMo(docId) {
+  let mo = document.getElementById('monthly-reject-mo');
+  if (!mo) { mo = document.createElement('div'); mo.id = 'monthly-reject-mo'; mo.className = 'mo'; document.body.appendChild(mo); }
+  mo.innerHTML = `<div class="md" style="max-width:520px">
+    <div class="mt"><span>❌ דחיית הדוח</span><span class="mc" onclick="document.getElementById('monthly-reject-mo').style.display='none'">×</span></div>
+    <div style="background:#FEE2E2;border-right:4px solid #EF4444;padding:12px;border-radius:8px;margin:10px 0;font-size:13px;color:#991B1B;line-height:1.6">
+      פרטי בקצרה מה לא תקין. שיר תקבל התראה עם הפירוט ותצור איתך קשר.
+    </div>
+    <textarea id="monthly-reject-reason" rows="5" placeholder="פרטי את מה שלא תקין..." style="width:100%;padding:10px;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit;font-size:13px;resize:vertical;box-sizing:border-box"></textarea>
+    <div class="ma" style="gap:10px;margin-top:12px">
+      <button class="btn-sec" onclick="document.getElementById('monthly-reject-mo').style.display='none'" style="flex:1">ביטול</button>
+      <button id="monthly-reject-final-btn" onclick="submitMonthlyReject('${esc(docId)}')" style="flex:1;padding:12px;background:#EF4444;color:white;border:none;border-radius:8px;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer">שלח לאדמין</button>
+    </div>
+  </div>`;
+  mo.style.display = 'flex';
+  mo.style.alignItems = 'center';
+  mo.style.justifyContent = 'center';
+}
+
+async function submitMonthlyReject(docId) {
+  const reasonEl = document.getElementById('monthly-reject-reason');
+  const reason = reasonEl ? reasonEl.value.trim() : '';
+  if (!reason) { alert('נא לפרט מה לא תקין'); return; }
+  const btn = document.getElementById('monthly-reject-final-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ שולח...'; }
+  try {
+    const fn = firebase.app().functions('us-central1').httpsCallable('submitmonthlyapproval');
+    await fn({ docId, action: 'reject', rejectionReason: reason });
+    const mo = document.getElementById('monthly-reject-mo');
+    if (mo) mo.style.display = 'none';
+    alert('❌ הדוח סומן כדחוי. שיר תקבל התראה עם הפירוט.');
+    renderMonthlyApprovalScreen();
+  } catch (e) {
+    alert('שגיאה: ' + (e.message || e));
+    if (btn) { btn.disabled = false; btn.textContent = 'שלח לאדמין'; }
+  }
+}
+
+/* ---------- Marker for verification ---------- */
+window.__SALARY_FLOW_EXT_MARKER = 'salary-flow-2026-07-15-v1';
+console.log('[salary-flow] extensions loaded:', window.__SALARY_FLOW_EXT_MARKER);
 </script>
 </body>
 </html>
