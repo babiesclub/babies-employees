@@ -6589,3 +6589,281 @@ exports.submitmonthlyapproval = onCall(
     return { success: true, status: "rejected" };
   }
 );
+
+/* =========================================================================
+ * FEATURE_MARKER:invoice-ocr-v1
+ * parseinvoicewithclaude — Claude Vision OCR for receipts/invoices.
+ *
+ * Accepts ONE of:
+ *   storagePath: string   (preferred; e.g. "receipts/uid/xxx.jpg" or "gs://bucket/path")
+ *   imageUrl:    string   (fallback — public/signed URL, fetched server-side)
+ *   dataUrl:     string   ("data:image/jpeg;base64,...")
+ *
+ * Returns:
+ *   { parsed: {...schema}, modelUsed, latencyMs, tokensIn, tokensOut, source }
+ *
+ * Auth: admin OR the instructor who owns the receipt (checked via storagePath
+ * prefix "receipts/{uid}/..." OR via ocrLogs docId match).
+ *
+ * Writes: ocrLogs/{autoId} for observability.
+ *
+ * Uses Claude Opus 4.7 (native PDF + image via document/image content blocks).
+ * ========================================================================= */
+const OCR_MAX_BYTES = 10 * 1024 * 1024; // 10MB cap (Claude allows 32MB; we keep costs down)
+const OCR_MODEL = "claude-opus-4-7";
+// Rough cost estimate (USD per 1M tokens) — Opus 4.7 pricing as of writing.
+const OCR_COST_IN_PER_MTOK = 15.00;
+const OCR_COST_OUT_PER_MTOK = 75.00;
+
+function _extOfPath(p) {
+  const m = String(p || "").toLowerCase().match(/\.([a-z0-9]+)(?:\?|#|$)/);
+  return m ? m[1] : "";
+}
+function _mimeForExt(ext) {
+  if (ext === "pdf") return "application/pdf";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  return "image/jpeg"; // default (jpg, jpeg, unknown)
+}
+function _normalizeStoragePath(p) {
+  if (!p) return null;
+  let s = String(p).trim();
+  if (s.startsWith("gs://")) {
+    // strip gs://bucket/
+    const rest = s.slice(5).split("/");
+    rest.shift(); // bucket
+    s = rest.join("/");
+  }
+  // strip leading slash
+  if (s.startsWith("/")) s = s.slice(1);
+  return s || null;
+}
+async function _fetchAsBase64(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new HttpsError("failed-precondition", `download failed: HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > OCR_MAX_BYTES) throw new HttpsError("failed-precondition", `הקובץ גדול מדי (${(buf.length / 1024 / 1024).toFixed(1)}MB). מגבלה: 10MB.`);
+  const ct = res.headers.get("content-type") || "";
+  const ext = _extOfPath(url);
+  const mime = ct.split(";")[0].trim() || _mimeForExt(ext);
+  return { base64: buf.toString("base64"), mime, bytes: buf.length };
+}
+
+exports.parseinvoicewithclaude = onCall(
+  { region: "us-central1", timeoutSeconds: 60, memory: "512MiB", secrets: [anthropicApiKey] },
+  async (req) => {
+    if (!req.auth || !req.auth.uid) throw new HttpsError("unauthenticated", "יש להתחבר");
+    if (!anthropicApiKey.value()) throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY לא הוגדר");
+
+    const { storagePath, imageUrl, dataUrl, hintCategory, hintAmount } = req.data || {};
+    if (!storagePath && !imageUrl && !dataUrl) {
+      throw new HttpsError("invalid-argument", "חסר קלט: storagePath / imageUrl / dataUrl");
+    }
+
+    // --- Auth: admin, OR instructor who owns the receipts/{uid}/... path ---
+    const uid = req.auth.uid;
+    const db = admin.firestore();
+    const userDoc = await db.collection("users").doc(uid).get();
+    const isAdmin = userDoc.exists && userDoc.data().role === "admin";
+    if (!isAdmin) {
+      const path = _normalizeStoragePath(storagePath);
+      const ownsPath = path && path.startsWith(`receipts/${uid}/`);
+      if (!ownsPath) {
+        throw new HttpsError("permission-denied", "אין הרשאה לסרוק את הקובץ הזה");
+      }
+    }
+
+    const t0 = Date.now();
+    let base64, mime, bytes, source;
+
+    try {
+      if (storagePath) {
+        const path = _normalizeStoragePath(storagePath);
+        source = "storage:" + path;
+        const [buf] = await admin.storage().bucket().file(path).download();
+        if (buf.length > OCR_MAX_BYTES) {
+          throw new HttpsError("failed-precondition", `הקובץ גדול מדי (${(buf.length / 1024 / 1024).toFixed(1)}MB). מגבלה: 10MB.`);
+        }
+        bytes = buf.length;
+        base64 = buf.toString("base64");
+        mime = _mimeForExt(_extOfPath(path));
+      } else if (dataUrl) {
+        source = "dataUrl";
+        const m = String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+        if (!m) throw new HttpsError("invalid-argument", "dataUrl לא תקין");
+        mime = m[1];
+        base64 = m[2];
+        bytes = Math.floor(base64.length * 3 / 4);
+        if (bytes > OCR_MAX_BYTES) throw new HttpsError("failed-precondition", "קובץ גדול מדי (>10MB)");
+      } else {
+        source = "url";
+        const r = await _fetchAsBase64(imageUrl);
+        base64 = r.base64; mime = r.mime; bytes = r.bytes;
+      }
+    } catch (dlErr) {
+      if (dlErr instanceof HttpsError) throw dlErr;
+      logger.error("parseinvoicewithclaude: download failed", { error: dlErr.message, source });
+      throw new HttpsError("internal", "הורדת הקובץ נכשלה: " + (dlErr.message || String(dlErr)).slice(0, 200));
+    }
+
+    const isPdf = mime === "application/pdf" || mime.startsWith("application/pdf");
+    logger.info("parseinvoicewithclaude: input", { source, mime, bytes, isPdf, uid, isAdmin });
+
+    const SYSTEM = `אתה מומחה עולמי בקריאת חשבוניות וקבלות בעברית (וגם באנגלית) עבור אפליקציית "בייביז קלאב" — חברה ישראלית של מדריכות חוגי חיות בגני ילדים.
+
+מקבל תמונה או PDF של חשבונית / קבלה / חשבונית-מס-קבלה / חיוב אשראי / קבלת חניה / קבלת קופה, ומחזיר JSON מובנה בלבד — בלי הסברים, בלי markdown, בלי טקסט לפני או אחרי.
+
+הפורמט המדויק (חובה על כל השדות; שדה שלא זוהה = null, אף פעם לא string ריק):
+{
+  "supplier": "שם הספק/החברה כפי שכתוב",
+  "supplierTaxId": "ח.פ / ע.מ / מס' עוסק (רק ספרות, ללא רווחים) או null",
+  "documentType": "receipt | invoice | invoice_receipt | credit | unknown",
+  "documentNumber": "מספר חשבונית / קבלה או null",
+  "date": "YYYY-MM-DD (תאריך המסמך; אם רק חודש/שנה — 01 ליום) או null",
+  "amountBeforeVat": מספר או null,
+  "vatAmount": מספר או null,
+  "totalAmount": מספר או null,
+  "currency": "ILS | USD | EUR | ...",
+  "category": "נסורת | אוכל | חומרים | ציוד | חומרי ניקוי | חניה | אחר",
+  "categoryConfidence": מספר בין 0 ל-1,
+  "paymentMethod": "מזומן | אשראי | העברה בנקאית | ציק | ביט | פייבוקס | אפליקציה | null",
+  "notes": "הערות רלוונטיות קצרות או null",
+  "rawTextSample": "עד 200 תווים של טקסט גולמי שקראת מהמסמך — לצורך דיבוג"
+}
+
+כללי פירוש קריטיים:
+- מטבע: אם רשום ₪ / ש"ח / NIS → "ILS". $ → "USD". € → "EUR".
+- סכומים: החזר מספרים נקיים (12.50 לא "12.50 ₪"). נקודה עשרונית באנגלית.
+- אם רשום רק "סה"כ" בלי פיצול — totalAmount = הסכום, amountBeforeVat + vatAmount = null.
+- אם יש פיצול: totalAmount = הסכום הכולל לתשלום, amountBeforeVat + vatAmount משלימים.
+- מע"מ ישראלי כרגע 18%. אם רק totalAmount ידוע ורוצה חישוב — אל תמציא; השאר null.
+- תאריך: קבלות בישראל = DD/MM/YY או DD/MM/YYYY. שנה דו-ספרתית < 50 = 20XX, אחרת 19XX.
+- תאריך חייב להיות תאריך המסמך (הנפקה), לא תאריך פירעון.
+- קטגוריה: קבע לפי תוכן הקבלה:
+    "חניה" — חניון, פנגו, סלאופארק, cellopark, אחוזה, ttl, iap, park&go, חניית עירייה
+    "נסורת" — נסורת, שבבי עץ, מצע לבעלי חיים, שביסים
+    "אוכל" — מזון לבעלי חיים (יבש, לח), פירות, ירקות, חציר, גזר לארנבים
+    "חומרים" — צבעים, נייר, דבק, יצירה, ציוד יצירה לחוגים
+    "ציוד" — כלובים, אביזרים, כלי אוכל לחיות, ציוד קבוע
+    "חומרי ניקוי" — סבון, אקונומיקה, ניקוי, חיטוי
+    "אחר" — כל דבר אחר (משרד, נסיעות, טלפון, וכו')
+  categoryConfidence: 0.9+ אם ברור מהחשבונית, 0.6-0.8 אם ניחוש סביר, <0.6 אם לא בטוח.
+- ספק לא ידוע → "supplier": "לא זוהה", supplierTaxId=null.
+- rawTextSample: קטע קצר של הטקסט האמיתי מהמסמך (לא סיכום שלך).
+${hintCategory ? `\nרמז מהמשתמשת: קטגוריה מבוקשת = "${hintCategory}" (אם ברור לך אחרת — עדיף להסתמך על המסמך).` : ""}${hintAmount ? `\nרמז מהמשתמשת: סכום מבוקש = ${hintAmount} ₪ (השתמש כאמצעי אימות; אם המסמך מציג סכום אחר — הצג את מה שכתוב בפועל).` : ""}
+
+החזר אך ורק JSON תקין. בלי markdown, בלי \`\`\`, בלי הסברים.`;
+
+    const client = new (require("@anthropic-ai/sdk"))({ apiKey: anthropicApiKey.value() });
+    const contentBlock = isPdf
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
+      : { type: "image", source: { type: "base64", media_type: mime, data: base64 } };
+
+    let resp;
+    try {
+      resp = await client.messages.create({
+        model: OCR_MODEL,
+        max_tokens: 1500,
+        system: SYSTEM,
+        messages: [{
+          role: "user",
+          content: [
+            contentBlock,
+            { type: "text", text: "פרק את החשבונית/קבלה שבמסמך ל-JSON לפי הסכמה. החזר רק JSON תקין." },
+          ],
+        }],
+      });
+    } catch (apiErr) {
+      const msg = String((apiErr && apiErr.message) || apiErr || "");
+      const errType = apiErr && apiErr.error && apiErr.error.error && apiErr.error.error.type;
+      logger.error("parseinvoicewithclaude: Anthropic error", { status: apiErr && apiErr.status, type: errType, msg: msg.slice(0, 300) });
+      if (/credit balance is too low|insufficient_quota/i.test(msg)) {
+        throw new HttpsError("resource-exhausted", "חשבון ה־Anthropic API אזל מקרדיטים.");
+      }
+      if (apiErr && apiErr.status === 429) throw new HttpsError("resource-exhausted", "Rate limit של Anthropic. נסי שוב בעוד דקה.");
+      if (errType === "authentication_error" || (apiErr && apiErr.status === 401)) {
+        throw new HttpsError("failed-precondition", "מפתח Anthropic API לא תקין.");
+      }
+      throw new HttpsError("internal", "Anthropic החזירה שגיאה: " + msg.slice(0, 200));
+    }
+
+    const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    let parsed;
+    try {
+      const m = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(m ? m[0] : text);
+    } catch (e) {
+      logger.error("parseinvoicewithclaude: JSON parse failed", { textPreview: text.slice(0, 500) });
+      throw new HttpsError("internal", "Claude לא החזירה JSON תקין: " + text.slice(0, 200));
+    }
+
+    // Normalize / sanitize (defensive — Claude sometimes returns strings for numbers).
+    const _num = (v) => {
+      if (v === null || v === undefined || v === "") return null;
+      const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^\d.-]/g, ""));
+      return isFinite(n) ? n : null;
+    };
+    const out = {
+      supplier: parsed.supplier || null,
+      supplierTaxId: parsed.supplierTaxId || null,
+      documentType: parsed.documentType || "unknown",
+      documentNumber: parsed.documentNumber || null,
+      date: parsed.date || null,
+      amountBeforeVat: _num(parsed.amountBeforeVat),
+      vatAmount: _num(parsed.vatAmount),
+      totalAmount: _num(parsed.totalAmount),
+      currency: parsed.currency || "ILS",
+      category: parsed.category || "אחר",
+      categoryConfidence: (typeof parsed.categoryConfidence === "number" && parsed.categoryConfidence >= 0 && parsed.categoryConfidence <= 1) ? parsed.categoryConfidence : 0.5,
+      paymentMethod: parsed.paymentMethod || null,
+      notes: parsed.notes || null,
+      rawTextSample: (parsed.rawTextSample || "").slice(0, 300),
+    };
+
+    const latencyMs = Date.now() - t0;
+    const tokensIn = (resp.usage && resp.usage.input_tokens) || 0;
+    const tokensOut = (resp.usage && resp.usage.output_tokens) || 0;
+    const costUsd = (tokensIn * OCR_COST_IN_PER_MTOK + tokensOut * OCR_COST_OUT_PER_MTOK) / 1e6;
+
+    // Fire-and-forget log to ocrLogs (admin-only readable per firestore.rules).
+    try {
+      await db.collection("ocrLogs").add({
+        uid,
+        isAdmin,
+        source,
+        storagePath: storagePath ? _normalizeStoragePath(storagePath) : null,
+        mime,
+        bytes,
+        isPdf,
+        modelUsed: OCR_MODEL,
+        latencyMs,
+        tokensIn,
+        tokensOut,
+        costUsdEstimate: Number(costUsd.toFixed(6)),
+        supplier: out.supplier,
+        totalAmount: out.totalAmount,
+        category: out.category,
+        categoryConfidence: out.categoryConfidence,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (logErr) {
+      logger.warn("parseinvoicewithclaude: ocrLog write failed", { error: logErr.message });
+    }
+
+    logger.info("parseinvoicewithclaude: done", {
+      supplier: out.supplier, total: out.totalAmount, cat: out.category,
+      latencyMs, tokensIn, tokensOut, costUsd: costUsd.toFixed(5),
+    });
+
+    return {
+      parsed: out,
+      modelUsed: OCR_MODEL,
+      latencyMs,
+      tokensIn,
+      tokensOut,
+      costUsdEstimate: Number(costUsd.toFixed(6)),
+      source,
+    };
+  }
+);

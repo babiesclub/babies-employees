@@ -203,6 +203,12 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // OCR LOGS (Claude Vision receipt-parse audit trail) — ADMIN ONLY.
+    // Writes come from the CF under admin credentials; instructor never reads/writes directly.
+    match /ocrLogs/{docId} {
+      allow read, write: if isAdmin();
+    }
+
     // GMAIL TOKENS (refresh_token per connected Gmail account) — ADMIN ONLY
     // Contains sensitive OAuth refresh_token; even read is admin-only.
     match /gmailTokens/{accountKey} {
