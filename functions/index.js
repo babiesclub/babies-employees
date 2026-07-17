@@ -616,6 +616,14 @@ exports.createmorninginvoice = onCall(
       const docTypeOverride = data.docTypeOverride;
       const afterSchoolType = data.afterSchoolType || null; // 'tzaharon' | 'talan' | 'nivkharot' | null
       const ASR_TYPE_LABELS = { tzaharon: "צהרונים", talan: 'תל"ן', nivkharot: "נבחרות" };
+      // Supplementary invoice support:
+      //  - supplementary=true bypasses the "existing invoice" duplicate check
+      //  - recordIds=[...] limits the invoice to only those record IDs (string compare)
+      // Both together = the normal supplementary flow: additional invoice for a subset of records.
+      const supplementary = data.supplementary === true;
+      const recordIds = Array.isArray(data.recordIds) && data.recordIds.length
+        ? data.recordIds.map((x) => String(x))
+        : null;
       if (!gardenName || !month) {
         throw new HttpsError("invalid-argument", "gardenName and month required");
       }
@@ -671,10 +679,24 @@ exports.createmorninginvoice = onCall(
           if (r.date && r.date.startsWith(month)) records.push(r);
         });
       }
-      logger.info("createmorninginvoice: records loaded", { count: records.length, month });
+      logger.info("createmorninginvoice: records loaded", { count: records.length, month, supplementary, recordIdsRequested: recordIds ? recordIds.length : 0 });
+      // Filter records to a specific subset (supplementary invoice flow)
+      if (recordIds) {
+        const wantSet = new Set(recordIds);
+        const filtered = records.filter((r) => wantSet.has(String(r.id)));
+        const foundIds = new Set(filtered.map((r) => String(r.id)));
+        const missing = recordIds.filter((id) => !foundIds.has(id));
+        if (missing.length) {
+          logger.warn("createmorninginvoice: some requested recordIds not found", { missing, requested: recordIds.length, kept: filtered.length });
+        }
+        records.length = 0;
+        records.push(...filtered);
+        logger.info("createmorninginvoice: records filtered by recordIds", { kept: records.length });
+      }
       if (!records.length) {
         const errLabel = isNetwork ? ("רשת '" + garden.networkName + "'") : ("גן '" + gardenName + "'");
-        throw new HttpsError("not-found", "אין דיווחים ל" + errLabel + " לחודש " + month);
+        const _suffix = recordIds ? " (מתוך " + recordIds.length + " שבוקשו)" : "";
+        throw new HttpsError("not-found", "אין דיווחים ל" + errLabel + " לחודש " + month + _suffix);
       }
 
       // Calculate total - each record uses its own branch's rates
@@ -714,23 +736,34 @@ exports.createmorninginvoice = onCall(
       if (afterSchoolType) {
         existingInvoiceQuery = existingInvoiceQuery.where("afterSchoolType", "==", afterSchoolType);
       }
-      const existingInvoiceSnap = await existingInvoiceQuery.limit(1).get();
-      // When creating without a type filter, ignore any pre-existing type-specific invoices
+      const existingInvoiceSnap = await existingInvoiceQuery.limit(5).get();
+      // When creating without a type filter, ignore any pre-existing type-specific invoices.
+      // Prefer NON-supplementary invoices as the "original" reference.
       const existingCandidates = existingInvoiceSnap.docs.filter((d) => {
         const inv = d.data();
         if (afterSchoolType) return inv.afterSchoolType === afterSchoolType;
         return !inv.afterSchoolType;
       });
+      let originalInvoiceId = null;
       if (existingCandidates.length) {
-        const existing = existingCandidates[0].data();
-        logger.info("createmorninginvoice: returning existing", { id: existing.id });
-        return {
-          success: true,
-          existed: true,
-          docNumber: existing.morningDocNumber || existing.number || "",
-          docUrl: existing.morningDocUrl || "",
-          invoice: existing,
-        };
+        const nonSupp = existingCandidates.find((d) => !d.data().supplementary);
+        const chosen = nonSupp || existingCandidates[0];
+        const existing = chosen.data();
+        originalInvoiceId = String(existing.id || chosen.id);
+        if (!supplementary) {
+          logger.info("createmorninginvoice: returning existing", { id: existing.id });
+          return {
+            success: true,
+            existed: true,
+            docNumber: existing.morningDocNumber || existing.number || "",
+            docUrl: existing.morningDocUrl || "",
+            invoice: existing,
+          };
+        }
+        logger.info("createmorninginvoice: supplementary mode — allowing additional invoice", { originalInvoiceId, gardenName, month });
+      } else if (supplementary) {
+        // No original found — supplementary makes no sense, but we allow it (a first-time invoice tagged as supplementary is odd but not fatal).
+        logger.warn("createmorninginvoice: supplementary requested but no original invoice found for garden+month", { gardenName, month });
       }
 
       const monthParts = month.split("-");
@@ -764,6 +797,7 @@ exports.createmorninginvoice = onCall(
         ? _reqDate
         : new Date().toISOString().slice(0, 10);
       const typeSuffix = afterSchoolType ? " · " + (ASR_TYPE_LABELS[afterSchoolType] || afterSchoolType) : "";
+      const _suppPrefix = supplementary ? "השלמה: " : "";
       // Detect if the requested date is BEFORE today (any past date) — if so,
       // enable Morning's "skipDateValidation" flag so past-dated documents are
       // accepted. The threshold is deliberately generous: any date not-today.
@@ -772,14 +806,14 @@ exports.createmorninginvoice = onCall(
       const _daysAgo = (new Date(_todayStr).getTime() - new Date(_docDate).getTime()) / 86400000;
       const payload = {
         type: docType,
-        description: "חוגי בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
+        description: _suppPrefix + "חוגי בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
         date: _docDate,
         lang: "he",
         currency: "ILS",
         vatType: 0,
         client: clientObj,
         income: incomeLines,
-        remarks: "הופק אוטומטית ע\"י אפליקציית בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0],
+        remarks: _suppPrefix + "הופק אוטומטית ע\"י אפליקציית בייביז" + typeSuffix + " · " + monthName + " " + monthParts[0] + (supplementary ? " · חשבונית משלימה לדיווחים שנוספו לאחר החשבונית המקורית" : ""),
       };
       if (_needsBackdate) {
         // skipDateValidation = the field the Morning UI sends when the user enables
@@ -862,6 +896,10 @@ exports.createmorninginvoice = onCall(
         networkName: garden.networkName || null,
         branchNames: isNetwork ? allBranchNames : null,
         afterSchoolType: afterSchoolType || null,
+        // Supplementary invoice metadata (null on regular invoices)
+        supplementary: supplementary || false,
+        originalInvoiceId: supplementary ? (originalInvoiceId || null) : null,
+        supplementaryRecordIds: (supplementary && recordIds) ? recordIds : null,
       };
       await admin.firestore().collection("invoices").doc(String(invoiceId)).set(invoiceData);
       logger.info("createmorninginvoice: SUCCESS", { gardenName, month, docNumber });
