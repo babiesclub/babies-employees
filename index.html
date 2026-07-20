@@ -3971,6 +3971,24 @@ function _renderMonthlyApprovalCard(rec) {
   const deadlineTxt = rec.deadline
     ? `<div style="font-size:11px;color:#78350F;margin-top:4px">דדליין אישור: ${esc(new Date(rec.deadline).toLocaleString('he-IL'))}</div>`
     : '';
+  let deadlineBanner = '';
+  if (rec.status === 'pending_approval' && rec.deadline) {
+    const dl = new Date(rec.deadline);
+    const now = new Date();
+    const hoursLeft = (dl.getTime() - now.getTime()) / 3600000;
+    const dlTimeStr = dl.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+    const dlDateStr = dl.toLocaleDateString('he-IL');
+    if (hoursLeft > 0) {
+      const urgent = hoursLeft < 3;
+      const bg = urgent ? '#FEE2E2' : '#FEF3C7';
+      const border = urgent ? '#DC2626' : '#F59E0B';
+      const txt = urgent ? '#991B1B' : '#78350F';
+      const hoursTxt = hoursLeft < 1 ? Math.round(hoursLeft * 60) + ' דקות' : Math.floor(hoursLeft) + ' שעות ' + Math.round((hoursLeft - Math.floor(hoursLeft)) * 60) + ' דק׳';
+      deadlineBanner = `<div style="background:${bg};border:2px solid ${border};border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:${txt};font-weight:700;line-height:1.6;text-align:center">⏰ <b>אישור זמין עד היום ${esc(dlTimeStr)}</b> (${esc(dlDateStr)}) — נותרו כ־<b>${esc(hoursTxt)}</b><br><span style="font-size:11px;font-weight:600">לאחר מכן הדוח יאושר אוטומטית ולא ניתן יהיה לשנות</span></div>`;
+    } else {
+      deadlineBanner = `<div style="background:#E5E7EB;border:1.5px solid #6B7280;border-radius:10px;padding:10px;margin-bottom:12px;font-size:12px;color:#374151;text-align:center">⏰ עבר הדדליין (${esc(dlTimeStr)} · ${esc(dlDateStr)}) — הדוח יאושר אוטומטית בקרוב</div>`;
+    }
+  }
   const btnsHtml = st.showButtons
     ? `<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
         <button onclick="openMonthlyApproveConfirm('${esc(rec.id)}')" style="flex:1;min-width:150px;padding:14px;background:#22C55E;color:white;border:none;border-radius:10px;font-family:inherit;font-size:16px;font-weight:800;cursor:pointer">✅ מאושר</button>
@@ -3978,6 +3996,7 @@ function _renderMonthlyApprovalCard(rec) {
       </div>`
     : '';
   return `<div style="background:white;border:1.5px solid var(--brd);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
+    ${deadlineBanner}
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
         <div style="font-size:18px;font-weight:800;color:#1B4332">דוח ${esc(rec.monthLabel || rec.month || '')}</div>
