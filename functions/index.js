@@ -944,6 +944,53 @@ exports.createmorninginvoice = onCall(
  *   - Refuses if the invoice is already cancelled or missing morningDocId.
  *   - Credit note (for 305) is dated today — Israeli tax convention.
  */
+// Manually undo a payment/receipt on an invoice — for cases where the wrong doc type was issued.
+// She cancels the doc IN MORNING first (issues a credit note there), then calls this to
+// reset our local state so she can re-mark the invoice as paid with the correct doc type.
+exports.undoinvoicepayment = onCall(
+  { region: "us-central1", timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+    const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+    if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+    const invoiceId = request.data && request.data.invoiceId;
+    if (!invoiceId) throw new HttpsError("invalid-argument", "invoiceId required");
+    const ref = admin.firestore().collection("invoices").doc(String(invoiceId));
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "invoice not found");
+    const cur = snap.data() || {};
+    const undoRecord = {
+      undoneAt: new Date().toISOString(),
+      undoneBy: (request.auth && request.auth.uid) || null,
+      previousReceiptId: cur.receiptId || null,
+      previousReceiptDocNumber: cur.receiptDocNumber || null,
+      previousReceiptDocType: cur.receiptDocType || null,
+      previousReceiptDocUrl: cur.receiptDocUrl || null,
+      previousAmountPaid: cur.amountPaid || null,
+      previousPaidAt: cur.paidAt || null,
+      previousPaymentStatus: cur.paymentStatus || null,
+    };
+    await ref.set({
+      paymentStatus: admin.firestore.FieldValue.delete(),
+      amountPaid: admin.firestore.FieldValue.delete(),
+      paidAt: admin.firestore.FieldValue.delete(),
+      paidNote: admin.firestore.FieldValue.delete(),
+      discountAmount: admin.firestore.FieldValue.delete(),
+      receiptCreated: false,
+      receiptId: admin.firestore.FieldValue.delete(),
+      receiptDocNumber: admin.firestore.FieldValue.delete(),
+      receiptDocType: admin.firestore.FieldValue.delete(),
+      receiptDocUrl: admin.firestore.FieldValue.delete(),
+      receiptCreatedAt: admin.firestore.FieldValue.delete(),
+      undoHistory: admin.firestore.FieldValue.arrayUnion(undoRecord),
+    }, { merge: true });
+    logger.info("undoinvoicepayment: done", { invoiceId, undoRecord });
+    return { success: true, undo: undoRecord };
+  }
+);
+
 exports.cancelmorninginvoice = onCall(
   {
     secrets: [morningApiKeyId, morningApiSecret],
@@ -3049,11 +3096,17 @@ exports.markinvoicepaid = onCall(
         if (!isWizoGarden && receiptGardenEmails.length > 0) {
           receiptClientObj.emails = receiptGardenEmails;
         }
-        // For WIZO — always use 320 (חשבונית מס/קבלה): a single doc that closes the
-        // proforma and serves as receipt in one action. WIZO explicitly requires 320.
-        // Otherwise: partial → 400 (קבלה בלבד, לא חשבונית) so revenue isn't double-counted.
-        // full/discount → 320 (חשבונית מס/קבלה) as before.
-        const docTypeToCreate = isWizoGarden ? 320 : (mode === "partial" ? 400 : 320);
+        // Israeli accounting rules for closing an invoice:
+        // - Source חשבון עסקה (300 = proforma) → 320 (חשבונית מס-קבלה): closes tax + receipt in one shot
+        // - Source חשבונית מס (305 = tax invoice) → 400 (קבלה בלבד): tax was already recorded, only receipt needed
+        // - WIZO explicitly requires 320 regardless
+        // - Partial payment: always 400 (קבלה) so revenue isn't double-counted
+        const _srcType = Number(invoice.morningActualType || invoice.docType || 300);
+        const docTypeToCreate = isWizoGarden
+          ? 320
+          : (mode === "partial"
+              ? 400
+              : (_srcType === 305 ? 400 : 320));
         const remarksSuffix = mode === "partial" ? " | תשלום חלקי"
           : (mode === "discount" ? (" | תשלום עם הנחה " + discountAmount.toFixed(2) + "₪") : "");
         // finalAmount is the GROSS amount the client actually paid (with VAT if applicable).
