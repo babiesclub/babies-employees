@@ -944,6 +944,105 @@ exports.createmorninginvoice = onCall(
  *   - Refuses if the invoice is already cancelled or missing morningDocId.
  *   - Credit note (for 305) is dated today — Israeli tax convention.
  */
+// EMERGENCY: restore deleted invoices from the last daily backup.
+// deleteLocalInvoice removes docs entirely — this reads the previous day's
+// backup JSON and re-inserts missing docs. Filters supported: month + afterSchoolType.
+exports.restoreinvoicesfrombackup = onCall(
+  { region: "us-central1", timeoutSeconds: 300, memory: "1GiB" },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+    const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+    if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+    const data = request.data || {};
+    const month = String(data.month || "");
+    if (!month) throw new HttpsError("invalid-argument", "month required (YYYY-MM)");
+    const backupDate = String(data.backupDate || "");
+    const afterSchoolType = data.afterSchoolType || null;
+    const onlyAfterSchool = data.onlyAfterSchool === true;
+    const dryRun = data.dryRun !== false;
+
+    // 1) Find backup file: either explicit backupDate or most recent
+    const bucket = admin.storage().bucket();
+    let fileName;
+    if (backupDate) {
+      fileName = `backups/daily/backup-${backupDate}.json`;
+    } else {
+      const [files] = await bucket.getFiles({ prefix: "backups/daily/backup-" });
+      if (!files.length) throw new HttpsError("not-found", "no daily backups found");
+      files.sort((a, b) => String(b.name).localeCompare(String(a.name)));
+      fileName = files[0].name;
+    }
+    logger.info("restoreinvoicesfrombackup: reading backup", { fileName });
+    const [contents] = await bucket.file(fileName).download().catch(() => [null]);
+    if (!contents) throw new HttpsError("not-found", "backup file unreadable: " + fileName);
+    let dump;
+    try { dump = JSON.parse(contents.toString("utf8")); }
+    catch (e) { throw new HttpsError("failed-precondition", "backup JSON parse error: " + e.message); }
+
+    // 2) Locate invoices in backup — accept several shapes: {collections:{invoices:{id:doc}}} or {invoices:[...]}
+    let invoicesInBackup = [];
+    if (dump && dump.collections && dump.collections.invoices) {
+      const c = dump.collections.invoices;
+      if (Array.isArray(c)) invoicesInBackup = c.slice();
+      else invoicesInBackup = Object.entries(c).map(([id, v]) => ({ ...v, _docId: id }));
+    } else if (Array.isArray(dump.invoices)) {
+      invoicesInBackup = dump.invoices.slice();
+    } else if (dump.invoices && typeof dump.invoices === "object") {
+      invoicesInBackup = Object.entries(dump.invoices).map(([id, v]) => ({ ...v, _docId: id }));
+    }
+    logger.info("restoreinvoicesfrombackup: parsed backup invoices", { count: invoicesInBackup.length });
+
+    // 3) Filter to matching month + ASR
+    const matchesFilter = (v) => {
+      if (String(v.month || "") !== month) return false;
+      if (afterSchoolType) return v.afterSchoolType === afterSchoolType;
+      if (onlyAfterSchool) return !!v.afterSchoolType;
+      return true;
+    };
+    const filtered = invoicesInBackup.filter(matchesFilter);
+
+    // 4) Diff vs current Firestore
+    const db = admin.firestore();
+    const missing = [];
+    for (const inv of filtered) {
+      const docId = String(inv._docId || inv.id || "");
+      if (!docId) continue;
+      const cur = await db.collection("invoices").doc(docId).get();
+      if (!cur.exists) missing.push({ ...inv, _docId: docId });
+    }
+    logger.info("restoreinvoicesfrombackup: missing invoices in current state", { count: missing.length });
+
+    const preview = missing.map(v => ({
+      id: v._docId,
+      gardenName: v.gardenName,
+      afterSchoolType: v.afterSchoolType || null,
+      docNumber: v.morningDocNumber || v.docNumber || null,
+      docType: v.morningActualType || v.docType || null,
+      totalAmount: v.totalAmount || 0,
+      vatAmount: v.vatAmount || 0,
+      createdAt: v.createdAt || null,
+    }));
+
+    if (dryRun) {
+      return { dryRun: true, backupFile: fileName, filteredInBackup: filtered.length, missingInCurrent: missing.length, invoices: preview };
+    }
+
+    // 5) Restore
+    const batch = db.batch();
+    const nowIso = new Date().toISOString();
+    missing.forEach(v => {
+      const { _docId, ...rest } = v;
+      const ref = db.collection("invoices").doc(String(_docId));
+      batch.set(ref, { ...rest, restoredFromBackup: fileName, restoredAt: nowIso, restoredBy: request.auth.uid });
+    });
+    if (missing.length) await batch.commit();
+    logger.info("restoreinvoicesfrombackup: restored", { count: missing.length, backupFile: fileName });
+    return { dryRun: false, backupFile: fileName, restored: missing.length, invoices: preview };
+  }
+);
+
 // EMERGENCY: restore recently-cancelled invoices back to 'created' status.
 // Use ONLY when user accidentally cancelled. Doesn't touch Morning — the credit notes
 // there remain and must be handled manually. dryRun=true just returns the list.
