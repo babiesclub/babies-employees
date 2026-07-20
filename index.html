@@ -3782,7 +3782,8 @@ async function openSalaryAdjustmentsModal(uidKey, currentMonth) {
           <td style="padding:6px 8px">${type}</td>
           <td style="padding:6px 8px;text-align:center;font-weight:700;color:${a.type==='bonus'?'#065F46':'#991B1B'}">${amt}₪</td>
           <td style="padding:6px 8px;font-size:11px;color:#4B5563">${esc(a.reason || '')}</td>
-          <td style="padding:6px 8px;text-align:center">
+          <td style="padding:6px 8px;text-align:center;white-space:nowrap">
+            <button onclick="editSalaryAdjustmentReason('${esc(a.id)}','${esc(uidKey)}','${esc(currentMonth)}')" title="ערוך סיבה" style="background:#FEF3C7;color:#78350F;border:1px solid #FBBF24;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;margin-left:4px">✏️</button>
             <button onclick="deleteSalaryAdjustment('${esc(a.id)}','${esc(uidKey)}','${esc(currentMonth)}')" style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer">🗑</button>
           </td>
         </tr>`;
@@ -3892,6 +3893,30 @@ async function deleteSalaryAdjustment(adjId, uidKey, currentMonth) {
     if (typeof _slrRenderList === 'function') _slrRenderList(currentMonth, _instrRptMonthLabel(currentMonth));
   } catch (e) {
     alert('שגיאה במחיקה: ' + (e.message || e));
+  }
+}
+async function editSalaryAdjustmentReason(adjId, uidKey, currentMonth) {
+  try {
+    const ref = fbDb.collection('salaryAdjustments').doc(adjId);
+    const snap = await ref.get();
+    if (!snap.exists) { alert('לא נמצאה התוספת/קיזוז'); return; }
+    const cur = snap.data() || {};
+    const newReason = prompt('ערכי סיבה:', cur.reason || '');
+    if (newReason === null) return;
+    const trimmed = String(newReason).trim();
+    if (!trimmed) { alert('הסיבה לא יכולה להיות ריקה'); return; }
+    if (trimmed === (cur.reason || '')) return;
+    await ref.update({
+      reason: trimmed,
+      updatedAt: new Date().toISOString(),
+      updatedBy: (cu && cu.uid) || null,
+      updatedByName: (cu && cu.name) || '',
+    });
+    await _slrLoadAdjustmentsForMonth(currentMonth);
+    openSalaryAdjustmentsModal(uidKey, currentMonth);
+    if (typeof _slrRenderList === 'function') _slrRenderList(currentMonth, _instrRptMonthLabel(currentMonth));
+  } catch (e) {
+    alert('שגיאה בעדכון: ' + (e.message || e));
   }
 }
 
