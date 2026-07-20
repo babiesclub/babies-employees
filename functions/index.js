@@ -944,6 +944,74 @@ exports.createmorninginvoice = onCall(
  *   - Refuses if the invoice is already cancelled or missing morningDocId.
  *   - Credit note (for 305) is dated today — Israeli tax convention.
  */
+// EMERGENCY: restore recently-cancelled invoices back to 'created' status.
+// Use ONLY when user accidentally cancelled. Doesn't touch Morning — the credit notes
+// there remain and must be handled manually. dryRun=true just returns the list.
+exports.restorerecentcancellations = onCall(
+  { region: "us-central1", timeoutSeconds: 120 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+    const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+    if (!callerDoc.exists || callerDoc.data().role !== "admin") {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+    const data = request.data || {};
+    const month = String(data.month || "");
+    const afterSchoolType = data.afterSchoolType || null;
+    const hoursBack = Math.max(1, Math.min(168, Number(data.hoursBack) || 24));
+    const dryRun = data.dryRun !== false;
+    if (!month) throw new HttpsError("invalid-argument", "month required (YYYY-MM)");
+    const cutoff = new Date(Date.now() - hoursBack * 3600000).toISOString();
+    let q = admin.firestore().collection("invoices")
+      .where("month", "==", month)
+      .where("status", "==", "cancelled");
+    const snap = await q.get();
+    const matched = [];
+    snap.forEach(d => {
+      const v = d.data() || {};
+      const cancelledAt = v.cancelledAt || "";
+      if (cancelledAt < cutoff) return;
+      if (afterSchoolType) {
+        if (v.afterSchoolType !== afterSchoolType) return;
+      } else if (data.onlyAfterSchool === true) {
+        if (!v.afterSchoolType) return;
+      }
+      matched.push({
+        id: d.id,
+        gardenName: v.gardenName,
+        afterSchoolType: v.afterSchoolType || null,
+        docNumber: v.morningDocNumber || v.docNumber || null,
+        cancelledAt: v.cancelledAt || null,
+        cancelledByName: v.cancelledByName || null,
+        creditNoteDocNumber: v.creditNoteDocNumber || null,
+        totalAmount: v.totalAmount || 0,
+        vatAmount: v.vatAmount || 0,
+      });
+    });
+    matched.sort((a, b) => String(b.cancelledAt || "").localeCompare(String(a.cancelledAt || "")));
+    if (dryRun) {
+      return { dryRun: true, count: matched.length, invoices: matched };
+    }
+    // Real restore
+    const batch = admin.firestore().batch();
+    const nowIso = new Date().toISOString();
+    const by = request.auth.uid;
+    matched.forEach(m => {
+      const ref = admin.firestore().collection("invoices").doc(m.id);
+      batch.update(ref, {
+        status: "created",
+        restoredAt: nowIso,
+        restoredBy: by,
+        previousCancelledAt: m.cancelledAt,
+        previousCancelledByName: m.cancelledByName,
+      });
+    });
+    if (matched.length) await batch.commit();
+    logger.info("restorerecentcancellations: restored", { count: matched.length, month, afterSchoolType });
+    return { dryRun: false, count: matched.length, invoices: matched };
+  }
+);
+
 // Manually undo a payment/receipt on an invoice — for cases where the wrong doc type was issued.
 // She cancels the doc IN MORNING first (issues a credit note there), then calls this to
 // reset our local state so she can re-mark the invoice as paid with the correct doc type.
