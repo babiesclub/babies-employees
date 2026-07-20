@@ -3697,7 +3697,7 @@ if (typeof _slrRenderList === 'function' && !window._slrRenderList_wrapped) {
       const list = document.getElementById('slr-list');
       if (!list) return;
       const cards = list.querySelectorAll('.ir');
-      const users = (DB.get('users') || []).filter(u => u.role !== 'admin' && !u.offboardedAt);
+      const users = (DB.get('users') || []).filter(u => u.role !== 'admin');
       // Build lookup by name (best-effort — same order as filtered list)
       // Also gather info via card DOM data: no data attr present, so we recompute from users list
       // Because sort/filter may reorder, we re-derive by matching name text.
