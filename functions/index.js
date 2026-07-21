@@ -789,7 +789,24 @@ exports.createmorninginvoice = onCall(
       //   2 = INCLUDED (price already includes VAT)
       const gardenEmails = parseEmails(garden.email);
       const clientObj = { id: String(garden.morningClientId) };
-      if (gardenEmails.length > 0) {
+      // WIZO: never send to garden emails on document creation — route to Keren only.
+      const _isWizoInvGarden = (garden.networkName === "ויצו") ||
+        (typeof garden.name === "string" && garden.name.includes("ויצו"));
+      let _wizoInvEmail = "kerend@wizo.org";
+      if (_isWizoInvGarden) {
+        try {
+          const netDoc = await admin.firestore().collection("meta").doc("networkContacts").get();
+          const items = (netDoc.exists && netDoc.data() && netDoc.data().items) || {};
+          const w = items["ויצו"];
+          if (w && w.email) {
+            const parsed = parseEmails(w.email);
+            if (parsed.length > 0) _wizoInvEmail = parsed[0];
+          }
+        } catch (e) { logger.warn("createmorninginvoice: wizo contact fetch failed", { error: String(e && e.message || e) }); }
+      }
+      if (_isWizoInvGarden) {
+        // Do NOT set clientObj.emails for WIZO — prevents Morning from auto-emailing garden addresses.
+      } else if (gardenEmails.length > 0) {
         clientObj.emails = gardenEmails;
       }
       const _reqDate = data.documentDate;
@@ -849,19 +866,21 @@ exports.createmorninginvoice = onCall(
       logger.info("createmorninginvoice: docResult.url shape", { url: docResult.url, chosen: docUrl });
       const morningActualType = docResult.type != null ? Number(docResult.type) : null;
       let emailedTo = null;
-      if (gardenEmails.length > 0 && docResult.id) {
+      // For WIZO: distribute to Keren ONLY. For others: garden emails.
+      const _invoiceRecipients = _isWizoInvGarden ? [_wizoInvEmail] : gardenEmails;
+      if (_invoiceRecipients.length > 0 && docResult.id) {
         try {
           const distResponse = await fetch(`${MORNING_API_BASE}/documents/${docResult.id}/distribute`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
             body: JSON.stringify({
-              to: gardenEmails,
+              to: _invoiceRecipients,
               subject: "חשבונית חוגי בייביז - " + gardenName + " - " + monthName + " " + monthParts[0],
               body: "שלום,\n\nמצורפת חשבונית עבור " + gardenName + " לחודש " + monthName + " " + monthParts[0] + ".\n\nבברכה,\nבייביז קלאב",
             }),
           });
           if (distResponse.ok) {
-            emailedTo = gardenEmails.join(", ");
+            emailedTo = _invoiceRecipients.join(", ");
             logger.info("createmorninginvoice: email sent successfully to " + emailedTo);
           } else {
             const distText = await distResponse.text();
