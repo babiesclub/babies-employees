@@ -3895,20 +3895,23 @@ async function saveSalaryAdjustment(uidKey, currentMonth) {
   let amount = amountRaw;
   let amountFinal = amountRaw;
   if (u.vatStatus === 'morshe') {
-    vatRate = 0.17;
+    vatRate = (typeof VAT_RATE === 'number' ? VAT_RATE : 0.18);
+    const vatPct = Math.round(vatRate * 100);
+    const withVat = amountRaw * (1 + vatRate);
+    const baseFromInclusive = amountRaw / (1 + vatRate);
     const choice = prompt(
       `${u.name} רשומה כעוסק מורשה.\n\n` +
       `סכום שהזנת: ${amountRaw.toFixed(2)}₪\n\n` +
       `בחרי:\n` +
-      `  1 = להוסיף מע"מ (17%) → סה"כ ${(amountRaw * 1.17).toFixed(2)}₪\n` +
-      `  2 = הסכום כבר כולל מע"מ → ${amountRaw.toFixed(2)}₪ (${(amountRaw / 1.17).toFixed(2)}₪ + מע"מ)\n` +
+      `  1 = להוסיף מע"מ (${vatPct}%) → סה"כ ${withVat.toFixed(2)}₪\n` +
+      `  2 = הסכום כבר כולל מע"מ → ${amountRaw.toFixed(2)}₪ (${baseFromInclusive.toFixed(2)}₪ + מע"מ)\n` +
       `  3 = בלי מע"מ בכלל → ${amountRaw.toFixed(2)}₪\n\n` +
       `הקלידי 1 / 2 / 3:`,
       '1'
     );
     if (choice === null) return; // cancelled
     const c = String(choice).trim();
-    if (c === '1') { vatMode = 'add'; amount = amountRaw; amountFinal = +(amountRaw * 1.17).toFixed(2); }
+    if (c === '1') { vatMode = 'add'; amount = amountRaw; amountFinal = +withVat.toFixed(2); }
     else if (c === '2') { vatMode = 'included'; amount = amountRaw; amountFinal = amountRaw; }
     else if (c === '3') { vatMode = 'none'; amount = amountRaw; amountFinal = amountRaw; }
     else { alert('בחירה לא תקינה. הפעולה בוטלה.'); return; }
