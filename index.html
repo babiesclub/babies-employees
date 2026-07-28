@@ -3758,23 +3758,20 @@ if (typeof _slrRenderList === 'function' && !window._slrRenderList_wrapped) {
           const totalEl = card.querySelector('div[style*="font-size:24px"]');
           if (totalEl && totalEl.parentElement) totalEl.parentElement.appendChild(summary);
         }
-        // 4) Camp sessions section — separate from regular attendance
+        // 4) Camp sessions — compact one-line summary (detail lives in PDF report / dedicated modal)
         if (calc.campSessions && calc.campSessions.length > 0) {
-          const campBox = document.createElement('div');
-          campBox.style.cssText = 'margin-top:10px;background:#FFF7ED;border:1.5px solid #FDBA74;border-radius:10px;padding:10px 12px';
-          const rows = calc.campSessions.map(s => {
-            const b = s._billing || {};
-            const dt = esc(s.date || '');
-            const cn = esc(b.clientName || s.clientName || '?');
-            const gc = Number(s.groupsCount) || 1;
-            const dm = Number(s.durationMinutes) || 30;
-            const pay = (Number(b.pay) || 0).toFixed(2);
-            return `<tr><td style="padding:3px 6px;font-size:11px;color:#7B341E">${dt}</td><td style="padding:3px 6px;font-size:11px">${cn}</td><td style="padding:3px 6px;font-size:11px;text-align:center;color:#7B341E">${gc}×${dm}'</td><td style="padding:3px 6px;font-size:11px;text-align:center;font-weight:700;color:#7B341E">${pay}₪</td></tr>`;
-          }).join('');
           const totalCamp = (Number(calc.campPay) || 0).toFixed(2);
-          campBox.innerHTML = `<div style="font-size:12px;font-weight:800;color:#7B341E;margin-bottom:6px">🎪 קייטנות (${calc.campSessions.length} הפעלות)</div>
-            <table style="width:100%;border-collapse:collapse"><thead><tr style="background:#FED7AA"><th style="padding:3px 6px;font-size:10px;text-align:right;color:#7B341E">תאריך</th><th style="padding:3px 6px;font-size:10px;text-align:right;color:#7B341E">לקוח</th><th style="padding:3px 6px;font-size:10px;text-align:center;color:#7B341E">קבוצות</th><th style="padding:3px 6px;font-size:10px;text-align:center;color:#7B341E">תשלום</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="background:#FED7AA;font-weight:800"><td colspan="3" style="padding:4px 6px;font-size:11px;text-align:left;color:#7B341E">סה"כ קייטנות:</td><td style="padding:4px 6px;font-size:12px;text-align:center;color:#7B341E">${totalCamp}₪</td></tr></tfoot></table>`;
-          card.appendChild(campBox);
+          const uidForModal = esc(uidKey);
+          const monthForModal = esc(month);
+          const campLine = document.createElement('div');
+          campLine.style.cssText = 'margin-top:8px;background:#FFF7ED;border:1.5px solid #FDBA74;border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap';
+          campLine.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#7B341E;font-weight:700">
+              <span style="font-size:15px">🎪</span>
+              <span>קייטנות: ${calc.campSessions.length} הפעלות · <b>${totalCamp}₪</b></span>
+            </div>
+            <button type="button" onclick="openCampSessionsDetailModal('${uidForModal}','${monthForModal}')" style="background:#FED7AA;color:#7B341E;border:1px solid #FB923C;border-radius:6px;padding:4px 10px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">👁 פירוט</button>`;
+          card.appendChild(campLine);
         }
       });
     } catch (e) { console.warn('slr ext inject failed', e); }
@@ -3982,6 +3979,81 @@ async function editSalaryAdjustmentReason(adjId, uidKey, currentMonth) {
   } catch (e) {
     alert('שגיאה בעדכון: ' + (e.message || e));
   }
+}
+
+/* ---------- Camp sessions detail modal (from salary card) ---------- */
+function openCampSessionsDetailModal(uidKey, month) {
+  const users = DB.get('users') || [];
+  const u = users.find(x => String(x.uid || x.id) === String(uidKey));
+  if (!u) { alert('לא נמצאה מדריכה'); return; }
+  const all = (typeof _campSessions !== 'undefined' ? _campSessions : []) || [];
+  const sessions = all
+    .filter(s => String(s.instructorUid) === String(uidKey) && s.date && s.date.startsWith(month) && s.status === 'done')
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const bills = sessions.map(s => {
+    let b = { pay: 0, charge: 0, clientName: s.clientName || '' };
+    try { if (typeof calcCampSessionBilling === 'function') b = calcCampSessionBilling(s); } catch (e) {}
+    return { s, b };
+  });
+  const totalPay = bills.reduce((n, x) => n + (Number(x.b.pay) || 0), 0);
+  const totalCharge = bills.reduce((n, x) => n + (Number(x.b.charge) || 0), 0);
+  const totalGroups = sessions.reduce((n, s) => n + (Number(s.groupsCount) || 1), 0);
+  let mo = document.getElementById('camp-detail-mo');
+  if (!mo) { mo = document.createElement('div'); mo.id = 'camp-detail-mo'; mo.className = 'mo'; document.body.appendChild(mo); }
+  const rowsHtml = bills.map(({ s, b }, i) => {
+    const dt = esc(s.date || '');
+    const cn = esc(b.clientName || s.clientName || '?');
+    const loc = esc(s.location || s.gardenName || '—');
+    const gc = Number(s.groupsCount) || 1;
+    const dm = Number(s.durationMinutes) || 30;
+    const pay = (Number(b.pay) || 0).toFixed(2);
+    return `<tr style="border-bottom:1px solid #FED7AA${i % 2 ? ';background:#FFFBF5' : ''}">
+      <td style="padding:6px 8px;font-size:11.5px;white-space:nowrap;color:#7B341E">${dt}</td>
+      <td style="padding:6px 8px;font-size:11.5px">${cn}</td>
+      <td style="padding:6px 8px;font-size:11px;color:#4B5563">${loc}</td>
+      <td style="padding:6px 8px;font-size:11.5px;text-align:center;color:#7B341E">${gc}</td>
+      <td style="padding:6px 8px;font-size:11.5px;text-align:center;color:#7B341E">${dm} דק'</td>
+      <td style="padding:6px 8px;font-size:12px;text-align:center;font-weight:700;color:#7B341E">${pay}₪</td>
+    </tr>`;
+  }).join('');
+  mo.innerHTML = `<div class="md" style="max-width:840px;max-height:92vh;overflow-y:auto">
+    <div class="mt"><span>🎪 קייטנות — ${esc(u.name || '')} · ${esc(_instrRptMonthLabel(month))}</span><span class="mc" onclick="document.getElementById('camp-detail-mo').style.display='none'">×</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
+      <div style="background:#FFF7ED;border:1.5px solid #FDBA74;border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:10.5px;color:#7B341E;font-weight:700">הפעלות</div>
+        <div style="font-size:22px;font-weight:800;color:#7B341E">${sessions.length}</div>
+      </div>
+      <div style="background:#FFF7ED;border:1.5px solid #FDBA74;border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:10.5px;color:#7B341E;font-weight:700">קבוצות</div>
+        <div style="font-size:22px;font-weight:800;color:#7B341E">${totalGroups}</div>
+      </div>
+      <div style="background:#D8F3DC;border:1.5px solid #52B788;border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:10.5px;color:#1B4332;font-weight:700">סה"כ תשלום למדריכה</div>
+        <div style="font-size:22px;font-weight:800;color:#1B4332">${totalPay.toFixed(2)}₪</div>
+      </div>
+      <div style="background:#EDE7F6;border:1.5px solid #B39DDB;border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:10.5px;color:#4527A0;font-weight:700">סה"כ חיוב ללקוח</div>
+        <div style="font-size:22px;font-weight:800;color:#4527A0">${totalCharge.toFixed(2)}₪</div>
+      </div>
+    </div>
+    ${sessions.length ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:white">
+      <thead><tr style="background:#FED7AA;color:#7B341E">
+        <th style="padding:8px;text-align:right;font-size:11.5px">תאריך</th>
+        <th style="padding:8px;text-align:right;font-size:11.5px">לקוח</th>
+        <th style="padding:8px;text-align:right;font-size:11.5px">מיקום</th>
+        <th style="padding:8px;text-align:center;font-size:11.5px">קבוצות</th>
+        <th style="padding:8px;text-align:center;font-size:11.5px">משך</th>
+        <th style="padding:8px;text-align:center;font-size:11.5px">תשלום</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table></div>` : `<div style="padding:20px;text-align:center;color:#6B7280;font-style:italic">אין הפעלות ${_instrRptMonthLabel(month)}</div>`}
+    <div class="ma" style="margin-top:14px">
+      <button class="btn-sec" onclick="document.getElementById('camp-detail-mo').style.display='none'" style="width:100%">סגור</button>
+    </div>
+  </div>`;
+  mo.style.display = 'flex';
+  mo.style.alignItems = 'center';
+  mo.style.justifyContent = 'center';
 }
 
 /* ---------- Instructor's monthly approval screen ---------- */
