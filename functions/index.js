@@ -39,6 +39,29 @@ const gmailAppPassword = defineSecret("GMAIL_APP_PASSWORD");
 // Anthropic API key for AI Assistant
 const anthropicApiKey = defineSecret("ANTHROPIC_API_KEY");
 
+// Auto-retry Anthropic calls that fail with transient overload / rate limit / 5xx.
+// Uses exponential backoff (1s, 2s, 4s). Non-transient errors throw immediately.
+async function callAnthropicWithRetry(client, params, maxRetries) {
+  const max = maxRetries || 3;
+  let lastErr;
+  for (let attempt = 0; attempt < max; attempt++) {
+    try {
+      return await client.messages.create(params);
+    } catch (e) {
+      lastErr = e;
+      const status = e && e.status;
+      const errType = e && e.error && e.error.error && e.error.error.type;
+      const isTransient = status === 529 || status === 503 || status === 502 || status === 429 ||
+                          errType === "overloaded_error" || errType === "rate_limit_error";
+      if (!isTransient || attempt === max - 1) throw e;
+      const waitMs = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+      logger.warn(`Anthropic transient error (attempt ${attempt + 1}/${max}), retrying in ${waitMs}ms`, { status, errType });
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+  }
+  throw lastErr;
+}
+
 // Translates Anthropic SDK errors into HttpsError with actionable Hebrew message,
 // so the frontend shows a real reason instead of "INTERNAL".
 function translateAnthropicError(err, ctx) {
@@ -5364,7 +5387,7 @@ ${instructorName ? `- שם המדריכה שמופיעה בתמונה: ${instruc
 
     let resp;
     try {
-      resp = await client.messages.create({
+      resp = await callAnthropicWithRetry(client, {
         model: "claude-sonnet-5",
         max_tokens: 4096,
         system: SYSTEM,
@@ -5440,7 +5463,7 @@ ${instructorName ? `- שם המדריכה: ${instructorName} (לידיעה).` : 
 
     let resp;
     try {
-      resp = await client.messages.create({
+      resp = await callAnthropicWithRetry(client, {
         model: "claude-sonnet-5",
         max_tokens: 4096,
         system: SYSTEM,
