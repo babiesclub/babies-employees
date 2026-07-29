@@ -39,6 +39,39 @@ const gmailAppPassword = defineSecret("GMAIL_APP_PASSWORD");
 // Anthropic API key for AI Assistant
 const anthropicApiKey = defineSecret("ANTHROPIC_API_KEY");
 
+// Translates Anthropic SDK errors into HttpsError with actionable Hebrew message,
+// so the frontend shows a real reason instead of "INTERNAL".
+function translateAnthropicError(err, ctx) {
+  const label = ctx || "פונקציית AI";
+  const rawMsg = (err && err.error && err.error.error && err.error.error.message) ||
+                 (err && err.message) || String(err || "unknown");
+  const status = err && err.status;
+  const errType = (err && err.error && err.error.error && err.error.error.type) || "";
+  const low = String(rawMsg).toLowerCase();
+  if (low.includes("credit balance") || low.includes("insufficient") || low.includes("billing")) {
+    return new HttpsError("failed-precondition",
+      `⚠ נגמר קרדיט ב-Anthropic API. היכנסי ל-console.anthropic.com → Plans & Billing → הוסיפי קרדיטים או הפעילי auto-refill. ` +
+      `[${label}] הודעת המקור: ${rawMsg}`);
+  }
+  if (status === 401 || errType === "authentication_error" || low.includes("invalid x-api-key") || low.includes("authentication")) {
+    return new HttpsError("unauthenticated",
+      `⚠ מפתח ANTHROPIC_API_KEY לא תקין או פג תוקף. עדכני ב-Firebase Secrets: firebase functions:secrets:set ANTHROPIC_API_KEY. [${label}]`);
+  }
+  if (status === 429 || errType === "rate_limit_error") {
+    return new HttpsError("resource-exhausted",
+      `⚠ עברת את מכסת הבקשות ב-Anthropic. המתיני דקה ונסי שוב. [${label}] ${rawMsg}`);
+  }
+  if (status === 400 && (low.includes("model") || low.includes("not_found"))) {
+    return new HttpsError("failed-precondition",
+      `⚠ מודל Claude לא נתמך יותר. יש לעדכן את שם המודל בקוד ה-Cloud Function. [${label}] ${rawMsg}`);
+  }
+  if (status === 529 || status === 503 || errType === "overloaded_error") {
+    return new HttpsError("unavailable",
+      `⚠ שרתי Anthropic עמוסים כרגע. נסי שוב עוד רגע. [${label}]`);
+  }
+  return new HttpsError("internal", `⚠ שגיאה מ-Anthropic API: ${rawMsg} [${label}${status ? " · HTTP " + status : ""}]`);
+}
+
 // WhatsApp Cloud API secrets
 const whatsappAccessToken = defineSecret("WHATSAPP_ACCESS_TOKEN");
 const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
@@ -5168,13 +5201,16 @@ exports.askassistant = onCall(
 
     while (iterations < 10) {
       iterations++;
-      const resp = await client.messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 4096,
-        system: SYSTEM,
-        tools,
-        messages,
-      });
+      let resp;
+      try {
+        resp = await client.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 4096,
+          system: SYSTEM,
+          tools,
+          messages,
+        });
+      } catch (e) { throw translateAnthropicError(e, "עוזר AI (aiassistant)"); }
       modelUsed = resp.model;
       totalInTokens += resp.usage.input_tokens;
       totalOutTokens += resp.usage.output_tokens;
@@ -5326,18 +5362,21 @@ ${instructorName ? `- שם המדריכה שמופיעה בתמונה: ${instruc
 
 החזר רק את ה-JSON, בלי שום טקסט נוסף.`;
 
-    const resp = await client.messages.create({
-      model: "claude-opus-4-7",
-      max_tokens: 4096,
-      system: SYSTEM,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: mime, data: imageBase64 } },
-          { type: "text", text: "פרק את הלוז שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
-        ],
-      }],
-    });
+    let resp;
+    try {
+      resp = await client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        system: SYSTEM,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mime, data: imageBase64 } },
+            { type: "text", text: "פרק את הלוז שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
+          ],
+        }],
+      });
+    } catch (e) { throw translateAnthropicError(e, "קריאת לוז יומי מתמונה (parsescheduleimage)"); }
     const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
     let parsed;
     try {
@@ -5399,18 +5438,21 @@ ${gardenList}
 ${instructorName ? `- שם המדריכה: ${instructorName} (לידיעה).` : ""}
 - החזר רק JSON תקין, בלי טקסט לפני או אחרי, בלי markdown.`;
 
-    const resp = await client.messages.create({
-      model: "claude-opus-4-7",
-      max_tokens: 4096,
-      system: SYSTEM,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: mime, data: imageBase64 } },
-          { type: "text", text: "פרק את הלוח השבועי שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
-        ],
-      }],
-    });
+    let resp;
+    try {
+      resp = await client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        system: SYSTEM,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mime, data: imageBase64 } },
+            { type: "text", text: "פרק את הלוח השבועי שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
+          ],
+        }],
+      });
+    } catch (e) { throw translateAnthropicError(e, "קריאת לוז שבועי מתמונה (parseweeklyscheduleimage)"); }
     const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
     let parsed;
     try {
@@ -5474,7 +5516,7 @@ exports.analyzetender = onCall(
     let resp;
     try {
       resp = await client.messages.create({
-        model: "claude-opus-4-7",
+        model: "claude-sonnet-5",
         max_tokens: 8000,
         system: SYSTEM,
         messages: [{
@@ -7006,10 +7048,10 @@ exports.submitmonthlyapproval = onCall(
  * Uses Claude Opus 4.7 (native PDF + image via document/image content blocks).
  * ========================================================================= */
 const OCR_MAX_BYTES = 10 * 1024 * 1024; // 10MB cap (Claude allows 32MB; we keep costs down)
-const OCR_MODEL = "claude-opus-4-7";
+const OCR_MODEL = "claude-haiku-4-5-20251001";
 // Rough cost estimate (USD per 1M tokens) — Opus 4.7 pricing as of writing.
-const OCR_COST_IN_PER_MTOK = 15.00;
-const OCR_COST_OUT_PER_MTOK = 75.00;
+const OCR_COST_IN_PER_MTOK = 1.00;
+const OCR_COST_OUT_PER_MTOK = 5.00;
 
 function _extOfPath(p) {
   const m = String(p || "").toLowerCase().match(/\.([a-z0-9]+)(?:\?|#|$)/);
