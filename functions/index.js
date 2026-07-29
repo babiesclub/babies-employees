@@ -5365,7 +5365,7 @@ ${instructorName ? `- שם המדריכה שמופיעה בתמונה: ${instruc
     let resp;
     try {
       resp = await client.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-sonnet-5",
         max_tokens: 4096,
         system: SYSTEM,
         messages: [{
@@ -5441,7 +5441,7 @@ ${instructorName ? `- שם המדריכה: ${instructorName} (לידיעה).` : 
     let resp;
     try {
       resp = await client.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-sonnet-5",
         max_tokens: 4096,
         system: SYSTEM,
         messages: [{
