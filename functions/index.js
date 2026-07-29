@@ -39,24 +39,39 @@ const gmailAppPassword = defineSecret("GMAIL_APP_PASSWORD");
 // Anthropic API key for AI Assistant
 const anthropicApiKey = defineSecret("ANTHROPIC_API_KEY");
 
-// Auto-retry Anthropic calls that fail with transient overload / rate limit / 5xx.
-// Uses exponential backoff (1s, 2s, 4s). Non-transient errors throw immediately.
-async function callAnthropicWithRetry(client, params, maxRetries) {
-  const max = maxRetries || 3;
+// Auto-retry Anthropic calls with per-model retry + fallback chain across models.
+// If the primary model is overloaded, tries the next model in `fallbackModels`.
+// Retries transient errors (529, 503, 502, 429, overloaded_error, rate_limit_error) per model.
+async function callAnthropicWithRetry(client, params, opts) {
+  opts = opts || {};
+  const primaryModel = params.model;
+  const fallbackModels = opts.fallbackModels || []; // e.g. ["claude-opus-4-7", "claude-haiku-4-5-20251001"]
+  const maxRetriesPerModel = opts.maxRetriesPerModel || 3;
+  const models = [primaryModel, ...fallbackModels];
   let lastErr;
-  for (let attempt = 0; attempt < max; attempt++) {
-    try {
-      return await client.messages.create(params);
-    } catch (e) {
-      lastErr = e;
-      const status = e && e.status;
-      const errType = e && e.error && e.error.error && e.error.error.type;
-      const isTransient = status === 529 || status === 503 || status === 502 || status === 429 ||
-                          errType === "overloaded_error" || errType === "rate_limit_error";
-      if (!isTransient || attempt === max - 1) throw e;
-      const waitMs = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-      logger.warn(`Anthropic transient error (attempt ${attempt + 1}/${max}), retrying in ${waitMs}ms`, { status, errType });
-      await new Promise(r => setTimeout(r, waitMs));
+  for (let mi = 0; mi < models.length; mi++) {
+    const model = models[mi];
+    for (let attempt = 0; attempt < maxRetriesPerModel; attempt++) {
+      try {
+        const modelUsed = model;
+        if (mi > 0 && attempt === 0) {
+          logger.warn(`Anthropic primary (${primaryModel}) exhausted, falling back to ${model}`);
+        }
+        return await client.messages.create({ ...params, model: modelUsed });
+      } catch (e) {
+        lastErr = e;
+        const status = e && e.status;
+        const errType = e && e.error && e.error.error && e.error.error.type;
+        const isTransient = status === 529 || status === 503 || status === 502 || status === 429 ||
+                            errType === "overloaded_error" || errType === "rate_limit_error";
+        if (!isTransient) throw e; // non-transient → give up immediately (billing, auth, model retired…)
+        const isLastAttemptOnThisModel = attempt === maxRetriesPerModel - 1;
+        if (isLastAttemptOnThisModel && mi === models.length - 1) throw e; // exhausted all models
+        if (isLastAttemptOnThisModel) break; // move to next fallback model
+        const waitMs = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+        logger.warn(`Anthropic transient error on ${model} (attempt ${attempt + 1}/${maxRetriesPerModel}), retrying in ${waitMs}ms`, { status, errType });
+        await new Promise(r => setTimeout(r, waitMs));
+      }
     }
   }
   throw lastErr;
@@ -5398,7 +5413,7 @@ ${instructorName ? `- שם המדריכה שמופיעה בתמונה: ${instruc
             { type: "text", text: "פרק את הלוז שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
           ],
         }],
-      });
+      }, { fallbackModels: ["claude-opus-4-7"] });
     } catch (e) { throw translateAnthropicError(e, "קריאת לוז יומי מתמונה (parsescheduleimage)"); }
     const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
     let parsed;
@@ -5474,7 +5489,7 @@ ${instructorName ? `- שם המדריכה: ${instructorName} (לידיעה).` : 
             { type: "text", text: "פרק את הלוח השבועי שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
           ],
         }],
-      });
+      }, { fallbackModels: ["claude-opus-4-7"] });
     } catch (e) { throw translateAnthropicError(e, "קריאת לוז שבועי מתמונה (parseweeklyscheduleimage)"); }
     const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
     let parsed;
