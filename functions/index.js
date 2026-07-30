@@ -1105,7 +1105,8 @@ exports.createcampmorninginvoice = onCall(
       const _needsBackdate = _docDate < _todayStr;
 
       const clientObj = { id: String(client.morningClientId) };
-      // NOTE: for camp clients we don't have per-client emails stored yet — Morning will use whatever it has on file.
+      const clientEmails = parseEmails(client.email);
+      if (clientEmails.length > 0) clientObj.emails = clientEmails;
       const payload = {
         type: docType,
         description: "חוגי חיות בייביז · קייטנת קיץ · " + monthName + " " + monthParts[0],
@@ -1137,6 +1138,31 @@ exports.createcampmorninginvoice = onCall(
       const docUrl = docResult.url ? (docResult.url.origin || docResult.url.he || null) : null;
       const morningActualType = docResult.type != null ? Number(docResult.type) : null;
 
+      // Auto-distribute to client emails (same pattern as createmorninginvoice)
+      let emailedTo = null;
+      if (clientEmails.length > 0 && docResult.id) {
+        try {
+          const distResponse = await fetch(`${MORNING_API_BASE}/documents/${docResult.id}/distribute`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+              to: clientEmails,
+              subject: "חשבונית חוגי חיות בייביז - " + (client.name || "") + " - " + monthName + " " + monthParts[0],
+              body: "שלום,\n\nמצורפת חשבונית עבור " + (client.name || "") + " לקייטנות חודש " + monthName + " " + monthParts[0] + ".\n\nבברכה,\nבייביז קלאב",
+            }),
+          });
+          if (distResponse.ok) {
+            emailedTo = clientEmails.join(", ");
+            logger.info("createcampmorninginvoice: email sent successfully to " + emailedTo);
+          } else {
+            const distText = await distResponse.text();
+            logger.warn("createcampmorninginvoice: email distribution failed", { status: distResponse.status, body: distText.slice(0, 200), to: clientEmails });
+          }
+        } catch (e) {
+          logger.warn("createcampmorninginvoice: email distribution error", { error: String(e && e.message || e) });
+        }
+      }
+
       const invoiceId = Date.now() + Math.floor(Math.random() * 1000);
       const invoiceData = {
         id: invoiceId,
@@ -1157,6 +1183,7 @@ exports.createcampmorninginvoice = onCall(
         lineItemCount: incomeLines.length,
         createdAt: new Date().toISOString(),
         createdBy: request.auth.uid,
+        emailedTo,
         status: "created",
       };
       await admin.firestore().collection("invoices").doc(String(invoiceId)).set(invoiceData);
