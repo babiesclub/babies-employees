@@ -3319,7 +3319,64 @@ function _suppToggleAll(cb){document.querySelectorAll('.supp-inv-check').forEach
 function _suppUpdateTotal(){const checks=document.querySelectorAll('.supp-inv-check:checked');let tot=0;checks.forEach(c=>{tot+=Number(c.getAttribute('data-total'))||0});const totEl=document.getElementById('supp-inv-sel-total');const cntEl=document.getElementById('supp-inv-sel-count');if(totEl)totEl.textContent=tot.toFixed(2);if(cntEl)cntEl.textContent=String(checks.length);const btn=document.getElementById('supp-inv-submit');if(btn)btn.disabled=checks.length===0;const all=document.querySelectorAll('.supp-inv-check');const cbAll=document.getElementById('supp-inv-check-all');if(cbAll&&all.length)cbAll.checked=(checks.length===all.length)}
 async function _suppInvSubmit(){const ctx=window._suppInvCtx;if(!ctx){alert('שגיאה: אין הקשר');return}const checks=document.querySelectorAll('.supp-inv-check:checked');if(!checks.length){alert('לא נבחרו דיווחים');return}const recordIds=Array.from(checks).map(c=>{const idx=Number(c.getAttribute('data-idx'));const rec=ctx.records[idx];return rec?String(rec.id):null}).filter(Boolean);if(!recordIds.length){alert('לא נמצאו מזהי דיווחים תקינים');return}const today=new Date().toISOString().slice(0,10);const{gardenName,month}=ctx;let selTot=0;checks.forEach(c=>{selTot+=Number(c.getAttribute('data-total'))||0});if(!confirm(`ליצור חשבונית משלימה על ${recordIds.length} דיווחים בגן "${gardenName}"?\n\n💰 סה״כ (כולל מע״מ): ${selTot.toFixed(2)}₪\n📅 תאריך הפקה: ${today}\n\n⚠ זה יוציא חשבונית חדשה במורנינג — בלתי הפיך.`))return;const btn=document.getElementById('supp-inv-submit');const orig=btn?btn.innerHTML:'';if(btn){btn.disabled=true;btn.innerHTML='⏳ יוצרת...'}try{const fn=window.fbFunctions.httpsCallable('createmorninginvoice');const res=await fn({gardenName,month,documentDate:today,supplementary:true,recordIds});const d=res.data||{};const url=d.docUrl||'';const num=d.docNumber||'?';closeSuppInvoiceMo();let msg=`✓ חשבונית משלימה #${num} נוצרה במורנינג!`;if(url)msg+='\n\n🔗 קישור: '+url;alert(msg);if(typeof renderRep==='function')renderRep()}catch(e){console.error('_suppInvSubmit',e);alert('שגיאה ביצירת החשבונית המשלימה:\n'+(e.message||e));if(btn){btn.disabled=false;btn.innerHTML=orig||'➕ צור חשבונית משלימה'}}}
 async function refreshAllInvoiceUrls(){if(!window.fbFunctions){alert('Firebase לא זמין');return}if(!confirm('🔄 רענון קישורי חשבוניות\n\nזה יעבור על כל החשבוניות עם morningDocId, יבקש מ־Morning את הקישור העדכני, ויעדכן את המסד.\n\nתהליך של 30 שניות עד 2 דקות תלוי בכמות. להמשיך?'))return;const btn=document.querySelector('button[onclick="refreshAllInvoiceUrls()"]');const orig=btn?btn.innerHTML:'';if(btn){btn.disabled=true;btn.innerHTML='⏳ מרענן...'}try{const fn=window.fbFunctions.httpsCallable('refreshallinvoiceurls');const res=await fn({});const d=(res&&res.data)||{};let msg=`✓ רענון הושלם!\n\nסה"כ נבדקו: ${d.total||0}\n🔄 עודכנו: ${d.updated||0}\n= ללא שינוי: ${d.unchanged||0}\n✗ נכשלו: ${d.failed||0}`;if(d.errors&&d.errors.length)msg+='\n\nשגיאות ראשונות:\n'+d.errors.slice(0,5).map(e=>('#'+e.id+': '+(e.status||e.reason||e.error||'?'))).join('\n');alert(msg);const _m=document.getElementById('rmf')?.value;if(_m)loadInvoiceStatuses(_m)}catch(e){alert('שגיאה: '+(e.message||e))}finally{if(btn){btn.disabled=false;btn.innerHTML=orig}}}
-async function resendInvoiceEmail(btnEl,invoiceId,gardenName){if(!invoiceId){alert('חסר invoiceId');return}if(!window.fbFunctions){alert('Firebase לא זמין');return}const gardens=DB.get('gardens')||[];const gObj=gardens.find(x=>(typeof x==='object'?x.name:x)===gardenName);let savedEmails=(gObj&&typeof gObj==='object'&&gObj.email)?String(gObj.email).trim():'';/* Fall back to camp_clients if not found in gardens (camp invoice: gardenName holds client name) */if(!savedEmails){const _cc=(typeof _campClients!=='undefined'?_campClients:[])||[];const _cObj=_cc.find(x=>(x.name||'').trim()===String(gardenName||'').trim());if(_cObj&&_cObj.email)savedEmails=String(_cObj.email).trim()}const promptMsg=`📧 שליחת החשבונית באימייל דרך Morning\n\n${savedEmails?`אימייל שמור לגן: ${savedEmails}\n\n`:'⚠ אין אימייל שמור לגן.\n\n'}הזיני אימיילים לשליחה (מופרדים בפסיק) — או השאירי ריק כדי להשתמש בשמור:`;const inputVal=prompt(promptMsg,savedEmails);if(inputVal===null)return;const emails=inputVal.trim()?inputVal.split(/[,;]/).map(e=>e.trim()).filter(Boolean):null;if(emails&&emails.length){const invalid=emails.filter(e=>!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));if(invalid.length){alert('אימיילים לא תקינים: '+invalid.join(', '));return}}const origText=btnEl?btnEl.textContent:'';if(btnEl){btnEl.disabled=true;btnEl.textContent='⏳ שולחת...';btnEl.style.opacity='0.6'}try{const fn=window.fbFunctions.httpsCallable('resendmorninginvoiceemail');const payload={invoiceId:String(invoiceId)};if(emails&&emails.length)payload.emails=emails;const res=await fn(payload);const d=(res&&res.data)||{};alert(`✓ החשבונית נשלחה שוב באימייל!\n\n📧 נמענים: ${d.emailedTo||'—'}`);const _m=document.getElementById('rmf')?.value;if(_m)loadInvoiceStatuses(_m)}catch(e){console.error('resendInvoiceEmail',e);alert('שגיאה בשליחה: '+(e.message||e));if(btnEl){btnEl.disabled=false;btnEl.textContent=origText;btnEl.style.opacity=''}}}
+async function resendInvoiceEmail(btnEl,invoiceId,gardenName){
+  if(!invoiceId){alert('חסר invoiceId');return}
+  if(!window.fbFunctions){alert('Firebase לא זמין');return}
+  const gardens=DB.get('gardens')||[];
+  const gObj=gardens.find(x=>(typeof x==='object'?x.name:x)===gardenName);
+  let savedEmails=(gObj&&typeof gObj==='object'&&gObj.email)?String(gObj.email).trim():'';
+  /* Detect if this is a camp client (gardenName holds camp client name) */
+  let isCamp=false, campClient=null;
+  if(!savedEmails){
+    const _cc=(typeof _campClients!=='undefined'?_campClients:[])||[];
+    campClient=_cc.find(x=>(x.name||'').trim()===String(gardenName||'').trim())||null;
+    if(campClient){isCamp=true;if(campClient.email)savedEmails=String(campClient.email).trim()}
+  } else if(!gObj){
+    /* Emails found but gObj is missing — could still be camp; check */
+    const _cc=(typeof _campClients!=='undefined'?_campClients:[])||[];
+    campClient=_cc.find(x=>(x.name||'').trim()===String(gardenName||'').trim())||null;
+    if(campClient)isCamp=true;
+  }
+  const entityLabel=isCamp?'לקוח קייטנה':'גן';
+  const promptMsg=`📧 שליחת החשבונית באימייל דרך Morning\n\n${entityLabel}: ${gardenName}\n\n${savedEmails?`אימייל שמור: ${savedEmails}\n\n`:`⚠ אין אימייל שמור ל${entityLabel} זה.\n\n`}הזיני אימיילים לשליחה (מופרדים בפסיק) — או השאירי ריק כדי להשתמש בשמור:`;
+  const inputVal=prompt(promptMsg,savedEmails);
+  if(inputVal===null)return;
+  const emails=inputVal.trim()?inputVal.split(/[,;]/).map(e=>e.trim()).filter(Boolean):null;
+  if(emails&&emails.length){
+    const invalid=emails.filter(e=>!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+    if(invalid.length){alert('אימיילים לא תקינים: '+invalid.join(', '));return}
+  }
+  /* If new emails were entered and different from saved, offer to persist for next time */
+  const enteredNew=emails&&emails.length&&emails.join(',')!==savedEmails;
+  let persistToClient=false;
+  if(enteredNew&&isCamp&&campClient&&window.fbDb){
+    if(confirm(`לשמור את האימייל על הלקוח "${gardenName}" לשימוש בפעם הבאה?\n\nהאימיילים: ${emails.join(', ')}\n\nלחצי OK לשמור, Cancel לשלוח פעם אחת בלבד.`)){
+      persistToClient=true;
+    }
+  }
+  const origText=btnEl?btnEl.textContent:'';
+  if(btnEl){btnEl.disabled=true;btnEl.textContent='⏳ שולחת...';btnEl.style.opacity='0.6'}
+  try{
+    const fn=window.fbFunctions.httpsCallable('resendmorninginvoiceemail');
+    const payload={invoiceId:String(invoiceId)};
+    if(emails&&emails.length)payload.emails=emails;
+    const res=await fn(payload);
+    const d=(res&&res.data)||{};
+    if(persistToClient){
+      try{
+        await fbDb.collection('camp_clients').doc(String(campClient.id)).set({email:emails.join(', '),updatedAt:new Date().toISOString()},{merge:true});
+        campClient.email=emails.join(', ');
+      }catch(e){console.warn('persist client email failed',e)}
+    }
+    alert(`✓ החשבונית נשלחה שוב באימייל!\n\n📧 נמענים: ${d.emailedTo||'—'}${persistToClient?'\n\n💾 האימייל נשמר על הלקוח לשימוש עתידי.':''}`);
+    const _m=document.getElementById('rmf')?.value;
+    if(_m)loadInvoiceStatuses(_m);
+  }catch(e){
+    console.error('resendInvoiceEmail',e);
+    alert('שגיאה בשליחה: '+(e.message||e));
+    if(btnEl){btnEl.disabled=false;btnEl.textContent=origText;btnEl.style.opacity=''}
+  }
+}
 async function undoInvoicePayment(invoiceId,invNum,receiptNum){if(!invoiceId){alert('חסר מזהה חשבונית');return}if(!window.fbFunctions){alert('Firebase לא זמין');return}const msg=`⚠ ביטול תשלום/קבלה של חשבונית #${invNum||'?'}\n\nזה מאפס את רישום התשלום בלבד באפליקציה.\n\n⚠ חשוב: לפני שאת מאשרת — בטלי ידנית ב-Morning את הקבלה #${receiptNum||'?'} (חשבונית זיכוי / ביטול קבלה) כדי שלא יופיע לך פעמיים בהנהח"ש.\n\nאחרי הביטול תוכלי לסמן את החשבונית כשולמה מחדש עם סוג המסמך הנכון.\n\nלהמשיך?`;if(!confirm(msg))return;if(!confirm(`ווידאתי שביטלתי את הקבלה #${receiptNum||'?'} ידנית ב-Morning. להמשיך?`))return;try{const fn=window.fbFunctions.httpsCallable('undoinvoicepayment');await fn({invoiceId});alert(`✓ רישום התשלום בוטל.\n\nעכשיו תוכלי ללחוץ "💰 שולם" מחדש עם סוג המסמך הנכון.`);const _month=document.getElementById('rmf')?.value;if(_month)loadInvoiceStatuses(_month)}catch(e){alert('שגיאה בביטול: '+(e.message||e))}}
 async function cancelMorningInvoice(invoiceId){if(!invoiceId){alert('חסר invoiceId');return}if(!window.fbFunctions){alert('Firebase לא זמין');return}
 // Look up the invoice to know its docType — proforma (300) closes without a credit note; tax invoice (305) issues a credit note.
