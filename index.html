@@ -3035,8 +3035,12 @@ async function renderCampInvoicesSection(month) {
     } else if (isCancelled) {
       const cnUrl = inv.creditNoteDocUrl || '';
       const cnNum = inv.creditNoteDocNumber || '';
-      const cnLink = cnUrl ? `<a href="${esc(cnUrl)}" target="_blank" style="color:#666;font-size:11px">זיכוי #${esc(String(cnNum))}</a>` : (cnNum ? `זיכוי #${esc(String(cnNum))}` : '');
-      statusCell = `<span style="color:#888;font-weight:600;background:#EEE;padding:4px 10px;border-radius:6px;border:1px solid #BBB;text-decoration:line-through">🚫 בוטלה #${esc(inv.morningDocNumber || '')}</span>${cnLink ? ' · ' + cnLink : ''}`;
+      const cnLink = cnUrl ? `<a href="${esc(cnUrl)}" target="_blank" style="color:#666;font-size:11px">זיכוי #${esc(String(cnNum))}</a>` : (cnNum ? `<span style="font-size:11px;color:#666">זיכוי #${esc(String(cnNum))}</span>` : '');
+      const cancelledBadge = `<span style="color:#888;font-weight:600;background:#EEE;padding:3px 8px;border-radius:6px;border:1px solid #BBB;text-decoration:line-through;font-size:11px">🚫 בוטלה #${esc(inv.morningDocNumber || '')}</span>`;
+      const pdfBtnC = `<button onclick="downloadCampClientDetailPDF('${escCid}','${esc(month)}')" title="הורדת PDF פירוט הפעלות ללקוח" style="background:#E1F2FA;color:#0C4A6E;border:1px solid #90CDF4;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit">📥 פירוט PDF</button>`;
+      const xlsxBtnC = `<button onclick="downloadCampClientExcelByCity('${escCid}','${esc(month)}')" title="הורדת Excel — כל עיר בטאב נפרד" style="background:#D8F3DC;color:#1B4332;border:1px solid #52B788;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit">📊 Excel פר עיר</button>`;
+      const newInvBtn = `<button onclick="createCampInvoiceForClient(this,'${escCid}','${esc(month)}')" style="background:#7B341E;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:700;font-family:inherit">📄 חשבונית חדשה (${docType})</button>`;
+      statusCell = `<div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;max-width:280px"><div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${cancelledBadge}${cnLink}</div>${newInvBtn}<div style="display:flex;gap:4px;flex-wrap:wrap">${pdfBtnC}${xlsxBtnC}</div></div>`;
     } else if (hasInv) {
       const url = inv.morningDocUrl || '';
       const num = inv.morningDocNumber || inv.id || '';
