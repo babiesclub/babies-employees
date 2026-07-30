@@ -3045,16 +3045,18 @@ async function renderCampInvoicesSection(month) {
       const _expTot = (Number(inv.totalAmount || 0) + Number(inv.vatAmount || 0)).toFixed(2);
       const _amtPaid = Number(inv.amountPaid || 0);
       const pdfDetailBtn = `<button onclick="downloadCampClientDetailPDF('${escCid}','${esc(month)}')" title="הורדת PDF פירוט הפעלות ללקוח" style="margin-right:4px;background:#E1F2FA;color:#0C4A6E;border:1.5px solid #90CDF4;border-radius:6px;font-size:11px;padding:4px 8px;cursor:pointer;font-weight:700">📥 פירוט PDF</button>`;
+      const xlsxDetailBtn = `<button onclick="downloadCampClientExcelByCity('${escCid}','${esc(month)}')" title="הורדת Excel — כל עיר בטאב נפרד" style="margin-right:4px;background:#D8F3DC;color:#1B4332;border:1.5px solid #52B788;border-radius:6px;font-size:11px;padding:4px 8px;cursor:pointer;font-weight:700">📊 Excel פר עיר</button>`;
       const paidBtn = !isPaid ? `<button onclick="openMarkPaidMo('${invIdEsc}','${escName}','${esc(String(num))}','${_expTot}')" style="margin-right:4px;background:${isPartial ? '#F59E0B' : '#FFA94D'};color:white;border:none;border-radius:6px;font-size:11px;padding:4px 8px;cursor:pointer;font-weight:600">${isPartial ? '💰 המשך' : '💰 שולם'}</button>` : '';
       const waCloudBtn = url && !isPaid ? `<button onclick="sendInvoiceWACloud(this,'${escName}','${esc(String(num))}','${esc(month)}','${esc(url)}')" style="margin-right:4px;background:#075E54;color:white;border:none;border-radius:6px;font-size:11px;padding:4px 8px;cursor:pointer;font-weight:600">☁ WA</button>` : '';
       const emailBtn = inv.morningDocId ? `<button onclick="resendInvoiceEmail(this,'${invIdEsc}','${escName}')" style="margin-right:4px;background:${inv.emailedTo ? '#7C3AED' : '#5B21B6'};color:white;border:none;border-radius:6px;font-size:11px;padding:4px 8px;cursor:pointer;font-weight:600">${inv.emailedTo ? '↻ מייל' : '📧 מייל'}</button>` : '';
       const cancelBtn = (inv.status === 'created' && inv.morningDocId && !(inv.morningActualType === 320 || inv.morningActualType === 400)) ? `<button onclick="cancelMorningInvoice('${invIdEsc}')" style="margin-right:4px;background:#DC2626;color:white;border:none;border-radius:6px;font-size:11px;padding:4px 8px;cursor:pointer;font-weight:600">🚫 בטל</button>` : '';
       const badge = isPaid ? '<div style="background:#D8F3DC;color:#1B4332;font-size:10px;padding:3px 8px;border-radius:8px;margin-top:4px;font-weight:600;display:inline-block">✅ שולם</div>' : (isPartial ? `<div style="background:#FEF3C7;color:#78350F;font-size:10px;padding:3px 8px;border-radius:8px;margin-top:4px;font-weight:600;display:inline-block">🟡 חלקי · ${_amtPaid.toFixed(2)}/${_expTot}₪</div>` : '');
-      statusCell = `${linkBtn}${pdfDetailBtn}${paidBtn}${waCloudBtn}${emailBtn}${cancelBtn}${badge}`;
+      statusCell = `${linkBtn}${pdfDetailBtn}${xlsxDetailBtn}${paidBtn}${waCloudBtn}${emailBtn}${cancelBtn}${badge}`;
     } else {
       const editBtn = `<button onclick="openCampClientEdit('${escCid}')" title="ערוך את הגדרות הלקוח (סוג מסמך, תעריפים, Morning ID)" style="background:#FEF3C7;color:#78350F;border:1px solid #F59E0B;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit">✏️ ערוך לקוח</button>`;
       const pdfBtn = `<button onclick="downloadCampClientDetailPDF('${escCid}','${esc(month)}')" title="הורדת PDF פירוט הפעלות ללקוח" style="background:#E1F2FA;color:#0C4A6E;border:1px solid #90CDF4;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit">📥 פירוט PDF</button>`;
-      statusCell = `<div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;max-width:260px"><button onclick="createCampInvoiceForClient(this,'${escCid}','${esc(month)}')" style="background:#7B341E;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:700;font-family:inherit">📄 ${docType}</button><div style="display:flex;gap:4px;flex-wrap:wrap">${pdfBtn}${editBtn}</div><div style="font-size:9.5px;color:#78350F;font-style:italic">סוג מסמך: ${docType} (${esc(String(g.morningDocType || '300'))})</div></div>`;
+      const xlsxBtn = `<button onclick="downloadCampClientExcelByCity('${escCid}','${esc(month)}')" title="הורדת Excel — כל עיר בטאב נפרד" style="background:#D8F3DC;color:#1B4332;border:1px solid #52B788;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit">📊 Excel פר עיר</button>`;
+      statusCell = `<div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;max-width:280px"><button onclick="createCampInvoiceForClient(this,'${escCid}','${esc(month)}')" style="background:#7B341E;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:700;font-family:inherit">📄 ${docType}</button><div style="display:flex;gap:4px;flex-wrap:wrap">${pdfBtn}${xlsxBtn}${editBtn}</div><div style="font-size:9.5px;color:#78350F;font-style:italic">סוג מסמך: ${docType} (${esc(String(g.morningDocType || '300'))})</div></div>`;
     }
     return `<tr>
       <td style="padding:8px 10px;font-weight:700;color:#7B341E">🎪 ${esc(g.name)}</td>
@@ -3250,6 +3252,82 @@ function _campClientDetailHTML(client, month, sessions) {
       החשבונית המצורפת כוללת סיכום מרוכז לפי משך הפעילות.
     </div>
   </div>`;
+}
+
+async function downloadCampClientExcelByCity(clientId, month) {
+  const clients = (typeof _campClients !== 'undefined' ? _campClients : []) || [];
+  const client = clients.find(x => String(x.id) === String(clientId));
+  if (!client) { alert('לא נמצא לקוח'); return; }
+  const sessions = ((typeof _campSessions !== 'undefined' ? _campSessions : []) || [])
+    .filter(s => String(s.clientId) === String(clientId) && s.date && s.date.startsWith(month) && s.status === 'done')
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  if (!sessions.length) { alert('אין הפעלות שסומנו כבוצעו בחודש זה'); return; }
+  if (typeof XLSX === 'undefined') { alert('ספריית Excel לא נטענה'); return; }
+  const price30 = Number(client.pricePerGroup30) || 0;
+  const price40 = Number(client.pricePerGroup40) || 0;
+  const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+  // Group by city
+  const byCity = {};
+  sessions.forEach(s => {
+    const city = (s.city || '').trim() || 'ללא עיר';
+    if (!byCity[city]) byCity[city] = [];
+    byCity[city].push(s);
+  });
+  const wb = XLSX.utils.book_new();
+  // Summary tab first
+  const summaryRows = [['עיר', 'הפעלות', 'קבוצות', 'סה"כ (לפני מע"מ)']];
+  let grandGroups = 0, grandTotal = 0, grandSessions = 0;
+  Object.keys(byCity).sort((a, b) => a.localeCompare(b, 'he')).forEach(city => {
+    const list = byCity[city];
+    const groups = list.reduce((n, s) => n + (Number(s.groupsCount) || 1), 0);
+    const total = list.reduce((n, s) => {
+      const dur = (Number(s.durationMinutes) || 30) === 40 ? 40 : 30;
+      const price = dur === 40 ? price40 : price30;
+      return n + price * (Number(s.groupsCount) || 1);
+    }, 0);
+    grandSessions += list.length;
+    grandGroups += groups;
+    grandTotal += total;
+    summaryRows.push([city, list.length, groups, +total.toFixed(2)]);
+  });
+  summaryRows.push(['סה"כ', grandSessions, grandGroups, +grandTotal.toFixed(2)]);
+  const wsSum = XLSX.utils.aoa_to_sheet(summaryRows);
+  wsSum['!cols'] = [{ wch: 22 }, { wch: 10 }, { wch: 10 }, { wch: 18 }];
+  XLSX.utils.book_append_sheet(wb, wsSum, 'סיכום');
+  // One tab per city
+  Object.keys(byCity).sort((a, b) => a.localeCompare(b, 'he')).forEach(city => {
+    const list = byCity[city];
+    const headers = ['תאריך', 'יום', 'גן / מיקום', 'מדריכה', 'קבוצות', 'משך (דק\')', 'תעריף/קב\'', 'סה"כ שורה', 'שעת התחלה', 'הערות'];
+    const rows = [headers];
+    let cityTotal = 0, cityGroups = 0;
+    list.forEach(s => {
+      const dur = (Number(s.durationMinutes) || 30) === 40 ? 40 : 30;
+      const groups = Number(s.groupsCount) || 1;
+      const price = dur === 40 ? price40 : price30;
+      const line = price * groups;
+      cityTotal += line;
+      cityGroups += groups;
+      const dt = new Date(s.date);
+      const dow = isNaN(dt) ? '' : dayNames[dt.getDay()];
+      const garden = ((s.location || s.gardenName || '?').split(',')[0] || '').trim() || '—';
+      const dp = (s.date || '').split('-');
+      const dtStr = dp.length === 3 ? `${dp[2]}/${dp[1]}/${dp[0]}` : s.date;
+      rows.push([
+        dtStr, dow, garden, s.instructorName || '—',
+        groups, dur, +price.toFixed(2), +line.toFixed(2),
+        s.startTime || '', s.notes || ''
+      ]);
+    });
+    rows.push([]);
+    rows.push(['סה"כ', '', '', '', cityGroups, '', '', +cityTotal.toFixed(2), '', '']);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 28 }, { wch: 18 }, { wch: 9 }, { wch: 10 }, { wch: 11 }, { wch: 13 }, { wch: 12 }, { wch: 30 }];
+    // Excel sheet names: max 31 chars, no special chars
+    const safeSheetName = city.replace(/[\\/:*?"[\]]/g, '_').slice(0, 31) || 'ללא_עיר';
+    XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
+  });
+  const filename = `דוח_קייטנה_${(client.name || 'client').replace(/\s+/g, '_')}_${month}_פר_עיר.xlsx`;
+  XLSX.writeFile(wb, filename);
 }
 
 async function downloadCampClientDetailPDF(clientId, month) {
