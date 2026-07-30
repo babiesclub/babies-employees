@@ -3086,7 +3086,83 @@ async function createCampInvoiceForClient(btn, clientId, month) {
   const c = clients.find(x => String(x.id) === String(clientId)) || {};
   const clientName = c.name || 'הלקוח';
   const monthLbl = _instrRptMonthLabel ? _instrRptMonthLabel(month) : month;
-  if (!confirm(`להפיק חשבונית ב-Morning ל־"${clientName}" עבור ${monthLbl}?\n\nהחשבונית תכלול את כל ההפעלות שסומנו כבוצעו בחודש זה.`)) return;
+  const price30 = Number(c.pricePerGroup30) || 0;
+  const price40 = Number(c.pricePerGroup40) || 0;
+  const docType = c.morningDocType || '300';
+  const docTypeLabel = { '300': 'חשבון עסקה', '305': 'חשבונית מס', '320': 'חשבונית מס/קבלה', '400': 'קבלה' }[docType] || 'חשבון עסקה';
+  const sessions = ((typeof _campSessions !== 'undefined' ? _campSessions : []) || [])
+    .filter(s => String(s.clientId) === String(clientId) && s.date && s.date.startsWith(month) && s.status === 'done')
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  if (!sessions.length) { alert(`אין הפעלות שסומנו כבוצעו ל־${clientName} בחודש ${monthLbl}`); return; }
+  const rowsHtml = sessions.map(s => {
+    const dur = Number(s.durationMinutes) || 30;
+    const groups = Number(s.groupsCount) || 1;
+    const price = dur === 40 ? price40 : price30;
+    const lineTotal = price * groups;
+    const garden = esc(((s.location || s.gardenName || '?').split(',')[0] || '').trim() || '—');
+    const dp = (s.date || '').split('-');
+    const dtStr = dp.length === 3 ? `${dp[2]}/${dp[1]}/${dp[0]}` : s.date;
+    return `<tr>
+      <td style="padding:5px 8px;font-size:11.5px;white-space:nowrap;color:#7B341E">${esc(dtStr)}</td>
+      <td style="padding:5px 8px;font-size:11.5px;font-weight:600">${garden}</td>
+      <td style="padding:5px 8px;font-size:11.5px;text-align:center">${groups}</td>
+      <td style="padding:5px 8px;font-size:11.5px;text-align:center">${dur} דק'</td>
+      <td style="padding:5px 8px;font-size:11.5px;text-align:center">${price.toFixed(2)}₪</td>
+      <td style="padding:5px 8px;font-size:12px;text-align:center;font-weight:700;color:#7B341E">${lineTotal.toFixed(2)}₪</td>
+    </tr>`;
+  }).join('');
+  const totalBase = sessions.reduce((s, x) => {
+    const dur = Number(x.durationMinutes) || 30;
+    return s + ((dur === 40 ? price40 : price30) * (Number(x.groupsCount) || 1));
+  }, 0);
+  const vat = +(totalBase * VAT_RATE).toFixed(2);
+  const totalGross = +(totalBase + vat).toFixed(2);
+  const zeroPrice = totalBase <= 0;
+  const noMorning = !c.morningClientId;
+  const warnBanner = (noMorning || zeroPrice) ?
+    `<div style="background:#FEE2E2;border:1.5px solid #DC2626;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#991B1B;line-height:1.5">
+      ${noMorning ? '<b>⚠ אין Morning Client ID</b> — לא ניתן להפיק חשבונית. ערכי את הלקוח בלשונית 🏢 לקוחות והזיני מזהה.<br>' : ''}
+      ${zeroPrice ? '<b>⚠ תעריף פר קבוצה = 0</b> — סה"כ החיוב יהיה 0. ערכי את הלקוח והזיני תעריף.' : ''}
+    </div>` : '';
+  let mo = document.getElementById('camp-inv-preview-mo');
+  if (!mo) { mo = document.createElement('div'); mo.id = 'camp-inv-preview-mo'; mo.className = 'mo'; document.body.appendChild(mo); }
+  mo.innerHTML = `<div class="md" style="max-width:820px;max-height:92vh;overflow-y:auto">
+    <div class="mt"><span>📄 תצוגה לפני הפקת חשבונית — ${esc(clientName)}</span><span class="mc" onclick="document.getElementById('camp-inv-preview-mo').style.display='none'">×</span></div>
+    ${warnBanner}
+    <div style="background:#FFF7ED;border:1.5px solid #FDBA74;border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:#7B341E;line-height:1.6">
+      <div><b>לקוח:</b> ${esc(clientName)}${c.morningClientId ? ' · <b>Morning ID:</b> ' + esc(String(c.morningClientId)) : ''}</div>
+      <div><b>חודש:</b> ${esc(monthLbl)} · <b>סוג מסמך:</b> ${esc(docTypeLabel)} (${esc(String(docType))})</div>
+      <div><b>הפעלות:</b> ${sessions.length}</div>
+    </div>
+    <div style="overflow-x:auto;margin-bottom:12px"><table style="width:100%;border-collapse:collapse;background:white;border:1px solid #FDBA74">
+      <thead><tr style="background:#FED7AA;color:#7B341E">
+        <th style="padding:8px;text-align:right;font-size:11.5px">תאריך</th>
+        <th style="padding:8px;text-align:right;font-size:11.5px">גן</th>
+        <th style="padding:8px;text-align:center;font-size:11.5px">קבוצות</th>
+        <th style="padding:8px;text-align:center;font-size:11.5px">משך</th>
+        <th style="padding:8px;text-align:center;font-size:11.5px">תעריף/קב'</th>
+        <th style="padding:8px;text-align:center;font-size:11.5px">סה"כ שורה</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table></div>
+    <div style="background:#F5F3FF;border:1.5px solid #C4B5FD;border-radius:10px;padding:12px 14px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span>סכום לפני מע"מ:</span><span style="font-weight:700">${totalBase.toFixed(2)}₪</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span>מע"מ (18%):</span><span style="font-weight:700">${vat.toFixed(2)}₪</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:15px;padding:6px 0 2px;border-top:1.5px solid #C4B5FD;margin-top:4px"><span style="font-weight:800;color:#5B21B6">סה"כ לחיוב:</span><span style="font-weight:800;color:#5B21B6">${totalGross.toFixed(2)}₪</span></div>
+    </div>
+    <div class="ma" style="margin-top:14px;display:flex;gap:8px">
+      <button class="btn-prim" id="camp-inv-confirm-btn" ${(noMorning || zeroPrice) ? 'disabled' : ''} onclick="_execCreateCampInvoice('${esc(clientId)}','${esc(month)}')" style="flex:1;background:${(noMorning || zeroPrice) ? '#9CA3AF' : '#7B341E'};color:white;border:none;padding:12px;border-radius:8px;font-family:inherit;font-size:14px;font-weight:800;cursor:${(noMorning || zeroPrice) ? 'not-allowed' : 'pointer'}">✓ אשר והפק חשבונית ב-Morning</button>
+      <button class="btn-sec" onclick="document.getElementById('camp-inv-preview-mo').style.display='none'">ביטול</button>
+    </div>
+  </div>`;
+  mo.style.display = 'flex';
+  mo.style.alignItems = 'center';
+  mo.style.justifyContent = 'center';
+}
+
+async function _execCreateCampInvoice(clientId, month) {
+  const btn = document.getElementById('camp-inv-confirm-btn');
+  if (!btn || btn.disabled) return;
   const orig = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '⏳ יוצרת ב-Morning...';
@@ -3094,10 +3170,11 @@ async function createCampInvoiceForClient(btn, clientId, month) {
     const fn = window.fbFunctions.httpsCallable('createcampmorninginvoice');
     const res = await fn({ clientId: String(clientId), month });
     const d = res.data || {};
+    document.getElementById('camp-inv-preview-mo').style.display = 'none';
     if (d.existed) {
-      alert(`⚠ חשבונית כבר קיימת ל־${clientName} · ${monthLbl}:\nמספר: ${d.docNumber || '?'}`);
+      alert(`⚠ חשבונית כבר קיימת:\nמספר: ${d.docNumber || '?'}`);
     } else {
-      alert(`✓ נוצרה חשבונית ל־${clientName}!\n\nמספר: ${d.docNumber || '?'}\nסוג: ${d.morningActualType || d.requestedType || '?'}`);
+      alert(`✓ נוצרה חשבונית!\n\nמספר: ${d.docNumber || '?'}\nסוג: ${d.morningActualType || d.requestedType || '?'}`);
     }
     renderCampInvoicesSection(month);
   } catch (e) {
