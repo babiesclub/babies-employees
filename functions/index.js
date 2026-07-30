@@ -1014,6 +1014,155 @@ exports.createmorninginvoice = onCall(
 );
 
 /**
+ * Create a Morning invoice for a CAMP CLIENT (רשת קייטנה).
+ * Aggregates all camp_sessions for the given client+month with status='done',
+ * builds one income line per session (or aggregated if multiple sessions same day/duration),
+ * and posts to Morning. Stored in invoices/ with source='camp' so existing
+ * markinvoicepaid / listinvoices / sendInvoiceWACloud work as-is.
+ *
+ * Input: { clientId, month: "YYYY-MM", documentDate?, docTypeOverride? }
+ */
+exports.createcampmorninginvoice = onCall(
+  { secrets: [morningApiKeyId, morningApiSecret], region: "us-central1", timeoutSeconds: 60 },
+  async (request) => {
+    try {
+      logger.info("createcampmorninginvoice: START", { data: request.data, uid: request.auth && request.auth.uid });
+      if (!request.auth) throw new HttpsError("unauthenticated", "Must be logged in");
+      const callerDoc = await admin.firestore().collection("users").doc(request.auth.uid).get();
+      if (!callerDoc.exists || callerDoc.data().role !== "admin") throw new HttpsError("permission-denied", "Admin only");
+
+      const { clientId, month, documentDate, docTypeOverride } = request.data || {};
+      if (!clientId || !month) throw new HttpsError("invalid-argument", "clientId and month required");
+
+      // Load camp client
+      const clientSnap = await admin.firestore().collection("camp_clients").doc(String(clientId)).get();
+      if (!clientSnap.exists) throw new HttpsError("not-found", "לקוח קייטנה לא נמצא: " + clientId);
+      const client = clientSnap.data();
+      if (!client.morningClientId) throw new HttpsError("failed-precondition", "ללקוח '" + (client.name || clientId) + "' אין Morning Client ID. ערכי את הלקוח והזיני מזהה.");
+
+      // Load done camp sessions for this client + month
+      const sessSnap = await admin.firestore().collection("camp_sessions").where("clientId", "==", String(clientId)).get();
+      const sessions = [];
+      sessSnap.forEach((d) => {
+        const s = d.data();
+        if (s.date && s.date.startsWith(month) && s.status === "done") sessions.push(s);
+      });
+      if (!sessions.length) throw new HttpsError("not-found", "אין הפעלות שסומנו כבוצעו ללקוח '" + (client.name || "") + "' בחודש " + month);
+      sessions.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+      logger.info("createcampmorninginvoice: sessions loaded", { count: sessions.length, clientId, month });
+
+      // Check for existing invoice (source=camp) for this client+month
+      const existingSnap = await admin.firestore()
+        .collection("invoices")
+        .where("source", "==", "camp")
+        .where("campClientId", "==", String(clientId))
+        .where("month", "==", month)
+        .where("status", "==", "created")
+        .limit(3).get();
+      if (!existingSnap.empty) {
+        const existing = existingSnap.docs[0].data();
+        logger.info("createcampmorninginvoice: returning existing", { id: existing.id });
+        return { success: true, existed: true, docNumber: existing.morningDocNumber || "", docUrl: existing.morningDocUrl || "", invoice: existing };
+      }
+
+      // Build income lines — one per session
+      const price30 = Number(client.pricePerGroup30) || 0;
+      const price40 = Number(client.pricePerGroup40) || 0;
+      const incomeLines = sessions.map((s) => {
+        const groups = Number(s.groupsCount) || 1;
+        const dur = Number(s.durationMinutes) || 30;
+        const price = dur === 40 ? price40 : price30;
+        const gname = ((s.location || s.gardenName || "").split(",")[0] || "").trim() || "הפעלה";
+        const dp = (s.date || "").split("-");
+        const dateStr = dp.length === 3 ? (dp[2] + "/" + dp[1] + "/" + dp[0]) : s.date;
+        return {
+          description: "הפעלת חוגי חיות · " + dateStr + " · " + gname + " · " + dur + " דק'",
+          quantity: groups,
+          price: price,
+          currency: "ILS",
+          vatType: 0,
+        };
+      });
+      const itemizedTotal = +incomeLines.reduce((s, l) => s + (Number(l.quantity) * Number(l.price)), 0).toFixed(2);
+      if (itemizedTotal <= 0) throw new HttpsError("failed-precondition", "סה\"כ החיוב 0₪. ודאי שלקוח '" + client.name + "' מוגדר עם תעריף פר קבוצה 30/40 דק'.");
+      logger.info("createcampmorninginvoice: lines built", { count: incomeLines.length, itemizedTotal });
+
+      const monthParts = month.split("-");
+      const monthName = HE_MONTHS_M[parseInt(monthParts[1]) - 1];
+      const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
+      const docType = parseInt(docTypeOverride || client.morningDocType || "300");
+      const _reqDate = documentDate;
+      const _docDate = (typeof _reqDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(_reqDate)) ? _reqDate : new Date().toISOString().slice(0, 10);
+      const _todayStr = new Date().toISOString().slice(0, 10);
+      const _needsBackdate = _docDate < _todayStr;
+
+      const clientObj = { id: String(client.morningClientId) };
+      // NOTE: for camp clients we don't have per-client emails stored yet — Morning will use whatever it has on file.
+      const payload = {
+        type: docType,
+        description: "חוגי חיות בייביז · קייטנת קיץ · " + monthName + " " + monthParts[0],
+        date: _docDate,
+        lang: "he",
+        currency: "ILS",
+        vatType: 0,
+        client: clientObj,
+        income: incomeLines,
+        remarks: "הופק אוטומטית ע\"י אפליקציית בייביז · קייטנת חוגי חיות · " + monthName + " " + monthParts[0] + " · " + sessions.length + " הפעלות",
+      };
+      if (_needsBackdate) payload.skipDateValidation = true;
+
+      logger.info("createcampmorninginvoice: posting to Morning", { docType, itemizedTotal, clientId: client.morningClientId });
+      const docResponse = await fetch(`${MORNING_API_BASE}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      const docResultText = await docResponse.text();
+      let docResult;
+      try { docResult = JSON.parse(docResultText); } catch (e) { docResult = { raw: docResultText }; }
+      if (!docResponse.ok || docResult.errorCode) {
+        const msg = docResult.errorMessage || docResult.message || ("HTTP " + docResponse.status + ": " + docResultText.slice(0, 200));
+        throw new HttpsError("internal", "מורנינג החזירה שגיאה: " + msg);
+      }
+
+      const docNumber = docResult.number || docResult.documentNumber || null;
+      const docUrl = docResult.url ? (docResult.url.origin || docResult.url.he || null) : null;
+      const morningActualType = docResult.type != null ? Number(docResult.type) : null;
+
+      const invoiceId = Date.now() + Math.floor(Math.random() * 1000);
+      const invoiceData = {
+        id: invoiceId,
+        source: "camp",
+        campClientId: String(clientId),
+        clientName: client.name || "",
+        gardenName: client.name || "", // reuse gardenName so existing markinvoicepaid / sendWA flows work
+        month,
+        docType,
+        documentDate: _docDate,
+        morningActualType,
+        morningDocId: docResult.id || null,
+        morningDocNumber: docNumber,
+        morningDocUrl: docUrl,
+        totalAmount: itemizedTotal,
+        vatAmount: +(itemizedTotal * VAT_RATE).toFixed(2),
+        recordCount: sessions.length,
+        lineItemCount: incomeLines.length,
+        createdAt: new Date().toISOString(),
+        createdBy: request.auth.uid,
+        status: "created",
+      };
+      await admin.firestore().collection("invoices").doc(String(invoiceId)).set(invoiceData);
+      logger.info("createcampmorninginvoice: SUCCESS", { clientId, month, docNumber });
+      return { success: true, docNumber, docUrl, morningActualType, requestedType: docType, invoice: invoiceData };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      logger.error("createcampmorninginvoice: UNCAUGHT", { message: err.message, stack: err.stack });
+      throw new HttpsError("internal", "שגיאה לא צפויה: " + (err.message || String(err)));
+    }
+  }
+);
+
+/**
  * Cancel an existing Morning document. Behaviour depends on document type:
  *
  *   - חשבון עסקה / פרופורמה (type 300) — proforma is NOT a tax document, so we
