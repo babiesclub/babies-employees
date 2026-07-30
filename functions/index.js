@@ -1065,23 +1065,31 @@ exports.createcampmorninginvoice = onCall(
         return { success: true, existed: true, docNumber: existing.morningDocNumber || "", docUrl: existing.morningDocUrl || "", invoice: existing };
       }
 
-      // Build income lines — one per session
+      // Build income lines — aggregated by duration (30 vs 40 min), NOT per-session.
+      // This makes the Morning invoice a clean 1-2 line summary. The detailed
+      // per-session breakdown is delivered separately as a PDF report.
       const price30 = Number(client.pricePerGroup30) || 0;
       const price40 = Number(client.pricePerGroup40) || 0;
-      const incomeLines = sessions.map((s) => {
-        const groups = Number(s.groupsCount) || 1;
-        const dur = Number(s.durationMinutes) || 30;
-        const price = dur === 40 ? price40 : price30;
-        const gname = ((s.location || s.gardenName || "").split(",")[0] || "").trim() || "הפעלה";
-        const dp = (s.date || "").split("-");
-        const dateStr = dp.length === 3 ? (dp[2] + "/" + dp[1] + "/" + dp[0]) : s.date;
-        return {
-          description: "הפעלת חוגי חיות · " + dateStr + " · " + gname + " · " + dur + " דק'",
-          quantity: groups,
-          price: price,
-          currency: "ILS",
-          vatType: 0,
-        };
+      const monthPartsForLbl = month.split("-");
+      const monthNameForLbl = HE_MONTHS_M[parseInt(monthPartsForLbl[1]) - 1];
+      const agg = { 30: { groups: 0, sessions: 0 }, 40: { groups: 0, sessions: 0 } };
+      sessions.forEach((s) => {
+        const dur = (Number(s.durationMinutes) || 30) === 40 ? 40 : 30;
+        agg[dur].groups += Number(s.groupsCount) || 1;
+        agg[dur].sessions += 1;
+      });
+      const incomeLines = [];
+      [40, 30].forEach((dur) => {
+        if (agg[dur].sessions > 0) {
+          const price = dur === 40 ? price40 : price30;
+          incomeLines.push({
+            description: "הפעלות חוגי חיות בייביז · " + monthNameForLbl + " " + monthPartsForLbl[0] + " · " + agg[dur].sessions + " הפעלות · " + dur + " דקות (פירוט פר הפעלה בדוח מצורף)",
+            quantity: agg[dur].groups,
+            price: price,
+            currency: "ILS",
+            vatType: 0,
+          });
+        }
       });
       const itemizedTotal = +incomeLines.reduce((s, l) => s + (Number(l.quantity) * Number(l.price)), 0).toFixed(2);
       if (itemizedTotal <= 0) throw new HttpsError("failed-precondition", "סה\"כ החיוב 0₪. ודאי שלקוח '" + client.name + "' מוגדר עם תעריף פר קבוצה 30/40 דק'.");
