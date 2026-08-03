@@ -2990,13 +2990,14 @@ exports.receivewhatsapp = onRequest(
                   buttonReply: i.button_reply ? { id: i.button_reply.id, title: i.button_reply.title } : undefined,
                   listReply: i.list_reply ? { id: i.list_reply.id, title: i.list_reply.title } : undefined,
                 };
-              } else if (type === "image" || type === "document" || type === "audio" || type === "video") {
+              } else if (type === "image" || type === "document" || type === "audio" || type === "video" || type === "sticker") {
                 const mediaObj = msg[type] || {};
                 content = {
                   mediaId: mediaObj.id,
                   caption: mediaObj.caption,
                   mimeType: mediaObj.mime_type,
                   filename: mediaObj.filename,
+                  animated: mediaObj.animated || false, // relevant for stickers/GIFs
                 };
                 // Download the media binary and upload to Firebase Storage
                 // (Meta's temp URL expires in 5 minutes → we need a permanent copy)
@@ -3011,9 +3012,20 @@ exports.receivewhatsapp = onRequest(
                       if (!content.mimeType) content.mimeType = saved.mimeType;
                     }
                   } catch (mediaErr) {
-                    logger.warn("receivewhatsapp: media save failed (message still stored)", { error: mediaErr.message, msgId });
+                    logger.warn("receivewhatsapp: media save failed (message still stored)", { error: mediaErr.message, msgId, type });
                   }
                 }
+              } else if (type === "location") {
+                const loc = msg.location || {};
+                content = {
+                  latitude: loc.latitude,
+                  longitude: loc.longitude,
+                  name: loc.name,
+                  address: loc.address,
+                };
+              } else if (type === "reaction") {
+                const rx = msg.reaction || {};
+                content = { emoji: rx.emoji, reactedToMessageId: rx.message_id };
               } else {
                 content = { raw: msg };
               }
