@@ -4205,6 +4205,31 @@ function _slrSumAdjustments(uid) {
   return { bonuses, deductions, net: bonuses - deductions, items: arr };
 }
 
+/* ---------- Monthly approval cache (per uid, current month) ---------- */
+window._slrApprovalsCache = window._slrApprovalsCache || {}; // uid → monthlyReport doc
+window._slrApprovalsMonth = window._slrApprovalsMonth || null;
+async function _slrLoadApprovalsForMonth(month) {
+  if (!window.fbDb || !month) return {};
+  try {
+    const snap = await fbDb.collection('monthlyReports').where('month', '==', month).get();
+    const map = {};
+    snap.forEach(d => {
+      const data = d.data();
+      const uid = String(data.instructorUid || '');
+      if (!uid) return;
+      // If multiple docs for same uid+month (rare), keep the most recent
+      const existing = map[uid];
+      const cur = { id: d.id, ...data };
+      if (!existing || (cur.approvedAt || cur.rejectedAt || cur.createdAt || '') > (existing.approvedAt || existing.rejectedAt || existing.createdAt || '')) {
+        map[uid] = cur;
+      }
+    });
+    window._slrApprovalsCache = map;
+    window._slrApprovalsMonth = month;
+    return map;
+  } catch (e) { console.warn('load approvals failed', e); return {}; }
+}
+
 /* ---------- Wrap _slrCalcForUser to layer adjustments on top ---------- */
 if (typeof _slrCalcForUser === 'function' && !window._slrCalcForUser_wrapped) {
   window._slrCalcForUser_wrapped = true;
@@ -4255,6 +4280,12 @@ if (typeof renderSalaryScreen === 'function' && !window._renderSalaryScreen_wrap
         if (typeof _slrRenderList === 'function') _slrRenderList(month, _instrRptMonthLabel(month));
       });
     }
+    // Prime approvals cache for current month
+    if (month && window._slrApprovalsMonth !== month) {
+      _slrLoadApprovalsForMonth(month).then(() => {
+        if (typeof _slrRenderList === 'function') _slrRenderList(month, _instrRptMonthLabel(month));
+      });
+    }
     _origRender();
   };
 }
@@ -4297,6 +4328,36 @@ if (typeof _slrRenderList === 'function' && !window._slrRenderList_wrapped) {
         // Insert next to name
         const nameRow = nameEl.parentElement;
         if (nameRow) nameRow.appendChild(badge);
+
+        // 1b) Approval badge (from monthlyReports)
+        try {
+          const approval = window._slrApprovalsCache ? window._slrApprovalsCache[uidKey] : null;
+          const apBadge = document.createElement('span');
+          apBadge.style.cssText = 'font-size:10px;padding:3px 8px;border-radius:10px;font-weight:700;margin-inline-start:4px;cursor:default';
+          if (!approval) {
+            apBadge.style.cssText += 'background:#F3F4F6;color:#6B7280;border:1px solid #D1D5DB';
+            apBadge.textContent = '📭 טרם נשלח לאישור';
+            apBadge.title = 'לא פורסם דוח לאישור למדריכה בחודש זה';
+          } else if (approval.status === 'approved') {
+            apBadge.style.cssText += 'background:#D8F3DC;color:#1B4332;border:1px solid #22C55E';
+            const dt = approval.approvedAt ? new Date(approval.approvedAt).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+            apBadge.textContent = '✅ אושר' + (dt ? ' · ' + dt : '');
+            apBadge.title = 'המדריכה אישרה סופית' + (dt ? ' ב־' + dt : '');
+          } else if (approval.status === 'rejected') {
+            apBadge.style.cssText += 'background:#FEE2E2;color:#991B1B;border:1px solid #EF4444;cursor:pointer';
+            const dt = approval.rejectedAt ? new Date(approval.rejectedAt).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+            apBadge.textContent = '❌ נדחה' + (dt ? ' · ' + dt : '');
+            const reason = approval.rejectionReason || '(ללא הסבר)';
+            apBadge.title = 'המדריכה דחתה את הדוח' + (dt ? ' ב־' + dt : '') + '\n\nסיבה:\n' + reason;
+            apBadge.onclick = () => alert(`❌ ${u.name} דחתה את דוח ${monthLabel}${dt ? '\nבתאריך: ' + dt : ''}\n\nסיבה שצוינה:\n${reason}`);
+          } else {
+            // pending_approval (or other unknown status)
+            apBadge.style.cssText += 'background:#FEF3C7;color:#78350F;border:1px solid #F59E0B';
+            apBadge.textContent = '⏳ ממתין לאישור';
+            apBadge.title = 'הדוח פורסם למדריכה, טרם אישרה/דחתה';
+          }
+          if (nameRow) nameRow.appendChild(apBadge);
+        } catch (e) { console.warn('approval badge failed', e); }
 
         // 2) Adjustments button + inline summary
         const calc = window._slrCalcForUser(u, month);
