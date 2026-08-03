@@ -2786,7 +2786,32 @@ function toggleWaEmojiPicker(){const p=document.getElementById('wa-emoji-picker'
 function toggleWaQuickReplies(){const qr=document.getElementById('wa-quick-replies');const p=document.getElementById('wa-emoji-picker');if(p)p.style.display='none';if(qr)qr.style.display=qr.style.display==='none'?'block':'none'}
 function insertWaEmoji(e){const inp=document.getElementById('wa-reply-text');if(!inp)return;const start=inp.selectionStart||inp.value.length;const end=inp.selectionEnd||inp.value.length;inp.value=inp.value.slice(0,start)+e+inp.value.slice(end);inp.focus();inp.setSelectionRange(start+e.length,start+e.length)}
 function useQuickReply(text){const inp=document.getElementById('wa-reply-text');if(!inp)return;inp.value=text;inp.focus();document.getElementById('wa-quick-replies').style.display='none'}
-async function downloadWaMedia(mediaId,type){if(!mediaId){alert('מזהה המדיה חסר');return}try{const fn=window.fbFunctions.httpsCallable('getwamediaurl');const res=await fn({mediaId});const url=res&&res.data&&res.data.url;if(url){window.open(url,'_blank')}else{alert('לא ניתן להוריד את הקובץ')}}catch(e){alert('שגיאה: '+(e.message||e))}}
+async function downloadWaMedia(mediaId,type,msgId){
+  if(!mediaId){alert('מזהה המדיה חסר');return}
+  try{
+    /* Also pass msgId + convPhone so CF can backfill Storage URL onto the message doc */
+    if(!msgId){const m=(_waMsgs||[]).find(x=>x.content&&x.content.mediaId===mediaId);if(m)msgId=m.id}
+    const convPhone=_waCurConv?_waCurConv.phone:null;
+    const fn=window.fbFunctions.httpsCallable('getwamediaurl');
+    const res=await fn({mediaId,msgId,convPhone});
+    const url=res&&res.data&&res.data.url;
+    if(url){
+      /* Patch local msg cache so re-render shows the image inline instead of the placeholder */
+      if(msgId){
+        const m=(_waMsgs||[]).find(x=>x.id===msgId);
+        if(m&&m.content){m.content.mediaStorageUrl=url;if(res.data.mimeType)m.content.mimeType=res.data.mimeType;showWaConvMo()}
+      }
+      window.open(url,'_blank');
+    }else{alert('לא ניתן להוריד את הקובץ')}
+  }catch(e){
+    const msg=(e&&e.message)||String(e);
+    if(msg.includes('כבר לא זמינה')||msg.includes('older')||msg.includes('not-found')){
+      alert('⚠ המדיה כבר לא זמינה\n\n'+msg+'\n\nוואטסאפ שומר את המדיה שלוש דקות בלבד. אם ההודעה ישנה — בקשי מהלקוח לשלוח שוב.');
+    }else{
+      alert('שגיאה: '+msg);
+    }
+  }
+}
 let _tasks=[],_taskFilter='active',_taskConvPhone=null,_taskEditId=null;
 async function loadTasks(conversationPhone){if(!window.fbFunctions||!cu||cu.role!=='admin')return;_taskConvPhone=conversationPhone||null;try{const fn=window.fbFunctions.httpsCallable('listtasks');const res=await fn(conversationPhone!=null?{conversationPhone}:{});_tasks=(res&&res.data&&res.data.tasks)||[];if(!conversationPhone){const activeCount=_tasks.filter(t=>t.status!=='completed').length;const badge=document.getElementById('tsk-badge');if(badge){if(activeCount>0){badge.textContent=activeCount>99?'99+':activeCount;badge.style.display='inline-block'}else{badge.style.display='none'}}renderTasksMain()}else{renderTasksInConv()}}catch(e){console.warn('loadTasks',e)}}
 function setTaskFilter(btn){_taskFilter=btn.dataset.filter;document.querySelectorAll('.tsk-filter').forEach(b=>{const active=b===btn;b.style.background=active?'#2D6A4F':'#fff';b.style.color=active?'white':'#2D6A4F';b.classList.toggle('active',active)});renderTasksMain()}

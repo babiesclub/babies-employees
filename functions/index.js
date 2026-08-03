@@ -3311,7 +3311,8 @@ exports.getwamediaurl = onCall(
   {
     secrets: [whatsappAccessToken],
     region: "us-central1",
-    timeoutSeconds: 20,
+    timeoutSeconds: 60,
+    memory: "512MiB",
   },
   async (request) => {
     try {
@@ -3320,16 +3321,37 @@ exports.getwamediaurl = onCall(
       if (!callerDoc.exists || callerDoc.data().role !== "admin") {
         throw new HttpsError("permission-denied", "Admin only");
       }
-      const { mediaId } = request.data || {};
+      const { mediaId, msgId, convPhone } = request.data || {};
       if (!mediaId) throw new HttpsError("invalid-argument", "Missing mediaId");
-      const token = String(whatsappAccessToken.value()).trim();
-      const r = await fetch(`${WHATSAPP_API_BASE}/${mediaId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!r.ok) throw new HttpsError("internal", "Failed to fetch media URL: " + r.status);
-      const data = await r.json();
-      // URL is valid for 5 minutes - client should download immediately
-      return { url: data.url, mimeType: data.mime_type, sha256: data.sha256 };
+      const wtoken = String(whatsappAccessToken.value()).trim();
+      // Try to backfill: download binary from Meta + save to Storage + patch the message doc.
+      // This gives a permanent URL that works in a plain browser tab.
+      // If Meta returns 404 (media older than ~5 min) — falls back to an error.
+      const saved = await saveWaMediaToStorage(mediaId, convPhone || "unknown", msgId || mediaId, wtoken);
+      if (!saved) {
+        throw new HttpsError("not-found",
+          "המדיה כבר לא זמינה. WhatsApp שומר גישה למדיה של הודעה למשך ~5 דקות בלבד, וההודעה הזו ישנה מדי. " +
+          "בקשי מהלקוח לשלוח שוב.");
+      }
+      // If we have a message doc — update it so next render uses the Storage URL directly.
+      if (msgId) {
+        try {
+          await admin.firestore().collection("whatsapp_messages").doc(String(msgId)).set({
+            content: {
+              mediaId,
+              mediaStorageUrl: saved.url,
+              mediaStoragePath: saved.storagePath,
+              mediaSizeBytes: saved.sizeBytes,
+              mimeType: saved.mimeType,
+            },
+            backfilledAt: new Date().toISOString(),
+            backfilledBy: request.auth.uid,
+          }, { merge: true });
+        } catch (patchErr) {
+          logger.warn("getwamediaurl: message doc patch failed (media still returned)", { msgId, error: patchErr.message });
+        }
+      }
+      return { url: saved.url, mimeType: saved.mimeType, storagePath: saved.storagePath, backfilled: true };
     } catch (err) {
       if (err instanceof HttpsError) throw err;
       logger.error("getwamediaurl: UNCAUGHT", { message: err.message });
