@@ -4343,6 +4343,11 @@ if (typeof _slrRenderList === 'function' && !window._slrRenderList_wrapped) {
             const dt = approval.approvedAt ? new Date(approval.approvedAt).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
             apBadge.textContent = '✅ אושר' + (dt ? ' · ' + dt : '');
             apBadge.title = 'המדריכה אישרה סופית' + (dt ? ' ב־' + dt : '');
+          } else if (approval.status === 'auto_approved_past_deadline') {
+            apBadge.style.cssText += 'background:#E0F2FE;color:#0C4A6E;border:1px solid #0EA5E9';
+            const dt = approval.approvedAt ? new Date(approval.approvedAt).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+            apBadge.textContent = '⏰ אושר אוטומטית' + (dt ? ' · ' + dt : '');
+            apBadge.title = 'המדריכה לא הגיבה עד 20:00 והדוח אושר אוטומטית' + (dt ? ' ב־' + dt : '') + '. הדיווחים נעולים.';
           } else if (approval.status === 'rejected') {
             apBadge.style.cssText += 'background:#FEE2E2;color:#991B1B;border:1px solid #EF4444;cursor:pointer';
             const dt = approval.rejectedAt ? new Date(approval.rejectedAt).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
