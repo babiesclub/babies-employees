@@ -2932,8 +2932,14 @@ async function _sendReminderCloud(phone,gardenName,docNumber,amt,invoiceUrl){
   if(!window.fbFunctions){alert('Firebase לא זמין');return}
   const amountNum=String(amt||'').match(/([\d.]+)/);
   const amountStr=amountNum?amountNum[1]:'';
-  const params=[gardenName||'',String(docNumber||''),amountStr];
-  if(!confirm(`לשלוח תזכורת תשלום דרך WhatsApp Cloud API?\n\n📱 יעד: ${phone}\n📋 תבנית: payment_reminder (עברית)\n📝 פרמטרים:\n  1. ${params[0]}\n  2. ${params[1]}\n  3. ${params[2]}₪\n\nזה מחייב עלות של Meta.`))return;
+  /* Template payment_reminder expects 5 params — matching invoice_notification pattern:
+     {{1}}=gardenName {{2}}=docTypeLabel {{3}}=docNumber {{4}}=monthName {{5}}=amount */
+  const nowIL=new Date();
+  const HE_MONTHS=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const monthName=HE_MONTHS[nowIL.getMonth()]+' '+nowIL.getFullYear();
+  const docTypeLabel='חשבון עסקה';
+  const params=[gardenName||'',docTypeLabel,String(docNumber||''),monthName,amountStr];
+  if(!confirm(`לשלוח תזכורת תשלום דרך WhatsApp Cloud API?\n\n📱 יעד: ${phone}\n📋 תבנית: payment_reminder (עברית · 5 משתנים)\n📝 פרמטרים:\n  {{1}} ${params[0]}\n  {{2}} ${params[1]}\n  {{3}} ${params[2]}\n  {{4}} ${params[3]}\n  {{5}} ${params[4]}₪\n\nזה מחייב עלות של Meta.`))return;
   const mo=document.getElementById('reminder-picker-mo');
   try{
     const fn=window.fbFunctions.httpsCallable('sendwhatsapp');
