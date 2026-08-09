@@ -2943,7 +2943,8 @@ async function _sendReminderCloud(phone,gardenName,docNumber,amt,invoiceUrl){
   const mo=document.getElementById('reminder-picker-mo');
   try{
     const fn=window.fbFunctions.httpsCallable('sendwhatsapp');
-    const res=await fn({to:phone,mode:'template',templateName:'payment_reminder',languageCode:'he',parameters:params,mediaUrl:invoiceUrl||null,mediaCaption:invoiceUrl?`חשבונית_${docNumber}.pdf`:null});
+    /* payment_reminder is a text-only template (no header component) — do NOT send mediaUrl */
+    const res=await fn({to:phone,mode:'template',templateName:'payment_reminder',languageCode:'he',parameters:params});
     const d=(res&&res.data)||{};
     if(mo)mo.style.display='none';
     alert(`✓ תזכורת נשלחה!\n\n📱 ל: ${phone}\n📋 תבנית: payment_reminder\n📊 מזהה הודעה: ${d.messageId||'?'}`);
