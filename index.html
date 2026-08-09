@@ -2944,7 +2944,9 @@ async function _sendReminderCloud(phone,gardenName,docNumber,amt,invoiceUrl){
   }catch(e){
     const msg=(e&&e.message)||String(e);
     if(msg.includes('132001')||msg.includes('Template name does not exist')){
-      alert('⚠ תבנית "payment_reminder" לא נמצאה ב-Meta.\n\nוודאי:\n1. השם המדויק (lowercase, underscore)\n2. השפה עברית (he)\n3. סטטוס APPROVED ב-Meta Business Manager\n\nלרשימת התבניות הרשומות: תפריט אדמין → הגדרות WhatsApp → 🔍 טמפלייטים');
+      const wantList=confirm('⚠ תבנית "payment_reminder" לא נמצאה ב-Meta.\n\nייתכן שהשם המדויק שונה (לדוגמה: reminder_payment, invoice_reminder, וכו\').\n\nלחצי OK כדי להציג את הרשימה המלאה של התבניות הרשומות ב-Meta, ותוכלי לזהות את השם המדויק.\n\n(Cancel יסגור בלי לפתוח)');
+      if(wantList&&typeof showWaTemplatesList==='function'){showWaTemplatesList()}
+      else if(wantList){window.open('https://business.facebook.com/wa/manage/message-templates/','_blank')}
     }else if(msg.includes('132000')||msg.includes('Number of parameters')||msg.includes('parameters count')){
       alert(`⚠ מספר הפרמטרים שגוי לתבנית.\n\nהתבנית שאישרת ב-Meta מצפה למספר משתני {{}} אחר מ־3.\n\nשלחתי:\n  {{1}} = ${params[0]}\n  {{2}} = ${params[1]}\n  {{3}} = ${params[2]}\n\nבדקי במנהל Meta: כמה משתנים יש בתבנית ומה סדרם, ואני אתאים.\n\nההודעה הגולמית:\n${msg}`);
     }else if(msg.includes('date') || msg.includes('too old')){
