@@ -665,7 +665,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
           </div>
           <button class="btn-sec" style="width:100%;margin-bottom:8px;background:#E8F5E9;border-color:#66BB6A;color:#1B5E20;font-size:12px;padding:8px" onclick="openSendHistory()">📜 היסטוריית שליחות השבוע</button>
           <button class="btn-sec" style="width:100%;margin-bottom:14px;background:#FFF9C4;border-color:#FBC02D;color:#5D4037;font-size:12px;padding:8px;font-weight:700" onclick="openProposalModal()">💡 הצע שיבוץ אוטומטי לשבוע הבא</button>
-          <button class="btn-sec" style="width:100%;margin-bottom:14px;background:linear-gradient(135deg,#DBEAFE,#EDE9FE);border-color:#7C3AED;color:#5B21B6;font-size:13px;padding:12px;font-weight:800" onclick="openSmartRotationMo()">🧠 בנה שיבוץ חכם לשנה החדשה (13.9.26 →)</button>
+          <button class="btn-sec" style="width:100%;margin-bottom:14px;background:linear-gradient(135deg,#DBEAFE,#EDE9FE);border-color:#7C3AED;color:#5B21B6;font-size:13px;padding:12px;font-weight:800" onclick="openSmartRotationMo()">🧠 בנה שיבוץ חכם לשנה החדשה (13.9.26 → 8.8.27)</button>
           <div id="region-dirty-banner" style="display:none"></div>
           <button class="btn-sec" style="width:100%;margin-bottom:14px;background:#EDE9FE;border-color:#7C3AED;color:#5B21B6;font-size:12px;padding:8px;font-weight:700" onclick="openRotGroupsMo()">🔄 ניהול קבוצות רוטציה (מסלולי נהג)</button>
           <button class="btn-sec" style="width:100%;margin-bottom:14px;background:#FCE7F3;border-color:#DB2777;color:#831843;font-size:12px;padding:8px;font-weight:700" onclick="openSubstitutesManager()">🔄 ניהול השלמות (החלפות פר תאריך)</button>
@@ -2784,7 +2784,7 @@ async function submitVirtualInstructor(id){const name=document.getElementById('a
 // - Score-based selection for free-agent instructors (individual rotation)
 // - Per-garden no-repeat rule tracked via plan state
 // - 2-week freeze from today (current week + next stay untouched when applying)
-const SCHOOL_YEAR = { start: '2026-09-13', end: '2027-07-31' }; // Sept 13 2026 (Sun) → end of Jul 2027
+const SCHOOL_YEAR = { start: '2026-09-13', end: '2027-08-08' }; // Sept 13 2026 (Sun) → end of Jul 2027
 const HOLIDAYS_5787 = {
   rosh_hashana: '2026-09-12',
   purim: '2027-03-02',
@@ -2887,11 +2887,13 @@ async function computeAnnualRotation(region, opts){
       const pipeline=groupPipelines[g.id];
       // Shift: tail retires, all shift forward, slot 0 opens for a fresh material
       for(let i=pipeline.length-1;i>0;i--) pipeline[i]=pipeline[i-1];
-      // Pick fresh material for slot 0 (head instructor sees it first)
+      // Pick fresh material for slot 0. IMPORTANT: material will pass through ALL group instructors,
+      // so we must ensure NO group garden has seen this animal yet (not just the head's gardens).
       const headUid=uids[0];
       const headGardens=gardensByUid[headUid]||[];
-      // Hard rule: material can't repeat in same garden. Global-freshness is a scoring bonus, not a block.
-      let candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,headGardens,gardensSeen));
+      // Union of all gardens across the group — material will eventually visit them all
+      const allGroupGardens=[];uids.forEach(uu=>{(gardensByUid[uu]||[]).forEach(g=>{if(!allGroupGardens.includes(g))allGroupGardens.push(g)})});
+      let candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,allGroupGardens,gardensSeen));
       // Prefer fresh (not used anywhere yet) when available; fall back to any fitting candidate
       const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
       if(freshCandidates.length)candidates=freshCandidates;
@@ -2959,7 +2961,7 @@ function openSmartRotationMo(){
   let mo=document.getElementById('smart-rot-mo');
   if(!mo){mo=document.createElement('div');mo.id='smart-rot-mo';mo.className='mo';document.body.appendChild(mo)}
   const regionOpts=REGIONS.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
-  mo.innerHTML=`<div class="md" style="max-width:720px;max-height:92vh;overflow-y:auto"><div class="mt"><span>🧠 שיבוץ חכם לשנה החדשה</span><span class="mc" onclick="document.getElementById('smart-rot-mo').style.display='none'">×</span></div><div style="background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border-right:4px solid #7C3AED;padding:12px 14px;border-radius:10px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7">💡 האלגוריתם יבנה שיבוץ למערכים לכל שבוע בשנת הלימודים החדשה (13.9.26 → 31.7.27), בהתאם ל<b>4 חוקי-העל</b>: אין חזרות פר גן, רוטציית קטגוריות, הגבלות חורף, פייפליין נהג לקבוצות רוטציה. תפקידים עתידיים משתתפים בחישוב.</div><div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:8px;padding:10px 12px;margin-bottom:10px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:700;color:#0C4A6E"><input type="checkbox" id="smart-rot-all" onchange="_smartRotToggleAll()" checked style="width:18px;height:18px;cursor:pointer">🌍 בנה לכל האזורים בבת אחת (מומלץ)</label></div><label id="smart-rot-region-label" style="font-size:12px;font-weight:700;color:var(--mut);display:none;margin-bottom:4px">📍 אזור</label><select id="smart-rot-region" class="md-input" style="display:none" onchange="_smartRotClear()">${regionOpts}</select><div id="smart-rot-result" style="margin-top:14px"></div><div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin:0;background:#7C3AED" onclick="_smartRotRun()">🧠 חשב הצעה</button><button class="btn-sec" onclick="document.getElementById('smart-rot-mo').style.display='none'">סגור</button></div></div>`;
+  mo.innerHTML=`<div class="md" style="max-width:720px;max-height:92vh;overflow-y:auto"><div class="mt"><span>🧠 שיבוץ חכם לשנה החדשה</span><span class="mc" onclick="document.getElementById('smart-rot-mo').style.display='none'">×</span></div><div style="background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border-right:4px solid #7C3AED;padding:12px 14px;border-radius:10px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7">💡 האלגוריתם יבנה שיבוץ למערכים לכל שבוע בשנת הלימודים החדשה (13.9.26 → 8.8.27), בהתאם ל<b>4 חוקי-העל</b>: אין חזרות פר גן, רוטציית קטגוריות, הגבלות חורף, פייפליין נהג לקבוצות רוטציה. תפקידים עתידיים משתתפים בחישוב.</div><div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:8px;padding:10px 12px;margin-bottom:10px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:700;color:#0C4A6E"><input type="checkbox" id="smart-rot-all" onchange="_smartRotToggleAll()" checked style="width:18px;height:18px;cursor:pointer">🌍 בנה לכל האזורים בבת אחת (מומלץ)</label></div><label id="smart-rot-region-label" style="font-size:12px;font-weight:700;color:var(--mut);display:none;margin-bottom:4px">📍 אזור</label><select id="smart-rot-region" class="md-input" style="display:none" onchange="_smartRotClear()">${regionOpts}</select><div id="smart-rot-result" style="margin-top:14px"></div><div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin:0;background:#7C3AED" onclick="_smartRotRun()">🧠 חשב הצעה</button><button class="btn-sec" onclick="document.getElementById('smart-rot-mo').style.display='none'">סגור</button></div></div>`;
   mo.style.display='flex';mo.style.alignItems='flex-start';mo.style.justifyContent='center';mo.style.padding='20px 10px';mo.style.overflow='auto';
 }
 function _smartRotClear(){const el=document.getElementById('smart-rot-result');if(el)el.innerHTML='';window._smartRotPreviewFull=false}
