@@ -2892,7 +2892,10 @@ async function _smartRotRun(){
     const totalAssignments=r.proposal.reduce((s,w)=>s+Object.keys(w.assignments||{}).length,0);
     const statsHtml=`<div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-weight:700;color:#0C4A6E;font-size:13px;margin-bottom:8px">📊 סיכום ההצעה</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px;color:#075985"><div>📅 שבועות: <b>${r.weeksCount}</b></div><div>🧑 מדריכות: <b>${r.stats.instructorsTotal}</b> (${r.stats.freeAgents} חופשיות, ${r.stats.inGroups} בקבוצות)</div><div>🔄 קבוצות רוטציה: <b>${r.stats.groupsCount}</b></div><div>📦 מערכים בשימוש: <b>${r.stats.materialsUsed}</b>/${r.stats.materialsAvailable}</div><div style="grid-column:span 2">✍ סה"כ שיבוצים: <b>${totalAssignments}</b></div></div></div>`;
     const warnCount=(r.warnings||[]).length;
-    const warnHtml=warnCount?`<details style="margin-bottom:12px" open><summary style="cursor:pointer;font-weight:700;color:#B45309;font-size:12px;padding:8px 12px;background:#FEF3C7;border-radius:8px;border:1.5px solid #F59E0B">⚠ ${warnCount} התרעות (לחצי לפרטים)</summary><div style="max-height:200px;overflow-y:auto;background:#FFFBEB;border:1.5px solid #FDE68A;border-radius:0 0 8px 8px;padding:8px 12px;margin-top:-1px">${r.warnings.slice(0,50).map(w=>`<div style="font-size:11px;color:#78350F;padding:4px 0;border-bottom:1px solid #FDE68A">📅 <b>${esc(w.weekISO)}</b> — ${esc(w.msg)}</div>`).join('')}${warnCount>50?`<div style="font-size:11px;color:#78350F;padding:6px 0;text-align:center;font-style:italic">... ועוד ${warnCount-50} התרעות</div>`:''}</div></details>`:'<div style="background:#D1FAE5;border:1.5px solid #10B981;color:#065F46;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px">✓ אין התרעות — כל שבוע קיבל שיבוץ תקין</div>';
+    const warnHtml=warnCount?`<details style="margin-bottom:12px" open><summary style="cursor:pointer;font-weight:700;color:#B45309;font-size:12px;padding:8px 12px;background:#FEF3C7;border-radius:8px;border:1.5px solid #F59E0B">⚠ ${warnCount} התרעות שיבוץ (לחצי לפרטים)</summary><div style="max-height:200px;overflow-y:auto;background:#FFFBEB;border:1.5px solid #FDE68A;border-radius:0 0 8px 8px;padding:8px 12px;margin-top:-1px">${r.warnings.slice(0,50).map(w=>`<div style="font-size:11px;color:#78350F;padding:4px 0;border-bottom:1px solid #FDE68A">📅 <b>${esc(w.weekISO)}</b> — ${esc(w.msg)}</div>`).join('')}${warnCount>50?`<div style="font-size:11px;color:#78350F;padding:6px 0;text-align:center;font-style:italic">... ועוד ${warnCount-50} התרעות</div>`:''}</div></details>`:'<div style="background:#D1FAE5;border:1.5px solid #10B981;color:#065F46;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px">✓ אין התרעות שיבוץ — כל שבוע קיבל שיבוץ תקין</div>';
+    // Inventory alerts (physical material shortages)
+    const invAlerts=analyzeInventoryAlerts(r,{region});
+    const invHtml=invAlerts.length?`<div style="background:linear-gradient(135deg,#FEE2E2,#FEF3C7);border:2px solid #DC2626;border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-weight:800;color:#991B1B;font-size:13px;margin-bottom:8px;display:flex;align-items:center;gap:6px">📦 ${invAlerts.length} התרעות מלאי מערכים פיזיים</div><div style="display:flex;flex-direction:column;gap:8px">${invAlerts.map(a=>`<div style="background:white;border:1.5px solid #FCA5A5;border-radius:8px;padding:10px"><div style="font-weight:700;color:#7F1D1D;font-size:12px;margin-bottom:4px">${a.severity==='high'?'🔴':'🟡'} ${esc(a.title)}</div><div style="font-size:11px;color:#4B5563;line-height:1.5;margin-bottom:6px">${esc(a.detail)}</div><div style="font-size:11px;color:#065F46;background:#D1FAE5;padding:4px 8px;border-radius:4px;font-weight:600">👉 ${esc(a.action)}</div></div>`).join('')}</div></div>`:'<div style="background:#DBEAFE;border:1.5px solid #60A5FA;color:#1E40AF;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px">✓ מלאי מספיק — אין צורך לשכפל מערכים פיזיים</div>';
     // Sample first 5 weeks preview
     const materials=getMaterials();const matById={};materials.forEach(m=>matById[m.id]=m);
     const users=DB.get('users')||[];const virts=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]);
@@ -2901,7 +2904,7 @@ async function _smartRotRun(){
     const previewWeeks=r.proposal.slice(0,4);
     const previewHtml=`<div style="font-weight:700;color:var(--mut);font-size:12px;margin-bottom:6px">👁 4 השבועות הראשונים (דוגמה):</div><div style="max-height:260px;overflow-y:auto;border:1.5px solid var(--brd);border-radius:8px">${previewWeeks.map(w=>{const rows=Object.entries(w.assignments||{}).map(([uid,mid])=>{const mat=matById[mid];return`<div style="font-size:11px;color:var(--text);padding:3px 0;display:flex;justify-content:space-between;gap:8px"><span>${esc(nameOf(uid))}</span><span style="color:var(--mut);font-weight:600">${esc(mat?mat.name:'?')}</span></div>`}).join('');return`<div style="padding:8px 12px;border-bottom:1px solid var(--brd)"><div style="font-weight:700;color:#7C3AED;font-size:12px;margin-bottom:4px">📅 ${esc(w.weekISO)}</div>${rows||'<div style="font-size:11px;color:var(--mut);font-style:italic">אין שיבוצים</div>'}</div>`}).join('')}</div>`;
     const applyBtn=`<button class="btn-prim" style="width:100%;margin-top:12px;background:#059669" onclick="_smartRotApply()">✓ החל שיבוץ (שבוע הבא ואילך)</button><div style="font-size:11px;color:var(--mut);margin-top:6px;line-height:1.5">💡 שיבוצים ל-14 יום הקרובים <b>לא</b> ישונו (הקפאה). שיבוצים קיימים לתאריכים העתידיים <b>יידרסו</b>.</div>`;
-    resultEl.innerHTML=statsHtml+warnHtml+previewHtml+applyBtn;
+    resultEl.innerHTML=statsHtml+invHtml+warnHtml+previewHtml+applyBtn;
   }catch(e){resultEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px">שגיאה: ${esc(e.message||e)}</div>`}
 }
 async function _smartRotApply(){
@@ -2914,6 +2917,93 @@ async function _smartRotApply(){
     document.getElementById('smart-rot-mo').style.display='none';
     renderWschGrid();
   }catch(e){alert('שגיאה: '+(e.message||e));btn.disabled=false;btn.textContent='✓ החל שיבוץ (שבוע הבא ואילך)'}
+}
+// === PHASE 3: MATERIAL INVENTORY ALERTS ===
+// Analyzes a rotation proposal + inventory config to detect physical-material shortages.
+// Three alert types:
+//   1. group_pool_short — rotation group has more instructors than physical materials in pool
+//   2. same_category_conflict — multiple instructors in same region need same category same week
+//   3. holiday_window_shortage — N instructors need the same holiday-window material simultaneously
+// Materials can carry `physicalCopies` (default 1) — how many physical instances exist in the region.
+function analyzeInventoryAlerts(proposal, opts){
+  opts=opts||{};
+  const alerts=[];
+  const materials=getMaterials();
+  const matById={};materials.forEach(m=>matById[m.id]=m);
+  const groups=(_rotGroups||[]).filter(g=>!opts.region||g.regionName===opts.region);
+  // Alert 1: group pool shortage — N instructors need N physical materials in circulation
+  groups.forEach(g=>{
+    const instrCount=(g.instructorUids||[]).length;
+    const poolCount=(g.materialPool||[]).length;
+    if(instrCount>0 && poolCount>0 && poolCount<instrCount){
+      alerts.push({
+        type:'group_pool_short', severity:'high',
+        title:`מלאי חסר בקבוצת "${g.name||'?'}"`,
+        detail:`בקבוצה יש ${instrCount} מדריכות אבל רק ${poolCount} מערכים במאגר הפיזי. צריך להוסיף עוד ${instrCount-poolCount} מערכים למחזור.`,
+        action:'להוסיף מערכים למאגר של הקבוצה (עריכת קבוצת רוטציה)',
+        groupId:g.id, groupName:g.name,
+      });
+    }
+  });
+  if(!proposal||!proposal.proposal)return alerts;
+  // Build week-by-week usage matrix per (matId, week) and (category, week)
+  const usageByWeek={};  // { weekISO: { matId: usageCount } }
+  const catByWeek={};    // { weekISO: { category: usageCount } }
+  proposal.proposal.forEach(w=>{
+    usageByWeek[w.weekISO]={};
+    catByWeek[w.weekISO]={};
+    Object.values(w.assignments||{}).forEach(matId=>{
+      usageByWeek[w.weekISO][matId]=(usageByWeek[w.weekISO][matId]||0)+1;
+      const mat=matById[matId];
+      if(mat && mat.category){catByWeek[w.weekISO][mat.category]=(catByWeek[w.weekISO][mat.category]||0)+1}
+    });
+  });
+  // Alert 2: same-material used by multiple instructors in the same week — needs physical copies
+  const matCopyShortages={};  // { matId: [{weekISO, needed, available}] }
+  Object.entries(usageByWeek).forEach(([weekISO,usage])=>{
+    Object.entries(usage).forEach(([matId,count])=>{
+      const mat=matById[matId];if(!mat)return;
+      const available=parseInt(mat.physicalCopies,10)||1;
+      if(count>available){
+        if(!matCopyShortages[matId]) matCopyShortages[matId]=[];
+        matCopyShortages[matId].push({weekISO,needed:count,available});
+      }
+    });
+  });
+  Object.entries(matCopyShortages).forEach(([matId,weeks])=>{
+    const mat=matById[matId];const maxNeeded=Math.max(...weeks.map(w=>w.needed));
+    alerts.push({
+      type:'material_copies_short', severity:'high',
+      title:`צריך לשכפל: ${mat?mat.name:'?'}`,
+      detail:`המערך הזה נדרש בו-זמנית ל-${maxNeeded} מדריכות ב-${weeks.length} שבועות שונים במהלך השנה. יש רק ${weeks[0].available} עותקים פיזיים.`,
+      action:`להוסיף לפחות ${maxNeeded-weeks[0].available} עותקים פיזיים של "${mat?mat.name:'?'}" למחזור`,
+      matId, matName:mat?mat.name:'?',
+      weeks:weeks.slice(0,6).map(w=>w.weekISO),
+    });
+  });
+  // Alert 3: holiday-window shortage — check the peak concurrent demand for each holiday-window material
+  materials.forEach(m=>{
+    if(!m.seasonality||!SEASON_HOLIDAY_WINDOWS[m.seasonality])return;
+    const windowConfig=SEASON_HOLIDAY_WINDOWS[m.seasonality];
+    let peakInWindow=0,peakWeek=null;
+    Object.entries(usageByWeek).forEach(([weekISO,usage])=>{
+      const count=usage[m.id]||0;
+      if(count>peakInWindow){peakInWindow=count;peakWeek=weekISO}
+    });
+    const available=parseInt(m.physicalCopies,10)||1;
+    if(peakInWindow>available){
+      alerts.push({
+        type:'holiday_window_shortage', severity:'high',
+        title:`חלון חג צפוף: ${m.name}`,
+        detail:`בחלון ${windowConfig.label}, יש שבוע (${peakWeek}) שבו ${peakInWindow} מדריכות צריכות את "${m.name}" בו-זמנית — אבל יש רק ${available} עותקים.`,
+        action:`להוסיף ${peakInWindow-available} עותקים של "${m.name}" לפני חלון החג`,
+        matId:m.id, matName:m.name,
+      });
+    }
+  });
+  // Sort by severity + type
+  alerts.sort((a,b)=>{const s={high:0,medium:1,low:2};return s[a.severity]-s[b.severity]});
+  return alerts;
 }
 // Apply a proposal to weeklySchedule with a 2-week freeze from today.
 async function applyRotationProposal(result, opts){
