@@ -2890,7 +2890,11 @@ async function computeAnnualRotation(region, opts){
       // Pick fresh material for slot 0 (head instructor sees it first)
       const headUid=uids[0];
       const headGardens=gardensByUid[headUid]||[];
-      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,headGardens,gardensSeen) && !globallyUsed.has(m.id));
+      // Hard rule: material can't repeat in same garden. Global-freshness is a scoring bonus, not a block.
+      let candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,headGardens,gardensSeen));
+      // Prefer fresh (not used anywhere yet) when available; fall back to any fitting candidate
+      const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
+      if(freshCandidates.length)candidates=freshCandidates;
       if(!candidates.length){
         warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_head_material',msg:`אין מערך חדש לתחנת ההזנקה של קבוצה "${g.name||'?'}"`});
         pipeline[0]=null;
