@@ -2880,7 +2880,8 @@ function openSmartRotationMo(){
   mo.innerHTML=`<div class="md" style="max-width:720px;max-height:92vh;overflow-y:auto"><div class="mt"><span>🧠 שיבוץ חכם לשנה החדשה</span><span class="mc" onclick="document.getElementById('smart-rot-mo').style.display='none'">×</span></div><div style="background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border-right:4px solid #7C3AED;padding:12px 14px;border-radius:10px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7">💡 האלגוריתם יבנה שיבוץ למערכים לכל שבוע בשנת הלימודים החדשה (13.9.26 → 31.7.27), בהתאם ל<b>4 חוקי-העל</b>: אין חזרות פר גן, רוטציית קטגוריות, הגבלות חורף, פייפליין נהג לקבוצות רוטציה. תפקידים עתידיים משתתפים בחישוב.</div><label style="font-size:12px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px">📍 אזור</label><select id="smart-rot-region" class="md-input" onchange="_smartRotClear()">${regionOpts}</select><div id="smart-rot-result" style="margin-top:14px"></div><div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin:0;background:#7C3AED" onclick="_smartRotRun()">🧠 חשב הצעה</button><button class="btn-sec" onclick="document.getElementById('smart-rot-mo').style.display='none'">סגור</button></div></div>`;
   mo.style.display='flex';mo.style.alignItems='flex-start';mo.style.justifyContent='center';mo.style.padding='20px 10px';mo.style.overflow='auto';
 }
-function _smartRotClear(){const el=document.getElementById('smart-rot-result');if(el)el.innerHTML=''}
+function _smartRotClear(){const el=document.getElementById('smart-rot-result');if(el)el.innerHTML='';window._smartRotPreviewFull=false}
+function _smartRotTogglePreview(){window._smartRotPreviewFull=!window._smartRotPreviewFull;_smartRotRun()}
 async function _smartRotRun(){
   const region=document.getElementById('smart-rot-region').value;
   const resultEl=document.getElementById('smart-rot-result');
@@ -2896,13 +2897,35 @@ async function _smartRotRun(){
     // Inventory alerts (physical material shortages)
     const invAlerts=analyzeInventoryAlerts(r,{region});
     const invHtml=invAlerts.length?`<div style="background:linear-gradient(135deg,#FEE2E2,#FEF3C7);border:2px solid #DC2626;border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-weight:800;color:#991B1B;font-size:13px;margin-bottom:8px;display:flex;align-items:center;gap:6px">📦 ${invAlerts.length} התרעות מלאי מערכים פיזיים</div><div style="display:flex;flex-direction:column;gap:8px">${invAlerts.map(a=>`<div style="background:white;border:1.5px solid #FCA5A5;border-radius:8px;padding:10px"><div style="font-weight:700;color:#7F1D1D;font-size:12px;margin-bottom:4px">${a.severity==='high'?'🔴':'🟡'} ${esc(a.title)}</div><div style="font-size:11px;color:#4B5563;line-height:1.5;margin-bottom:6px">${esc(a.detail)}</div><div style="font-size:11px;color:#065F46;background:#D1FAE5;padding:4px 8px;border-radius:4px;font-weight:600">👉 ${esc(a.action)}</div></div>`).join('')}</div></div>`:'<div style="background:#DBEAFE;border:1.5px solid #60A5FA;color:#1E40AF;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px">✓ מלאי מספיק — אין צורך לשכפל מערכים פיזיים</div>';
-    // Sample first 5 weeks preview
+    // Preview — 4 weeks by default, expandable to full year. Split into groups vs free-agents.
     const materials=getMaterials();const matById={};materials.forEach(m=>matById[m.id]=m);
     const users=DB.get('users')||[];const virts=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]);
     const allUsers=[...users,...virts];
     const nameOf=uid=>{const u=allUsers.find(x=>String(x.uid||x.id)===String(uid));return u?u.name:uid};
-    const previewWeeks=r.proposal.slice(0,4);
-    const previewHtml=`<div style="font-weight:700;color:var(--mut);font-size:12px;margin-bottom:6px">👁 4 השבועות הראשונים (דוגמה):</div><div style="max-height:260px;overflow-y:auto;border:1.5px solid var(--brd);border-radius:8px">${previewWeeks.map(w=>{const rows=Object.entries(w.assignments||{}).map(([uid,mid])=>{const mat=matById[mid];return`<div style="font-size:11px;color:var(--text);padding:3px 0;display:flex;justify-content:space-between;gap:8px"><span>${esc(nameOf(uid))}</span><span style="color:var(--mut);font-weight:600">${esc(mat?mat.name:'?')}</span></div>`}).join('');return`<div style="padding:8px 12px;border-bottom:1px solid var(--brd)"><div style="font-weight:700;color:#7C3AED;font-size:12px;margin-bottom:4px">📅 ${esc(w.weekISO)}</div>${rows||'<div style="font-size:11px;color:var(--mut);font-style:italic">אין שיבוצים</div>'}</div>`}).join('')}</div>`;
+    const isVirtUid=uid=>{const u=allUsers.find(x=>String(x.uid||x.id)===String(uid));return u&&u._isVirtual};
+    const regionGroups=(_rotGroups||[]).filter(g=>g.regionName===region);
+    const groupByUid={};regionGroups.forEach(g=>(g.instructorUids||[]).forEach((uid,idx)=>{groupByUid[String(uid)]={groupId:g.id,groupName:g.name||'קבוצה',idx,total:(g.instructorUids||[]).length}}));
+    const previewShow=window._smartRotPreviewFull?r.proposal.length:Math.min(4,r.proposal.length);
+    const previewWeeks=r.proposal.slice(0,previewShow);
+    const _matChip=(mid)=>{const mat=matById[mid];if(!mat)return'<span style="color:var(--mut);font-size:10px">—</span>';const catInfo=MAT_CATEGORIES[mat.category]||{};return`<span style="display:inline-block;background:${catInfo.color||'#64748B'};color:white;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(mat.name||'')} (${catInfo.label||mat.category||''})">${catInfo.emoji||'📦'} ${esc(mat.name||'?')}</span>`};
+    const renderWeekBlock=(w)=>{
+      const entries=Object.entries(w.assignments||{});
+      if(!entries.length)return`<div style="padding:10px 14px;color:var(--mut);font-style:italic;font-size:11px">אין שיבוצים</div>`;
+      // Split by group
+      const byGroup={};const free=[];
+      entries.forEach(([uid,mid])=>{const gi=groupByUid[String(uid)];if(gi){if(!byGroup[gi.groupId])byGroup[gi.groupId]={name:gi.groupName,slots:[]};byGroup[gi.groupId].slots[gi.idx]={uid,mid,total:gi.total}}else free.push({uid,mid})});
+      let html='';
+      Object.entries(byGroup).forEach(([gid,g])=>{
+        const arrow='<span style="color:#7C3AED;font-weight:900;font-size:14px">→</span>';
+        const chain=g.slots.filter(Boolean).map(s=>`<div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:10px;font-weight:700;color:#5B21B6">${esc(nameOf(s.uid))}${isVirtUid(s.uid)?' 🕐':''}</span>${_matChip(s.mid)}</div>`).join('<div style="align-self:center">'+arrow+'</div>');
+        html+=`<div style="background:#F3E8FF;border-right:3px solid #7C3AED;padding:8px 12px;margin-bottom:4px;border-radius:6px"><div style="font-size:10px;font-weight:800;color:#5B21B6;margin-bottom:6px;letter-spacing:0.03em">🔄 ${esc(g.name)} (מסלול הנהג)</div><div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">${chain}</div></div>`;
+      });
+      if(free.length){
+        html+='<div style="background:#F0F9FF;padding:8px 12px;margin-bottom:4px;border-radius:6px"><div style="font-size:10px;font-weight:800;color:#0369A1;margin-bottom:6px;letter-spacing:0.03em">🏃 מדריכות חופשיות</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">'+free.map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11px"><span style="font-weight:600;color:var(--text)">${esc(nameOf(f.uid))}${isVirtUid(f.uid)?' 🕐':''}</span>${_matChip(f.mid)}</div>`).join('')+'</div></div>';
+      }
+      return html;
+    };
+    const previewHtml=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div style="font-weight:700;color:var(--mut);font-size:12px">👁 תצוגה מקדימה: ${window._smartRotPreviewFull?'כל השנה':'4 שבועות ראשונים'}</div><button class="btn-sec" style="font-size:11px;padding:4px 10px" onclick="_smartRotTogglePreview()">${window._smartRotPreviewFull?'הצג רק 4 שבועות':`הצג את כל ${r.proposal.length} השבועות`}</button></div><div style="max-height:400px;overflow-y:auto;border:1.5px solid var(--brd);border-radius:8px">${previewWeeks.map(w=>`<div style="padding:10px 12px;border-bottom:1px solid var(--brd)"><div style="font-weight:700;color:#7C3AED;font-size:12px;margin-bottom:6px">📅 ${esc(w.weekISO)}</div>${renderWeekBlock(w)}</div>`).join('')}</div>`;
     const applyBtn=`<button class="btn-prim" style="width:100%;margin-top:12px;background:#059669" onclick="_smartRotApply()">✓ החל שיבוץ (שבוע הבא ואילך)</button><div style="font-size:11px;color:var(--mut);margin-top:6px;line-height:1.5">💡 שיבוצים ל-14 יום הקרובים <b>לא</b> ישונו (הקפאה). שיבוצים קיימים לתאריכים העתידיים <b>יידרסו</b>.</div>`;
     resultEl.innerHTML=statsHtml+invHtml+warnHtml+previewHtml+applyBtn;
   }catch(e){resultEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px">שגיאה: ${esc(e.message||e)}</div>`}
