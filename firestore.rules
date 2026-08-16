@@ -43,6 +43,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // VIRTUAL INSTRUCTORS — planned/pending positions that don't have a real Firebase Auth account.
+    // Admin-only. Participates in rotation algorithm (task #128) but excluded from salary/WA/client-facing.
+    match /virtualInstructors/{docId} {
+      allow read, write: if isAdmin();
+    }
+
     // RECORDS — instructors log their own attendance
     match /records/{recordId} {
       allow read: if isSignedIn();
