@@ -2953,21 +2953,63 @@ function openSmartRotationMo(){
   let mo=document.getElementById('smart-rot-mo');
   if(!mo){mo=document.createElement('div');mo.id='smart-rot-mo';mo.className='mo';document.body.appendChild(mo)}
   const regionOpts=REGIONS.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
-  mo.innerHTML=`<div class="md" style="max-width:720px;max-height:92vh;overflow-y:auto"><div class="mt"><span>🧠 שיבוץ חכם לשנה החדשה</span><span class="mc" onclick="document.getElementById('smart-rot-mo').style.display='none'">×</span></div><div style="background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border-right:4px solid #7C3AED;padding:12px 14px;border-radius:10px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7">💡 האלגוריתם יבנה שיבוץ למערכים לכל שבוע בשנת הלימודים החדשה (13.9.26 → 31.7.27), בהתאם ל<b>4 חוקי-העל</b>: אין חזרות פר גן, רוטציית קטגוריות, הגבלות חורף, פייפליין נהג לקבוצות רוטציה. תפקידים עתידיים משתתפים בחישוב.</div><label style="font-size:12px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px">📍 אזור</label><select id="smart-rot-region" class="md-input" onchange="_smartRotClear()">${regionOpts}</select><div id="smart-rot-result" style="margin-top:14px"></div><div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin:0;background:#7C3AED" onclick="_smartRotRun()">🧠 חשב הצעה</button><button class="btn-sec" onclick="document.getElementById('smart-rot-mo').style.display='none'">סגור</button></div></div>`;
+  mo.innerHTML=`<div class="md" style="max-width:720px;max-height:92vh;overflow-y:auto"><div class="mt"><span>🧠 שיבוץ חכם לשנה החדשה</span><span class="mc" onclick="document.getElementById('smart-rot-mo').style.display='none'">×</span></div><div style="background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border-right:4px solid #7C3AED;padding:12px 14px;border-radius:10px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7">💡 האלגוריתם יבנה שיבוץ למערכים לכל שבוע בשנת הלימודים החדשה (13.9.26 → 31.7.27), בהתאם ל<b>4 חוקי-העל</b>: אין חזרות פר גן, רוטציית קטגוריות, הגבלות חורף, פייפליין נהג לקבוצות רוטציה. תפקידים עתידיים משתתפים בחישוב.</div><div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:8px;padding:10px 12px;margin-bottom:10px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:700;color:#0C4A6E"><input type="checkbox" id="smart-rot-all" onchange="_smartRotToggleAll()" checked style="width:18px;height:18px;cursor:pointer">🌍 בנה לכל האזורים בבת אחת (מומלץ)</label></div><label id="smart-rot-region-label" style="font-size:12px;font-weight:700;color:var(--mut);display:none;margin-bottom:4px">📍 אזור</label><select id="smart-rot-region" class="md-input" style="display:none" onchange="_smartRotClear()">${regionOpts}</select><div id="smart-rot-result" style="margin-top:14px"></div><div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin:0;background:#7C3AED" onclick="_smartRotRun()">🧠 חשב הצעה</button><button class="btn-sec" onclick="document.getElementById('smart-rot-mo').style.display='none'">סגור</button></div></div>`;
   mo.style.display='flex';mo.style.alignItems='flex-start';mo.style.justifyContent='center';mo.style.padding='20px 10px';mo.style.overflow='auto';
 }
 function _smartRotClear(){const el=document.getElementById('smart-rot-result');if(el)el.innerHTML='';window._smartRotPreviewFull=false}
 function _smartRotTogglePreview(){window._smartRotPreviewFull=!window._smartRotPreviewFull;_smartRotRun()}
+function _smartRotToggleAll(){const all=document.getElementById('smart-rot-all').checked;const sel=document.getElementById('smart-rot-region');const lbl=document.getElementById('smart-rot-region-label');if(sel)sel.style.display=all?'none':'block';if(lbl)lbl.style.display=all?'none':'block';_smartRotClear()}
 async function _smartRotRun(){
-  const region=document.getElementById('smart-rot-region').value;
+  const allRegions=document.getElementById('smart-rot-all').checked;
   const resultEl=document.getElementById('smart-rot-result');
   resultEl.innerHTML='<div style="padding:20px;text-align:center;color:var(--mut)">⏳ מחשב הצעה לכל השנה...</div>';
   try{
-    const r=await computeAnnualRotation(region);
+    let r;
+    if(allRegions){
+      // Compute per region, then merge — each region has its own state, so results don't collide.
+      const perRegion=[];const skippedRegions=[];
+      for(const region of REGIONS){
+        const rr=await computeAnnualRotation(region);
+        if(rr.error){skippedRegions.push({region,error:rr.error});continue}
+        perRegion.push(rr);
+      }
+      if(!perRegion.length){resultEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px;font-size:13px">⚠ לא נמצאו מדריכות חוגי חיות באף אזור.<br><br><b>אזורים שדולגו:</b><br>${skippedRegions.map(s=>`• ${esc(s.region)}: ${esc(s.error)}`).join('<br>')}</div>`;return}
+      // Merge: for each week, combine assignments from all regions
+      const mergedByWeek={};perRegion.forEach(rr=>{rr.proposal.forEach(w=>{if(!mergedByWeek[w.weekISO])mergedByWeek[w.weekISO]={weekISO:w.weekISO,assignments:{}};Object.assign(mergedByWeek[w.weekISO].assignments,w.assignments)})});
+      const mergedProposal=Object.values(mergedByWeek).sort((a,b)=>a.weekISO.localeCompare(b.weekISO));
+      const mergedWarnings=perRegion.flatMap(rr=>(rr.warnings||[]).map(w=>({...w,region:rr.region})));
+      const mergedStats={
+        instructorsTotal:perRegion.reduce((s,rr)=>s+rr.stats.instructorsTotal,0),
+        inGroups:perRegion.reduce((s,rr)=>s+rr.stats.inGroups,0),
+        freeAgents:perRegion.reduce((s,rr)=>s+rr.stats.freeAgents,0),
+        groupsCount:perRegion.reduce((s,rr)=>s+rr.stats.groupsCount,0),
+        materialsAvailable:perRegion[0].stats.materialsAvailable,
+        materialsUsed:new Set(perRegion.flatMap(rr=>rr.proposal.flatMap(w=>Object.values(w.assignments)))).size,
+        regionsCovered:perRegion.length,
+        regionsSkipped:skippedRegions.length,
+      };
+      r={
+        region:`🌍 ${perRegion.length} אזורים`,
+        allRegions:true,
+        perRegion,
+        skippedRegions,
+        startISO:perRegion[0].startISO,
+        endISO:perRegion[0].endISO,
+        weeksCount:perRegion[0].weeksCount,
+        proposal:mergedProposal,
+        warnings:mergedWarnings,
+        stats:mergedStats,
+      };
+    } else {
+      const region=document.getElementById('smart-rot-region').value;
+      r=await computeAnnualRotation(region);
+    }
     window._lastRotProposal=r;
     if(r.error){resultEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px;font-size:13px">⚠ ${esc(r.error)}</div>`;return}
     const totalAssignments=r.proposal.reduce((s,w)=>s+Object.keys(w.assignments||{}).length,0);
-    const statsHtml=`<div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-weight:700;color:#0C4A6E;font-size:13px;margin-bottom:8px">📊 סיכום ההצעה</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px;color:#075985"><div>📅 שבועות: <b>${r.weeksCount}</b></div><div>🧑 מדריכות: <b>${r.stats.instructorsTotal}</b> (${r.stats.freeAgents} חופשיות, ${r.stats.inGroups} בקבוצות)</div><div>🔄 קבוצות רוטציה: <b>${r.stats.groupsCount}</b></div><div>📦 מערכים בשימוש: <b>${r.stats.materialsUsed}</b>/${r.stats.materialsAvailable}</div><div style="grid-column:span 2">✍ סה"כ שיבוצים: <b>${totalAssignments}</b></div></div></div>`;
+    const regionsLine=r.allRegions?`<div style="grid-column:span 2;padding:6px 8px;background:white;border-radius:6px;font-weight:700">🌍 <b>${r.stats.regionsCovered}</b> אזורים חושבו${r.stats.regionsSkipped>0?` · ${r.stats.regionsSkipped} דולגו (ראי למטה)`:''}</div>`:'';
+    const skippedHtml=(r.allRegions&&r.skippedRegions&&r.skippedRegions.length)?`<details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:11px;color:#78350F;font-weight:700;padding:6px 10px;background:#FEF3C7;border-radius:6px">⚠ אזורים שדולגו (${r.skippedRegions.length})</summary><div style="padding:8px 12px;font-size:11px;color:#78350F;background:#FFFBEB;border-radius:0 0 6px 6px">${r.skippedRegions.map(s=>`• <b>${esc(s.region)}</b>: ${esc(s.error)}`).join('<br>')}</div></details>`:'';
+    const statsHtml=`<div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-weight:700;color:#0C4A6E;font-size:13px;margin-bottom:8px">📊 סיכום ההצעה</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px;color:#075985">${regionsLine}<div>📅 שבועות: <b>${r.weeksCount}</b></div><div>🧑 מדריכות: <b>${r.stats.instructorsTotal}</b> (${r.stats.freeAgents} חופשיות, ${r.stats.inGroups} בקבוצות)</div><div>🔄 קבוצות רוטציה: <b>${r.stats.groupsCount}</b></div><div>📦 מערכים בשימוש: <b>${r.stats.materialsUsed}</b>/${r.stats.materialsAvailable}</div><div style="grid-column:span 2">✍ סה"כ שיבוצים: <b>${totalAssignments}</b></div></div></div>${skippedHtml}`;
     const warnCount=(r.warnings||[]).length;
     const warnHtml=warnCount?`<details style="margin-bottom:12px" open><summary style="cursor:pointer;font-weight:700;color:#B45309;font-size:12px;padding:8px 12px;background:#FEF3C7;border-radius:8px;border:1.5px solid #F59E0B">⚠ ${warnCount} התרעות שיבוץ (לחצי לפרטים)</summary><div style="max-height:200px;overflow-y:auto;background:#FFFBEB;border:1.5px solid #FDE68A;border-radius:0 0 8px 8px;padding:8px 12px;margin-top:-1px">${r.warnings.slice(0,50).map(w=>`<div style="font-size:11px;color:#78350F;padding:4px 0;border-bottom:1px solid #FDE68A">📅 <b>${esc(w.weekISO)}</b> — ${esc(w.msg)}</div>`).join('')}${warnCount>50?`<div style="font-size:11px;color:#78350F;padding:6px 0;text-align:center;font-style:italic">... ועוד ${warnCount-50} התרעות</div>`:''}</div></details>`:'<div style="background:#D1FAE5;border:1.5px solid #10B981;color:#065F46;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px">✓ אין התרעות שיבוץ — כל שבוע קיבל שיבוץ תקין</div>';
     // Inventory alerts (physical material shortages)
@@ -2979,8 +3021,9 @@ async function _smartRotRun(){
     const allUsers=[...users,...virts];
     const nameOf=uid=>{const u=allUsers.find(x=>String(x.uid||x.id)===String(uid));return u?u.name:uid};
     const isVirtUid=uid=>{const u=allUsers.find(x=>String(x.uid||x.id)===String(uid));return u&&u._isVirtual};
-    const regionGroups=(_rotGroups||[]).filter(g=>g.regionName===region);
-    const groupByUid={};regionGroups.forEach(g=>(g.instructorUids||[]).forEach((uid,idx)=>{groupByUid[String(uid)]={groupId:g.id,groupName:g.name||'קבוצה',idx,total:(g.instructorUids||[]).length}}));
+    const regionGroups=r.allRegions?(_rotGroups||[]):(_rotGroups||[]).filter(g=>g.regionName===r.region);
+    const groupByUid={};regionGroups.forEach(g=>(g.instructorUids||[]).forEach((uid,idx)=>{groupByUid[String(uid)]={groupId:g.id,groupName:g.name||'קבוצה',regionName:g.regionName||'',idx,total:(g.instructorUids||[]).length}}));
+    const regionByUid={};allUsers.forEach(u=>{const uid=String(u.uid||u.id);regionByUid[uid]=u.region||inferInstructorRegion(u)||'?'});
     const previewShow=window._smartRotPreviewFull?r.proposal.length:Math.min(4,r.proposal.length);
     const previewWeeks=r.proposal.slice(0,previewShow);
     const _matChip=(mid)=>{const mat=matById[mid];if(!mat)return'<span style="color:var(--mut);font-size:10px">—</span>';const catInfo=MAT_CATEGORIES[mat.category]||{};return`<span style="display:inline-block;background:${catInfo.color||'#64748B'};color:white;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(mat.name||'')} (${catInfo.label||mat.category||''})">${catInfo.emoji||'📦'} ${esc(mat.name||'?')}</span>`};
@@ -2991,13 +3034,21 @@ async function _smartRotRun(){
       const byGroup={};const free=[];
       entries.forEach(([uid,mid])=>{const gi=groupByUid[String(uid)];if(gi){if(!byGroup[gi.groupId])byGroup[gi.groupId]={name:gi.groupName,slots:[]};byGroup[gi.groupId].slots[gi.idx]={uid,mid,total:gi.total}}else free.push({uid,mid})});
       let html='';
+      const _regionTag=(uid)=>{const rn=regionByUid[uid];if(!rn||rn==='?')return '';const c=REGION_COLORS[rn]||'#64748B';return`<span style="display:inline-block;background:${c};color:white;padding:1px 6px;border-radius:6px;font-size:9px;font-weight:700;margin-right:4px">${esc(rn)}</span>`};
       Object.entries(byGroup).forEach(([gid,g])=>{
         const arrow='<span style="color:#7C3AED;font-weight:900;font-size:14px">→</span>';
         const chain=g.slots.filter(Boolean).map(s=>`<div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:10px;font-weight:700;color:#5B21B6">${esc(nameOf(s.uid))}${isVirtUid(s.uid)?' 🕐':''}</span>${_matChip(s.mid)}</div>`).join('<div style="align-self:center">'+arrow+'</div>');
-        html+=`<div style="background:#F3E8FF;border-right:3px solid #7C3AED;padding:8px 12px;margin-bottom:4px;border-radius:6px"><div style="font-size:10px;font-weight:800;color:#5B21B6;margin-bottom:6px;letter-spacing:0.03em">🔄 ${esc(g.name)} (מסלול הנהג)</div><div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">${chain}</div></div>`;
+        const grpRegionTag=r.allRegions&&g.slots[0]?_regionTag(g.slots[0].uid):'';
+        html+=`<div style="background:#F3E8FF;border-right:3px solid #7C3AED;padding:8px 12px;margin-bottom:4px;border-radius:6px"><div style="font-size:10px;font-weight:800;color:#5B21B6;margin-bottom:6px;letter-spacing:0.03em">${grpRegionTag}🔄 ${esc(g.name)} (מסלול הנהג)</div><div style="display:flex;gap:6px;align-items:stretch;flex-wrap:wrap">${chain}</div></div>`;
       });
       if(free.length){
-        html+='<div style="background:#F0F9FF;padding:8px 12px;margin-bottom:4px;border-radius:6px"><div style="font-size:10px;font-weight:800;color:#0369A1;margin-bottom:6px;letter-spacing:0.03em">🏃 מדריכות חופשיות</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">'+free.map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11px"><span style="font-weight:600;color:var(--text)">${esc(nameOf(f.uid))}${isVirtUid(f.uid)?' 🕐':''}</span>${_matChip(f.mid)}</div>`).join('')+'</div></div>';
+        // In all-regions mode, further split free agents by region for readability
+        if(r.allRegions){
+          const freeByRegion={};free.forEach(f=>{const rn=regionByUid[f.uid]||'?';if(!freeByRegion[rn])freeByRegion[rn]=[];freeByRegion[rn].push(f)});
+          Object.entries(freeByRegion).forEach(([rn,fs])=>{const c=REGION_COLORS[rn]||'#64748B';html+=`<div style="background:#F0F9FF;padding:8px 12px;margin-bottom:4px;border-radius:6px;border-right:3px solid ${c}"><div style="font-size:10px;font-weight:800;color:${c};margin-bottom:6px;letter-spacing:0.03em">🏃 חופשיות · ${esc(rn)}</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">${fs.map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11px"><span style="font-weight:600;color:var(--text)">${esc(nameOf(f.uid))}${isVirtUid(f.uid)?' 🕐':''}</span>${_matChip(f.mid)}</div>`).join('')}</div></div>`});
+        } else {
+          html+='<div style="background:#F0F9FF;padding:8px 12px;margin-bottom:4px;border-radius:6px"><div style="font-size:10px;font-weight:800;color:#0369A1;margin-bottom:6px;letter-spacing:0.03em">🏃 מדריכות חופשיות</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">'+free.map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11px"><span style="font-weight:600;color:var(--text)">${esc(nameOf(f.uid))}${isVirtUid(f.uid)?' 🕐':''}</span>${_matChip(f.mid)}</div>`).join('')+'</div></div>';
+        }
       }
       return html;
     };
