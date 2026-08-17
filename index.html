@@ -2143,6 +2143,95 @@ let _schedCtx={targetId:'ei-schedule',countId:'ei-schedule-count',gardens:null};
 let _schedEditingUid=null;
 const _schedDayNames=['ראשון','שני','שלישי','רביעי','חמישי'];
 const _schedDayColors=['#059669','#3B82F6','#8B5CF6','#EC4899','#F59E0B'];
+// === WEEKLY SCHEDULE IMPORT (Excel grid format) ===
+// Parses admin's Excel where columns=days, cells=multi-line text like "10:00-11:15 מרכז נריה - הטיה 2 קריית מלאכי".
+// Auto-detects day columns + time ranges + fuzzy-matches garden names against instructor's assigned list.
+// Admin reviews preview + fixes unmatched via dropdowns before saving.
+const _IMP_DAY_ALIASES={'ראשון':0,'רא':0,'א':0,'א׳':0,"א'":0,'sunday':0,'sun':0,'שני':1,'ב':1,'ב׳':1,"ב'":1,'monday':1,'mon':1,'שלישי':2,'ג':2,'ג׳':2,"ג'":2,'tuesday':2,'tue':2,'רביעי':3,'ד':3,'ד׳':3,"ד'":3,'wednesday':3,'wed':3,'חמישי':4,'ה':4,'ה׳':4,"ה'":4,'thursday':4,'thu':4};
+function _impParseDay(str){if(!str)return -1;const s=String(str).trim().toLowerCase().replace(/[.]/g,'');if(_IMP_DAY_ALIASES[s]!==undefined)return _IMP_DAY_ALIASES[s];for(const k in _IMP_DAY_ALIASES)if(s.startsWith(k))return _IMP_DAY_ALIASES[k];return -1}
+function _impExtractTime(line){const m=String(line).match(/(\d{1,2}):(\d{2})\s*[-–—:]\s*(\d{1,2}):(\d{2})/);if(m)return{start:`${m[1].padStart(2,'0')}:${m[2]}`,end:`${m[3].padStart(2,'0')}:${m[4]}`,matched:m[0]};const single=String(line).match(/(\d{1,2}):(\d{2})/);if(single)return{start:`${single[1].padStart(2,'0')}:${single[2]}`,end:'',matched:single[0]};return null}
+function _impFuzzyGardenMatch(text,userGardens){if(!text)return null;const clean=String(text).toLowerCase();let best=null,bestLen=0;for(const g of userGardens){const lg=String(g).toLowerCase();if(clean.includes(lg)&&lg.length>bestLen){best=g;bestLen=lg.length}}return best}
+let _impSchedTargetUid=null,_impSchedParsedRows=null;
+function openImportScheduleMo(uid){
+  const targetUid=uid||editId;if(!targetUid){alert('פתחי מדריכה לעריכה קודם');return}
+  const user=(DB.get('users')||[]).find(u=>String(u.uid||u.id)===String(targetUid));if(!user){alert('לא נמצאה המדריכה');return}
+  _impSchedTargetUid=targetUid;_impSchedParsedRows=null;
+  let mo=document.getElementById('imp-sched-mo');if(!mo){mo=document.createElement('div');mo.id='imp-sched-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:900px;max-height:92vh;overflow-y:auto"><div class="mt"><span>📥 ייבוא לוז שבועי — ${esc(user.name)}</span><span class="mc" onclick="document.getElementById('imp-sched-mo').style.display='none'">×</span></div><div style="background:#E1F2FA;border-right:4px solid #1565C0;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#0C4A6E;line-height:1.7">💡 <b>איך זה עובד:</b><br>1. עלי את הקובץ Excel של המדריכה (עמודות = ימים, כל תא = טקסט חופשי עם זמן+מקום)<br>2. הפרסר ינסה לזהות אוטומטית ימים, זמנים ושמות גנים<br>3. תראי טבלת סקירה — עמודת "גן" — אם ריקה או שגויה — תבחרי מרשימת הגנים המשויכים למדריכה<br>4. אם יש גן שלא משוייך — הוסיפי לה קודם ותייבאי שוב<br>5. שמור → כל השיבוצים נכנסים ל-weeklySchedule שלה</div><label class="lf-label" style="font-size:12px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">📁 קובץ Excel של הלוז</label><input type="file" id="imp-sched-file" accept=".xlsx,.xls,.csv" onchange="_parseImpSchedGrid()" style="margin-bottom:14px;padding:8px;border:1.5px dashed #1565C0;border-radius:8px;background:#F0F9FF;width:100%"><div id="imp-sched-preview" style="min-height:60px;background:#FAFAFA;border-radius:8px;padding:12px;color:var(--mut);font-size:12px;text-align:center;font-style:italic">העלי קובץ Excel כדי להתחיל</div><div class="ma" style="margin-top:14px"><button class="btn-sec" onclick="document.getElementById('imp-sched-mo').style.display='none'">סגור</button></div></div>`;
+  mo.style.display='flex';mo.style.alignItems='flex-start';mo.style.justifyContent='center';mo.style.padding='20px 10px';mo.style.overflow='auto';
+}
+async function _parseImpSchedGrid(){
+  const fileEl=document.getElementById('imp-sched-file');const file=fileEl&&fileEl.files&&fileEl.files[0];
+  if(!file){document.getElementById('imp-sched-preview').innerHTML='<div style="color:#C62828">אין קובץ</div>';return}
+  const user=(DB.get('users')||[]).find(u=>String(u.uid||u.id)===String(_impSchedTargetUid));
+  const userGardens=(user&&user.gardens)||[];
+  if(!userGardens.length){document.getElementById('imp-sched-preview').innerHTML='<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px;text-align:right"><b>⚠ למדריכה זו אין גנים משוייכים</b><br>הוסיפי גנים לרשימת המדריכה קודם, ואז ייבאי את הלוז.</div>';return}
+  try{
+    const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',blankrows:false});
+    if(!rows.length){document.getElementById('imp-sched-preview').innerHTML='<div style="color:#C62828">הקובץ ריק</div>';return}
+    // Detect day columns in the FIRST 3 rows (some Excels have title rows)
+    let headerRowIdx=-1,dayColMap={};
+    for(let r=0;r<Math.min(3,rows.length);r++){
+      const map={};for(let c=0;c<rows[r].length;c++){const d=_impParseDay(rows[r][c]);if(d>=0&&d<=4)map[c]=d}
+      if(Object.keys(map).length>=3){headerRowIdx=r;dayColMap=map;break}
+    }
+    if(headerRowIdx===-1){document.getElementById('imp-sched-preview').innerHTML='<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px">⚠ לא זוהתה שורת כותרות עם ימים. עמודה אחת לפחות חייבת לכלול "ראשון"/"שני"/"שלישי" וכו׳ ב-3 שורות הראשונות.</div>';return}
+    // Parse cells below the header
+    const parsed=[];
+    for(let r=headerRowIdx+1;r<rows.length;r++){
+      for(const [col,dayIdx] of Object.entries(dayColMap)){
+        const cellText=String(rows[r][col]||'').trim();if(!cellText)continue;
+        const lines=cellText.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+        for(const line of lines){
+          const time=_impExtractTime(line);
+          const gardenGuess=_impFuzzyGardenMatch(line,userGardens);
+          const isBiweekly=/לסרוגין|כל שבועיים|שבוע [אב]/.test(line);
+          const cleanNote=line.replace(time?time.matched:'',' ').replace(gardenGuess||'',' ').trim().replace(/\s+/g,' ');
+          parsed.push({dayIdx,day:_schedDayNames[dayIdx],rawText:line,start:time?time.start:'',end:time?time.end:'',garden:gardenGuess||'',note:cleanNote,biweekly:isBiweekly});
+        }
+      }
+    }
+    if(!parsed.length){document.getElementById('imp-sched-preview').innerHTML='<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px">⚠ לא זוהו שיבוצים בקובץ</div>';return}
+    _impSchedParsedRows=parsed;
+    _renderImpSchedPreview();
+  }catch(e){document.getElementById('imp-sched-preview').innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px">⚠ שגיאה בפרסור: ${esc(e.message||e)}</div>`}
+}
+function _renderImpSchedPreview(){
+  const user=(DB.get('users')||[]).find(u=>String(u.uid||u.id)===String(_impSchedTargetUid));
+  const userGardens=(user&&user.gardens)||[];
+  const rows=_impSchedParsedRows||[];
+  const _gardenOptsHtml=uid=>['<option value="">— בחרי גן —</option>',...userGardens.map(g=>`<option value="${esc(g)}"${(_impSchedParsedRows[uid]||{}).garden===g?' selected':''}>${esc(g)}</option>`)].join('');
+  const missing=rows.filter(r=>!r.garden).length;
+  const stats=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><span style="background:#DBEAFE;color:#1E40AF;padding:4px 10px;border-radius:8px;font-weight:700;font-size:12px">📊 ${rows.length} שיבוצים זוהו</span>${missing?`<span style="background:#FEE2E2;color:#991B1B;padding:4px 10px;border-radius:8px;font-weight:700;font-size:12px">⚠ ${missing} ללא גן — בחרי ידנית</span>`:''}${rows.filter(r=>r.biweekly).length?`<span style="background:#FEF3C7;color:#7B5C00;padding:4px 10px;border-radius:8px;font-weight:700;font-size:12px">🔄 ${rows.filter(r=>r.biweekly).length} סומנו כדו-שבועיים</span>`:''}</div>`;
+  const table=rows.map((r,i)=>{
+    const dayColor=_schedDayColors[r.dayIdx]||'#666';
+    const missingBg=!r.garden?'background:#FEF2F2;':'';
+    return `<tr style="border-bottom:1px solid #E5E7EB;${missingBg}"><td style="padding:6px 8px;font-size:11px;color:white;background:${dayColor};text-align:center;font-weight:700">${esc(r.day)}</td><td style="padding:6px 8px;font-size:11px;text-align:center"><input type="time" value="${esc(r.start)}" onchange="_impSchedParsedRows[${i}].start=this.value" style="width:82px;padding:3px 5px;border:1px solid var(--brd);border-radius:4px;font-family:inherit;font-size:11px"></td><td style="padding:6px 8px;font-size:11px;text-align:center"><input type="time" value="${esc(r.end)}" onchange="_impSchedParsedRows[${i}].end=this.value" style="width:82px;padding:3px 5px;border:1px solid var(--brd);border-radius:4px;font-family:inherit;font-size:11px"></td><td style="padding:6px 8px;font-size:11px"><select onchange="_impSchedParsedRows[${i}].garden=this.value;_renderImpSchedPreview()" style="width:100%;padding:4px 6px;border:1.5px solid ${!r.garden?'#DC2626':'var(--brd)'};border-radius:4px;font-family:inherit;font-size:11px;background:white">${_gardenOptsHtml(i)}</select></td><td style="padding:6px 8px;font-size:10px;color:var(--mut);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.rawText)}">${esc(r.rawText)}</td><td style="padding:6px 8px;text-align:center"><input type="checkbox" ${r.biweekly?'checked':''} onchange="_impSchedParsedRows[${i}].biweekly=this.checked" title="דו-שבועי (לסרוגין)"></td><td style="padding:6px 8px;text-align:center"><button onclick="_impSchedParsedRows.splice(${i},1);_renderImpSchedPreview()" style="padding:2px 6px;background:#FEE2E2;border:1px solid #FCA5A5;color:#7F1D1D;border-radius:4px;cursor:pointer;font-size:10px;font-family:inherit">🗑</button></td></tr>`;
+  }).join('');
+  const canSave=missing===0;
+  document.getElementById('imp-sched-preview').innerHTML=`<div style="text-align:right">${stats}<div style="max-height:400px;overflow-y:auto;border:1.5px solid var(--brd);border-radius:8px;background:white"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:#F3F4F6;position:sticky;top:0;z-index:1"><th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--brd)">יום</th><th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--brd)">התחלה</th><th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--brd)">סיום</th><th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--brd)">גן ⚠</th><th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--brd)">טקסט מקורי</th><th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--brd)">דו-שבועי</th><th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--brd)"></th></tr></thead><tbody>${table}</tbody></table></div>${canSave?`<button class="btn-prim" style="width:100%;margin-top:12px" onclick="_saveImpSchedGrid()">✓ שמור ${rows.length} שיבוצים ל-${esc(user.name)}</button>`:`<div style="background:#FEF3C7;border:1.5px solid #F59E0B;color:#7B5C00;padding:10px;border-radius:8px;margin-top:10px;font-size:12px"><b>⚠ יש שיבוצים ללא גן.</b> בחרי גן לכל שורה שסומנה באדום, או הסירי אותה.</div>`}</div>`;
+}
+async function _saveImpSchedGrid(){
+  if(!_impSchedParsedRows||!_impSchedParsedRows.length)return;
+  const users=DB.get('users')||[];const i=users.findIndex(u=>String(u.uid||u.id)===String(_impSchedTargetUid));if(i===-1)return;
+  const schedule={0:[],1:[],2:[],3:[],4:[]};
+  _impSchedParsedRows.forEach(r=>{if(!r.garden)return;schedule[r.dayIdx].push({start:r.start||'',end:r.end||'',garden:r.garden,note:(r.biweekly?'[דו-שבועי] ':'')+(r.note||'').trim()})});
+  users[i].weeklySchedule=schedule;
+  localStorage.setItem('bz3_users',JSON.stringify(users));
+  if(users[i].uid&&window.fbDb){try{await fbDb.collection('users').doc(users[i].uid).update({weeklySchedule:schedule})}catch(e){alert('שגיאה בשמירה בענן: '+(e.message||e));return}}
+  document.getElementById('imp-sched-mo').style.display='none';
+  alert(`✓ נשמרו ${_impSchedParsedRows.length} שיבוצים למערכת השבועית של ${users[i].name}`);
+  // If admin was editing the same user, refresh the schedule draft
+  if(String(editId)===String(_impSchedTargetUid)){_eiScheduleDraft={0:schedule[0].map(e=>({...e})),1:schedule[1].map(e=>({...e})),2:schedule[2].map(e=>({...e})),3:schedule[3].map(e=>({...e})),4:schedule[4].map(e=>({...e}))};if(typeof renderEiSchedule==='function')renderEiSchedule()}
+  renderAdm();
+}
+function _downloadImpSchedTemplate(){
+  const data=[['','ראשון','שני','שלישי','רביעי','חמישי'],['בוקר','08:30-09:00 שם הגן\n09:15-09:45 גן שני','','8:30-9:30 גן א\n10:00-10:45 גן ב','',''],['אחה"צ','','','','13:00-14:00 גן צהריים\n[לסרוגין] גן דו-שבועי',''],];
+  const ws=XLSX.utils.aoa_to_sheet(data);ws['!cols']=[{wch:10},{wch:32},{wch:32},{wch:32},{wch:32},{wch:32}];if(!ws['!views'])ws['!views']=[{rightToLeft:true}];
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'לוז שבועי');XLSX.writeFile(wb,'תבנית_לוז_שבועי.xlsx');
+}
+
 function renderEiSchedule(){const el=document.getElementById(_schedCtx.targetId);if(!el)return;const userGardens=_schedCtx.gardens!==null?_schedCtx.gardens:((typeof getCheckedG==='function')?getCheckedG('ei-g'):[]);const _allGardens=(typeof GN==='function')?GN(DB.get('gardens')||[]):(DB.get('gardens')||[]).map(g=>typeof g==='string'?g:g.name);const _userGardensSet=new Set(userGardens);const _dlHtml=`<datalist id="_sched-all-gardens-dl">${_allGardens.map(g=>{const isAsg=_userGardensSet.has(g);return `<option value="${esc(g)}">${esc(g)}${isAsg?'':' 🌿 (חדש - יוצף)'}</option>`}).join('')}</datalist>`;let totalEntries=0;const bodyHtml=_schedDayNames.map((name,i)=>{const entries=_eiScheduleDraft[i]||[];totalEntries+=entries.length;const color=_schedDayColors[i];const rows=entries.map((e,idx)=>{const isNewG=e.garden&&!_userGardensSet.has(e.garden)&&_allGardens.includes(e.garden);const inputBg=isNewG?'#FEF3C7':'white';const inputBrd=isNewG?'#F59E0B':'var(--brd)';return `<div style="display:grid;grid-template-columns:70px 70px 1fr 1fr 32px;gap:5px;margin-bottom:5px;align-items:center"><input type="time" value="${esc(e.start||'')}" onchange="updateEiScheduleEntry(${i},${idx},'start',this.value)" style="padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-family:inherit;font-size:11px" title="שעת התחלה"><input type="time" value="${esc(e.end||'')}" onchange="updateEiScheduleEntry(${i},${idx},'end',this.value)" style="padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-family:inherit;font-size:11px" title="שעת סיום"><input type="text" list="_sched-all-gardens-dl" value="${esc(e.garden||'')}" placeholder="חיפוש גן..." autocomplete="off" onchange="onEiScheduleGardenChange(${i},${idx},this.value)" style="padding:4px 6px;border:1.5px solid ${inputBrd};background:${inputBg};border-radius:5px;font-family:inherit;font-size:11px" title="גן — הקלידי לחיפוש"><input type="text" value="${esc(e.note||'')}" onchange="updateEiScheduleEntry(${i},${idx},'note',this.value)" placeholder="הערה (קבוצות/חלוקה...)" style="padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-family:inherit;font-size:11px" title="הערה"><button type="button" onclick="removeEiScheduleEntry(${i},${idx})" style="padding:4px 6px;background:#FEE2E2;border:1px solid #FCA5A5;color:#7F1D1D;border-radius:5px;cursor:pointer;font-size:11px;font-family:inherit" title="הסר שיבוץ">🗑</button></div>`}).join('');return `<div style="margin-bottom:10px;background:white;border:1.5px solid ${color};border-radius:8px;padding:8px 10px"><div style="font-weight:700;color:${color};margin-bottom:6px;font-size:12px;display:flex;align-items:center;gap:6px">📅 יום ${name}<span style="background:${color};color:white;padding:1px 8px;border-radius:10px;font-size:10px">${entries.length}</span></div>${rows||'<div style="font-size:11px;color:var(--mut);font-style:italic;padding:4px 0">אין שיבוצים ליום זה</div>'}<button type="button" onclick="addEiScheduleEntry(${i})" style="margin-top:6px;padding:5px 10px;background:${color};border:none;color:white;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;font-family:inherit">+ שיבוץ ליום ${name}</button></div>`}).join('');const _asgCount=userGardens.length;const hdrHtml=`<div style="font-size:11px;color:#166534;margin-bottom:10px;padding:8px 10px;background:#DCFCE7;border-radius:6px;line-height:1.5"><b>💡 הגדרת מערכת קבועה:</b> איפה המדריכה אמורה להיות בכל יום בשבוע. בדוח החודשי — כל דיווח חסר יסומן באדום.<br>🚫 שישי-שבת: מדריכים לא עובדים (אין שיבוצים).<br>🕒 שעות ידניות · 🌿 גן חדש שתבחרי (לא משוייך עדיין) יוצף אוטומטית למדריכה.<br>סה"כ <b>${totalEntries}</b> שיבוצים בשבוע · ${_asgCount} גנים משויכים.</div>`;el.innerHTML=_dlHtml+hdrHtml+bodyHtml;const cntEl=document.getElementById(_schedCtx.countId);if(cntEl)cntEl.textContent=totalEntries+' שיבוצים'}
 async function onEiScheduleGardenChange(day,idx,value){const gname=(value||'').trim();updateEiScheduleEntry(day,idx,'garden',gname);if(!gname)return;const _allGardens=(typeof GN==='function')?GN(DB.get('gardens')||[]):(DB.get('gardens')||[]).map(g=>typeof g==='string'?g:g.name);if(!_allGardens.includes(gname)){alert(`⚠ הגן "${gname}" לא קיים ברשימת הגנים.\n\nהוסיפי אותו קודם דרך אדמין → גנים.`);return}const userGardens=_schedCtx.gardens!==null?_schedCtx.gardens:((typeof getCheckedG==='function')?getCheckedG('ei-g'):[]);if(userGardens.includes(gname))return;if(_schedEditingUid){const users=DB.get('users')||[];const uIdx=users.findIndex(x=>x.uid===_schedEditingUid||String(x.id)===String(_schedEditingUid));if(uIdx===-1)return;const u=users[uIdx];if(!Array.isArray(u.gardens))u.gardens=[];if(!u.gardens.includes(gname)){u.gardens.push(gname);users[uIdx]=u;DB.set('users',users);if(u.uid&&window.fbDb){try{await fbDb.collection('users').doc(u.uid).update({gardens:u.gardens})}catch(e){console.error('auto-assign garden failed',e)}}if(_schedCtx.gardens!==null)_schedCtx.gardens=u.gardens.slice();renderEiSchedule()}}else{const el=document.getElementById('ei-g');if(el){const gc=el.querySelector(`.gc[data-g="${CSS.escape(gname)}"]`);if(gc&&!gc.classList.contains('checked')){toggleGC(gc);if(typeof renderEiGpay==='function')renderEiGpay();renderEiSchedule()}}}}
 function addEiScheduleEntry(day){if(!_eiScheduleDraft[day])_eiScheduleDraft[day]=[];_eiScheduleDraft[day].push({start:'',end:'',garden:'',note:''});renderEiSchedule();if(typeof markEiDirty==='function')markEiDirty()}
