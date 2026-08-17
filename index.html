@@ -2911,8 +2911,9 @@ async function computeAnnualRotation(region, opts){
   // Latin Square rotation: batch of N materials, cycled N weeks (each instructor sees each material once).
   // After N weeks, ALL N materials retire and are replaced with N fresh materials.
   // State keyed by super-group ID (sorted concatenation of sub-group IDs).
+  // batchSlotCategories tracks {slotIdx: category} for the previous batch — used to align next batch's slots.
   const superIdOf=cluster=>cluster.map(g=>g.id).sort().join('|');
-  superGroups.forEach(cluster=>{groupPipelines[superIdOf(cluster)]={batch:[],batchStartWeekIdx:null}});
+  superGroups.forEach(cluster=>{groupPipelines[superIdOf(cluster)]={batch:[],batchStartWeekIdx:null,prevSlotCategories:{}}});
   const weeks=_iterateWeeks(startISO,endISO);
   const proposal=[];
   const warnings=[];
@@ -2991,13 +2992,25 @@ async function computeAnnualRotation(region, opts){
             warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'no_super_batch_material',msg:`אין מספיק מערכים לסופר-באטש (מיקום ${batchIdx+1}/${T}) — כל המערכים מפרים חוק גנים/מדריכה/קטגוריה`});
             break;
           }
-          const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed})}));
+          const prevCat=(state.prevSlotCategories||{})[batchIdx];
+          const scored=pool.map(m=>{
+            let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed});
+            // BIG bonus if this material's category matches the same slot in previous batch —
+            // ensures every instructor sees the same category at the same offset each batch,
+            // which respects the 4-week cooldown perfectly.
+            if(prevCat&&m.category===prevCat)score+=500;
+            return {m,score};
+          });
           scored.sort((a,b)=>b.score-a.score);
           newBatch[batchIdx]=scored[0].m.id;
           usedInBatch.add(scored[0].m.id);
           if(scored[0].m.category)batchCategoriesAtIdx.push({idx:batchIdx,cat:scored[0].m.category});
           globallyUsed.add(scored[0].m.id);
         }
+        // Remember category-per-slot for next batch's alignment
+        const newSlotCategories={};
+        newBatch.forEach((mid,idx)=>{if(!mid)return;const m=materials.find(x=>x.id===mid);if(m&&m.category)newSlotCategories[idx]=m.category});
+        state.prevSlotCategories=newSlotCategories;
         state.batch=newBatch;
         state.batchStartWeekIdx=weekIdx;
       }
