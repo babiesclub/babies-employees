@@ -2842,6 +2842,30 @@ function _matSeasonFits(mat, weekISO, holidayDates){
   if(seasDef && seasDef.months && !seasDef.months.includes(monthIdx)) return false;
   return true;
 }
+// Auto-detect animal family based on shared first word in animalName.
+// Materials that start with the same 3+ character word are treated as related family (e.g., "ארנב", "ארנב חדש", "ארנב וצב" → family "ארנב").
+// Cached per allMaterials array to avoid recomputation.
+let _familyCache=null,_familyCacheKey=null;
+function _familyOf(mat, allMats){
+  if(!mat)return null;
+  const key=allMats.length+'|'+(allMats[0]||{}).id;
+  if(_familyCacheKey!==key){_familyCache={};_familyCacheKey=key}
+  if(_familyCache[mat.id]!==undefined)return _familyCache[mat.id];
+  const myAnimal=(mat.animalName||mat.name||'').trim();
+  if(!myAnimal){_familyCache[mat.id]=null;return null}
+  const firstWord=myAnimal.split(/[\s\-]+/)[0];
+  if(firstWord.length<3){_familyCache[mat.id]=null;return null}
+  // Find at least one other material starting with the same first word
+  const hasRelative=allMats.some(x=>{
+    if(x.id===mat.id)return false;
+    const otherAnimal=(x.animalName||x.name||'').trim();
+    const otherFirst=otherAnimal.split(/[\s\-]+/)[0];
+    return otherFirst===firstWord;
+  });
+  const fam=hasRelative?firstWord:null;
+  _familyCache[mat.id]=fam;
+  return fam;
+}
 // Have any of these gardens already seen this material's animal this year?
 function _matAllowedForGardens(mat, gardenNames, gardensSeen){
   const animal=(mat.animalName||mat.name||'').trim();
@@ -2935,6 +2959,7 @@ async function computeAnnualRotation(region, opts){
   const instructorSeenMats={}; // {uid: Set(matId)} — safety net when instructor has no gardens
   const lastCategoryByUid={};
   const catLastWeekByUid={}; // {uid: {category: weekIdx}} — enforces "same category can't repeat to instructor for at least 4 weeks"
+  const familyLastWeekByUid={}; // {uid: {family: weekIdx}} — enforces "related animals (same family) shouldn't cluster — min 8 weeks apart per instructor"
   const globallyUsed=new Set();
   const groupPipelines={};
   // State per group: {batch:[matId,...], batchStartWeekIdx:N|null}
@@ -3021,7 +3046,8 @@ async function computeAnnualRotation(region, opts){
           // Score context: use the sub-group at position sg=0 with pos=i (arbitrary but consistent)
           const contextUid=allSuperUids[batchIdx]||allSuperUids[0];
           const contextGardens=gardensByUid[contextUid]||[];
-          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx));
+          const _famCooldownOKSuper=(m,batchIdx)=>{const fam=_familyOf(m,materials);if(!fam)return true;const p=Math.floor(batchIdx/K);const i=batchIdx%K;for(let sg=0;sg<N_sub;sg++){const grp=cluster[sg];const uids=(grp.instructorUids||[]).map(String);for(let pos=0;pos<uids.length;pos++){const uidP=uids[pos];const lastW=(familyLastWeekByUid[uidP]||{})[fam];if(lastW===undefined)continue;const seen=seenWeekFor(sg,pos,p,i,weekIdx);if((seen-lastW)<8)return false}}return true};
+          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx)&&_famCooldownOKSuper(m,batchIdx));
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
@@ -3070,6 +3096,8 @@ async function computeAnnualRotation(region, opts){
             instructorSeenMats[uid].add(matId);
             lastCategoryByUid[uid]=mat.category;
             if(mat.category){if(!catLastWeekByUid[uid])catLastWeekByUid[uid]={};catLastWeekByUid[uid][mat.category]=weekIdx}
+            const _famS=_familyOf(mat,materials);
+            if(_famS){if(!familyLastWeekByUid[uid])familyLastWeekByUid[uid]={};familyLastWeekByUid[uid][_famS]=weekIdx}
           }
         });
       });
@@ -3115,7 +3143,8 @@ async function computeAnnualRotation(region, opts){
           return true;
         };
         for(let slot=0;slot<N;slot++){
-          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot));
+          const _famCooldownOK_G=(m,slot)=>{const fam=_familyOf(m,materials);if(!fam)return true;for(let p=0;p<N;p++){const uidP=String(uids[p]);const lastW=(familyLastWeekByUid[uidP]||{})[fam];if(lastW===undefined)continue;const seenWeek=weekIdx+((p-slot+N)%N);if((seenWeek-lastW)<8)return false}return true};
+          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot)&&_famCooldownOK_G(m,slot));
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
@@ -3149,6 +3178,8 @@ async function computeAnnualRotation(region, opts){
           instructorSeenMats[String(uid)].add(matId);
           lastCategoryByUid[uid]=mat.category;
           if(mat.category){if(!catLastWeekByUid[String(uid)])catLastWeekByUid[String(uid)]={};catLastWeekByUid[String(uid)][mat.category]=weekIdx}
+          const _famG=_familyOf(mat,materials);
+          if(_famG){if(!familyLastWeekByUid[String(uid)])familyLastWeekByUid[String(uid)]={};familyLastWeekByUid[String(uid)][_famG]=weekIdx}
         }
       });
     } // end single-group block
@@ -3158,7 +3189,8 @@ async function computeAnnualRotation(region, opts){
       const uid=uidOf(u);
       const gardens=gardensByUid[uid]||[];
       const catCooldownOK=(m)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
-      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats) && catCooldownOK(m));
+      const famCooldownOK=(m)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=8};
+      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats) && catCooldownOK(m) && famCooldownOK(m));
       if(!candidates.length){
         warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה/למדריכה השנה, או שקטגוריה אחרונה עדיין בקירור (4 שבועות)`});
         continue;
@@ -3174,6 +3206,8 @@ async function computeAnnualRotation(region, opts){
       instructorSeenMats[uid].add(chosen.id);
       lastCategoryByUid[uid]=chosen.category;
       if(chosen.category){if(!catLastWeekByUid[uid])catLastWeekByUid[uid]={};catLastWeekByUid[uid][chosen.category]=weekIdx}
+      const _famFA=_familyOf(chosen,materials);
+      if(_famFA){if(!familyLastWeekByUid[uid])familyLastWeekByUid[uid]={};familyLastWeekByUid[uid][_famFA]=weekIdx}
     }
     proposal.push({weekISO,assignments:weekAssignments});
   }
