@@ -2990,7 +2990,7 @@ async function computeAnnualRotation(region, opts){
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
             warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'no_super_batch_material',msg:`אין מספיק מערכים לסופר-באטש (מיקום ${batchIdx+1}/${T}) — כל המערכים מפרים חוק גנים/מדריכה/קטגוריה`});
-            break;
+            continue;
           }
           const prevCat=(state.prevSlotCategories||{})[batchIdx];
           const scored=pool.map(m=>{
@@ -3084,7 +3084,7 @@ async function computeAnnualRotation(region, opts){
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
             warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_batch_material',msg:`אין מספיק מערכים לבאטש בקבוצה "${g.name||'?'}" (תחנה ${slot+1}) — כל המערכים מפרים חוק גנים/מדריכה, או חוק הקטגוריה תוך 4 שבועות`});
-            break;
+            continue;
           }
           const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed})}));
           scored.sort((a,b)=>b.score-a.score);
