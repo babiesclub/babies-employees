@@ -5699,25 +5699,31 @@ ${instructorName ? `- שם המדריכה: ${instructorName} (לידיעה).` : 
     try {
       resp = await callAnthropicWithRetry(client, {
         model: "claude-sonnet-5",
-        max_tokens: 4096,
+        max_tokens: 16384,
         system: SYSTEM,
         messages: [{
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mime, data: imageBase64 } },
-            { type: "text", text: "פרק את הלוח השבועי שבתמונה ל-JSON לפי הסכמה. החזר רק JSON." },
+            { type: "text", text: "פרק את הלוח השבועי שבתמונה ל-JSON לפי הסכמה. השאירי את gardenRaw קצר (עד 40 תווים). החזר רק JSON, בלי markdown, בלי ```." },
           ],
         }],
       }, { fallbackModels: ["claude-opus-4-7"] });
     } catch (e) { throw translateAnthropicError(e, "קריאת לוז שבועי מתמונה (parseweeklyscheduleimage)"); }
     const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const _truncated = resp.stop_reason === "max_tokens";
     let parsed;
     try {
-      const m = text.match(/\{[\s\S]*\}/);
-      parsed = JSON.parse(m ? m[0] : text);
+      // Strip ```json ... ``` wrapper if present
+      let cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(m ? m[0] : cleaned);
     } catch (e) {
-      logger.error("parseweeklyscheduleimage parse failed:", text);
-      throw new HttpsError("internal", "תגובת Claude לא בפורמט JSON תקין: " + text.slice(0, 200));
+      logger.error("parseweeklyscheduleimage parse failed:", { stop_reason: resp.stop_reason, len: text.length, tail: text.slice(-200) });
+      const hint = _truncated
+        ? "התגובה מ-Claude נחתכה כי הטבלה גדולה מדי (max_tokens=16384). נסי להעלות תמונה של חצי טבלה בכל פעם, או קטני את התמונה."
+        : "תגובת Claude לא בפורמט JSON תקין. תחילת התגובה: " + text.slice(0, 200);
+      throw new HttpsError("internal", hint);
     }
     if (!parsed.entries || !Array.isArray(parsed.entries)) parsed.entries = [];
     if (!parsed.warnings) parsed.warnings = [];
