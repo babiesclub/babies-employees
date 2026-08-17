@@ -2882,41 +2882,52 @@ async function computeAnnualRotation(region, opts){
   const lastCategoryByUid={};
   const globallyUsed=new Set();
   const groupPipelines={};
-  groups.forEach(g=>{groupPipelines[g.id]=new Array((g.instructorUids||[]).length).fill(null)});
+  // State per group: {batch:[matId,...], batchStartWeekIdx:N|null}
+  // Latin Square rotation: batch of N materials, cycled N weeks (each instructor sees each material once).
+  // After N weeks, ALL N materials retire and are replaced with N fresh materials.
+  groups.forEach(g=>{groupPipelines[g.id]={batch:[],batchStartWeekIdx:null}});
   const weeks=_iterateWeeks(startISO,endISO);
   const proposal=[];
   const warnings=[];
-  for(const weekISO of weeks){
+  for(let weekIdx=0;weekIdx<weeks.length;weekIdx++){
+    const weekISO=weeks[weekIdx];
     const weekAssignments={};
-    // Rotation groups — pipeline model
+    // Rotation groups — Latin Square with batch rollover
     for(const g of groups){
       const uids=(g.instructorUids||[]).map(String);
-      if(!uids.length) continue;
-      const pipeline=groupPipelines[g.id];
-      // Shift: tail retires, all shift forward, slot 0 opens for a fresh material
-      for(let i=pipeline.length-1;i>0;i--) pipeline[i]=pipeline[i-1];
-      // Pick fresh material for slot 0. IMPORTANT: material will pass through ALL group instructors,
-      // so we must ensure NO group garden has seen this animal yet (not just the head's gardens).
-      const headUid=uids[0];
-      const headGardens=gardensByUid[headUid]||[];
-      // Union of all gardens across the group — material will eventually visit them all
-      const allGroupGardens=[];uids.forEach(uu=>{(gardensByUid[uu]||[]).forEach(g=>{if(!allGroupGardens.includes(g))allGroupGardens.push(g)})});
-      let candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,allGroupGardens,gardensSeen) && uids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats)));
-      // Prefer fresh (not used anywhere yet) when available; fall back to any fitting candidate
-      const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
-      if(freshCandidates.length)candidates=freshCandidates;
-      if(!candidates.length){
-        warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_head_material',msg:`אין מערך חדש לתחנת ההזנקה של קבוצה "${g.name||'?'}"`});
-        pipeline[0]=null;
-      } else {
-        const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens:headGardens,gardensSeen,lastCategory:lastCategoryByUid[headUid],globallyUsed})}));
-        scored.sort((a,b)=>b.score-a.score);
-        pipeline[0]=scored[0].m.id;
-        globallyUsed.add(scored[0].m.id);
+      const N=uids.length;
+      if(!N) continue;
+      const state=groupPipelines[g.id];
+      // Union of all gardens across the group (used both for filtering AND scoring context)
+      const allGroupGardens=[];uids.forEach(uu=>{(gardensByUid[uu]||[]).forEach(gn=>{if(!allGroupGardens.includes(gn))allGroupGardens.push(gn)})});
+      // Do we need a new batch? (first week ever OR completed N weeks with previous batch)
+      const weekInBatch=state.batchStartWeekIdx===null?0:(weekIdx-state.batchStartWeekIdx);
+      const needNewBatch=state.batchStartWeekIdx===null||weekInBatch>=N;
+      if(needNewBatch){
+        // Pick N distinct fresh materials, all valid for the whole group
+        const newBatch=[];const usedInBatch=new Set();
+        for(let slot=0;slot<N;slot++){
+          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats)));
+          const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
+          const pool=freshCandidates.length?freshCandidates:candidates;
+          if(!pool.length){
+            warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_batch_material',msg:`אין מספיק מערכים חדשים לבאטש בקבוצה "${g.name||'?'}" (חסר עבור תחנה ${slot+1})`});
+            break;
+          }
+          const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed})}));
+          scored.sort((a,b)=>b.score-a.score);
+          newBatch.push(scored[0].m.id);
+          usedInBatch.add(scored[0].m.id);
+          globallyUsed.add(scored[0].m.id);
+        }
+        state.batch=newBatch;
+        state.batchStartWeekIdx=weekIdx;
       }
-      // Assign each station's material to its instructor + mark gardens×animal as seen
+      // Assign each instructor via cyclic Latin Square: matIdx = (pos - weekInBatch) mod N
+      const curWeekInBatch=weekIdx-state.batchStartWeekIdx;
       uids.forEach((uid,idx)=>{
-        const matId=pipeline[idx]; if(!matId) return;
+        const matIdx=((idx-curWeekInBatch)%N+N)%N;
+        const matId=state.batch[matIdx]; if(!matId) return;
         weekAssignments[uid]=matId;
         const mat=materials.find(m=>m.id===matId);
         if(mat){
