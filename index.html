@@ -2904,20 +2904,22 @@ async function computeAnnualRotation(region, opts){
       const weekInBatch=state.batchStartWeekIdx===null?0:(weekIdx-state.batchStartWeekIdx);
       const needNewBatch=state.batchStartWeekIdx===null||weekInBatch>=N;
       if(needNewBatch){
-        // Pick N distinct fresh materials, all valid for the whole group
-        const newBatch=[];const usedInBatch=new Set();
+        // Pick N distinct fresh materials, all valid for the whole group.
+        // HARD rule: no two materials in the same batch can share a category (חוק חדש 2026-08-17).
+        const newBatch=[];const usedInBatch=new Set();const usedCategoriesInBatch=new Set();
         for(let slot=0;slot<N;slot++){
-          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats)));
+          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&!usedCategoriesInBatch.has(m.category)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats)));
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
-            warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_batch_material',msg:`אין מספיק מערכים חדשים לבאטש בקבוצה "${g.name||'?'}" (חסר עבור תחנה ${slot+1})`});
+            warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_batch_material',msg:`אין מספיק מערכים לבאטש בקבוצה "${g.name||'?'}" (תחנה ${slot+1}) — כל הקטגוריות הזמינות כבר בשימוש בבאטש, או שאין מערך שעובר את חוק הגנים/מדריכה`});
             break;
           }
           const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed})}));
           scored.sort((a,b)=>b.score-a.score);
           newBatch.push(scored[0].m.id);
           usedInBatch.add(scored[0].m.id);
+          if(scored[0].m.category)usedCategoriesInBatch.add(scored[0].m.category);
           globallyUsed.add(scored[0].m.id);
         }
         state.batch=newBatch;
