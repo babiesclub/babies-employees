@@ -1803,6 +1803,10 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     </details>
     <details style="margin-top:10px;background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:var(--rs);padding:10px 14px" id="ei-schedule-details">
       <summary style="font-size:13px;font-weight:700;color:#166534;cursor:pointer">🗓 מערכת שבועית קבועה <span id="ei-schedule-count" style="font-size:11px;font-weight:600;background:#DCFCE7;color:#166534;padding:2px 8px;border-radius:10px;margin-right:6px">0 שיבוצים</span></summary>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button type="button" class="btn-sec" style="background:#DBEAFE;border-color:#1565C0;color:#0C4A6E;font-weight:700;font-size:12px;padding:6px 12px" onclick="openImportScheduleMo()">📥 יבא לוז שבועי מאקסל</button>
+        <button type="button" class="btn-sec" style="background:#F3F4F6;color:#374151;font-size:12px;padding:6px 12px" onclick="_downloadImpSchedTemplate()">📄 הורדי תבנית ריקה</button>
+      </div>
       <div id="ei-schedule" style="margin-top:10px"></div>
     </details>
     <details style="margin-top:10px;background:#FFF3E0;border:1.5px solid #FFB74D;border-radius:var(--rs);padding:10px 14px">
@@ -2147,6 +2151,112 @@ function updateEiScheduleEntry(day,idx,field,value){if(!_eiScheduleDraft[day]||!
 function openScheduleFor(uid){const users=DB.get('users')||[];const u=users.find(x=>x.uid===uid||String(x.id)===String(uid));if(!u){alert('מדריכה לא נמצאה');return}_schedEditingUid=uid;const _ws=u.weeklySchedule||{};_eiScheduleDraft={0:Array.isArray(_ws[0])?_ws[0].map(e=>({...e})):[],1:Array.isArray(_ws[1])?_ws[1].map(e=>({...e})):[],2:Array.isArray(_ws[2])?_ws[2].map(e=>({...e})):[],3:Array.isArray(_ws[3])?_ws[3].map(e=>({...e})):[],4:Array.isArray(_ws[4])?_ws[4].map(e=>({...e})):[]};_schedCtx={targetId:'sched-mo-editor',countId:'sched-mo-count',gardens:u.gardens||[]};document.getElementById('sched-mo-name').textContent=u.name||'';renderSchedApprovalStatus(u);renderEiSchedule();document.getElementById('sched-mo').classList.add('open')}
 function closeSchedMo(){_schedEditingUid=null;_schedCtx={targetId:'ei-schedule',countId:'ei-schedule-count',gardens:null};document.getElementById('sched-mo').classList.remove('open')}
 function renderSchedApprovalStatus(u){const box=document.getElementById('sched-mo-approval-status');const btn=document.getElementById('sched-approve-btn');if(!box||!btn)return;if(u.scheduleApprovedAt){const at=new Date(u.scheduleApprovedAt).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});box.innerHTML=`<div style="background:#D8F3DC;border:1.5px solid #52B788;border-radius:8px;padding:10px;font-size:12px;color:#1B4332"><b>✅ מערכת מאושרת</b> · ${esc(at)}${u.scheduleApprovedBy?' · על ידי '+esc(u.scheduleApprovedBy):''}</div>`;btn.textContent='🔓 בטלי אישור (החזירי לטיוטה)';btn.style.background='#F59E0B'}else{box.innerHTML=`<div style="background:#FFF3E0;border:1.5px solid #FB923C;border-radius:8px;padding:10px;font-size:12px;color:#9A3412"><b>📝 סטטוס: טיוטה</b><br><span style="font-size:11px">המערכת עדיין לא אושרה. סמני כמאושרת אחרי שסיימת להזין את כל השיבוצים.</span></div>`;btn.textContent='✅ סמני כמאושרת';btn.style.background='#059669'}}
+// === WEEKLY SCHEDULE — Excel IMPORT ===
+// Download a blank template Excel for the admin to fill per instructor
+function _downloadImpSchedTemplate(){
+  const data=[
+    ['יום','שעת התחלה','שעת סיום','גן','הערה'],
+    ['ראשון','08:30','09:00','שם הגן — חייב להיות משוייך למדריכה','תינוקיה'],
+    ['ראשון','09:15','10:15','שם גן שני','בוגרים'],
+    ['שני','09:00','09:30','שם גן שלישי',''],
+    ['שלישי','10:00','11:30','שם גן רביעי','2 קבוצות'],
+    ['רביעי','','','',''],
+    ['חמישי','','','',''],
+  ];
+  const ws=XLSX.utils.aoa_to_sheet(data);
+  ws['!cols']=[{wch:10},{wch:14},{wch:14},{wch:32},{wch:24}];
+  if(!ws['!views'])ws['!views']=[{rightToLeft:true}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'לוז שבועי');
+  XLSX.writeFile(wb,'תבנית_לוז_שבועי.xlsx');
+}
+// Open the import modal for the instructor being edited (editId global from openEdit)
+function openImportScheduleMo(){
+  const uid=editId;
+  if(!uid){alert('פתחי קודם את עריכת המדריכה');return}
+  const user=(DB.get('users')||[]).find(u=>u.id===uid||u.uid===uid);
+  if(!user){alert('מדריכה לא נמצאה');return}
+  const currentGardens=(typeof getCheckedG==='function')?getCheckedG('ei-g'):(user.gardens||[]);
+  let mo=document.getElementById('imp-sched-mo');
+  if(!mo){mo=document.createElement('div');mo.id='imp-sched-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:720px;max-height:92vh;overflow-y:auto"><div class="mt"><span>📥 ייבוא לוז שבועי — ${esc(user.name)}</span><span class="mc" onclick="document.getElementById('imp-sched-mo').style.display='none'">×</span></div><div style="background:#E1F2FA;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#1565C0;line-height:1.6"><b>💡 פורמט האקסל (5 עמודות):</b><br>1️⃣ <b>יום</b> — ראשון/שני/שלישי/רביעי/חמישי (או א/ב/ג/ד/ה)<br>2️⃣ <b>שעת התחלה</b> — 08:30<br>3️⃣ <b>שעת סיום</b> — 09:00<br>4️⃣ <b>גן</b> — חייב להיות אחד מ-${currentGardens.length} הגנים המשויכים למדריכה<br>5️⃣ <b>הערה</b> (אופציונלי) — למשל "תינוקיה"<br><br><b>מספר קבוצות אוטומטי:</b> 30 דק׳ = 1, 60 דק׳ = 2, 90 דק׳ = 3 (עגול לחצי שעה קרובה)</div><button class="btn-sec" style="width:100%;margin-bottom:10px;background:#F3F4F6" onclick="_downloadImpSchedTemplate()">📄 הורדי תבנית ריקה</button><label class="lf-label" style="font-size:12px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">קובץ Excel/CSV לייבוא</label><input type="file" id="imp-sched-file" accept=".xlsx,.xls,.csv" onchange="_parseImpSched()" style="margin-bottom:10px;padding:8px;background:white;border:1.5px dashed var(--brd);border-radius:6px;width:100%;box-sizing:border-box"><div id="imp-sched-preview"></div><div class="ma" style="margin-top:14px"><button class="btn-sec" onclick="document.getElementById('imp-sched-mo').style.display='none'">סגור</button></div></div>`;
+  mo.style.display='flex';mo.style.alignItems='flex-start';mo.style.justifyContent='center';mo.style.padding='20px 10px';mo.style.overflow='auto';
+}
+// Parse the uploaded Excel/CSV file, validate, and show preview
+async function _parseImpSched(){
+  const uid=editId;
+  const fileEl=document.getElementById('imp-sched-file');
+  const file=fileEl&&fileEl.files[0];
+  if(!file||!uid)return;
+  const user=(DB.get('users')||[]).find(u=>u.id===uid||u.uid===uid);
+  if(!user)return;
+  const currentGardens=(typeof getCheckedG==='function')?getCheckedG('ei-g'):(user.gardens||[]);
+  const userGardensSet=new Set(currentGardens.map(g=>g.trim()));
+  const previewEl=document.getElementById('imp-sched-preview');
+  previewEl.innerHTML='<div style="padding:12px;text-align:center;color:var(--mut)">⏳ מפרש קובץ...</div>';
+  try{
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+    const dayMap={'ראשון':0,'א':0,'א׳':0,"א'":0,'sunday':0,'sun':0,'שני':1,'ב':1,'ב׳':1,"ב'":1,'monday':1,'mon':1,'שלישי':2,'ג':2,'ג׳':2,"ג'":2,'tuesday':2,'tue':2,'רביעי':3,'ד':3,'ד׳':3,"ד'":3,'wednesday':3,'wed':3,'חמישי':4,'ה':4,'ה׳':4,"ה'":4,'thursday':4,'thu':4};
+    const dayNames=['ראשון','שני','שלישי','רביעי','חמישי'];
+    const _toTimeStr=(v)=>{if(!v&&v!==0)return '';if(typeof v==='number'){const totalMins=Math.round(v*24*60);const h=Math.floor(totalMins/60),m=totalMins%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')}const s=String(v).trim();const match=s.match(/^(\d{1,2})[:.](\d{2})/);if(match)return String(parseInt(match[1],10)).padStart(2,'0')+':'+match[2];return s};
+    const parsed=[];const unassignedGardens=new Set();let hasErr=false;
+    for(let r=1;r<rows.length;r++){
+      const row=rows[r]||[];
+      if(row.every(c=>!c&&c!==0))continue;
+      const dayRaw=String(row[0]||'').trim();
+      const start=_toTimeStr(row[1]);
+      const end=_toTimeStr(row[2]);
+      const garden=String(row[3]||'').trim();
+      const note=String(row[4]||'').trim();
+      const errs=[];
+      const dayIdx=dayMap[dayRaw.toLowerCase()];
+      if(dayIdx===undefined)errs.push(`יום לא תקין: "${dayRaw}"`);
+      if(!/^\d{2}:\d{2}$/.test(start))errs.push(`התחלה לא תקינה: "${start}"`);
+      if(!/^\d{2}:\d{2}$/.test(end))errs.push(`סיום לא תקין: "${end}"`);
+      if(!garden)errs.push('חסר גן');
+      else if(!userGardensSet.has(garden)){errs.push('גן לא משוייך');unassignedGardens.add(garden)}
+      let groups=1;
+      if(/^\d{2}:\d{2}$/.test(start)&&/^\d{2}:\d{2}$/.test(end)){
+        const[h1,m1]=start.split(':').map(Number);const[h2,m2]=end.split(':').map(Number);
+        const mins=(h2*60+m2)-(h1*60+m1);
+        if(mins>0)groups=Math.max(1,Math.round(mins/30));
+        else if(mins<=0)errs.push('סיום לפני התחלה');
+      }
+      parsed.push({rowNum:r+1,dayIdx,dayName:dayIdx!==undefined?dayNames[dayIdx]:dayRaw,start,end,garden,note,groups,errs});
+      if(errs.length)hasErr=true;
+    }
+    if(!parsed.length){previewEl.innerHTML='<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px">⚠ הקובץ ריק או השורות אינן בפורמט הנכון</div>';return}
+    const tableRows=parsed.map(p=>{
+      const bg=p.errs.length?'#FEE2E2':'#F0FDF4';
+      const errText=p.errs.length?p.errs.join(' · '):'✓ תקין';
+      return `<tr style="background:${bg}"><td style="padding:6px 8px;border:1px solid #ddd;font-size:11px;text-align:center">${p.rowNum}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:11px">${esc(p.dayName)}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:11px;font-family:monospace">${esc(p.start)}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:11px;font-family:monospace">${esc(p.end)}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:11px">${esc(p.garden)}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:11px">${esc(p.note||'-')}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:11px;text-align:center">${p.groups}</td><td style="padding:6px 8px;border:1px solid #ddd;font-size:10px;color:${p.errs.length?'#991B1B':'#166534'};font-weight:600">${esc(errText)}</td></tr>`;
+    }).join('');
+    let summary='';
+    if(unassignedGardens.size){summary+=`<div style="background:#FFF3E0;border:2px solid #F59E0B;color:#7B5C00;padding:12px;border-radius:8px;margin-bottom:10px;font-size:13px;line-height:1.6"><b>⛔ ${unassignedGardens.size} גנים באקסל לא משוייכים למדריכה:</b><br><b style="font-size:14px">${[...unassignedGardens].map(g=>esc(g)).join(' · ')}</b><br><br>לפני שאפשר לייבא — צריך <b>לסגור את החלון הזה, לסמן את הגנים ברשימת הגנים למעלה, לשמור את המדריכה</b>, ואז לנסות ייבוא שוב.</div>`}
+    else if(hasErr){summary+=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px;margin-bottom:10px;font-size:13px">⚠ יש שגיאות בקובץ (מסומן באדום בטבלה). תקני בקובץ ואז ייבא שוב.</div>`}
+    else{summary+=`<div style="background:#D1FAE5;border:1.5px solid #10B981;color:#065F46;padding:12px;border-radius:8px;margin-bottom:10px;font-size:13px">✅ הקובץ תקין. <b>${parsed.length} שיבוצים</b> מוכנים לשמירה.</div>`}
+    const canImport=!hasErr;
+    previewEl.innerHTML=`${summary}<div style="max-height:340px;overflow-y:auto;border:1.5px solid var(--brd);border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead style="position:sticky;top:0"><tr style="background:#1565C0;color:white"><th style="padding:6px 8px;border:1px solid #ddd">#</th><th style="padding:6px 8px;border:1px solid #ddd">יום</th><th style="padding:6px 8px;border:1px solid #ddd">התחלה</th><th style="padding:6px 8px;border:1px solid #ddd">סיום</th><th style="padding:6px 8px;border:1px solid #ddd">גן</th><th style="padding:6px 8px;border:1px solid #ddd">הערה</th><th style="padding:6px 8px;border:1px solid #ddd">קבוצות</th><th style="padding:6px 8px;border:1px solid #ddd">סטטוס</th></tr></thead><tbody>${tableRows}</tbody></table></div>${canImport?`<button class="btn-prim" style="width:100%;margin-top:12px;background:#059669;font-weight:800;padding:12px" onclick="_saveImpSched()">✅ שמור לוז שבועי (${parsed.length} שיבוצים)</button><div style="font-size:11px;color:var(--mut);margin-top:6px;text-align:center">💡 השמירה תחליף כל לוז קיים למדריכה זו</div>`:''}`;
+    window._impSchedParsed=canImport?parsed:null;
+  }catch(e){previewEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px">שגיאה בפירוש הקובץ: ${esc(e.message||e)}</div>`}
+}
+// Save the parsed schedule into the current draft (will be persisted when user clicks save on the edit modal)
+function _saveImpSched(){
+  const parsed=window._impSchedParsed;
+  if(!parsed){alert('אין נתונים תקינים לשמירה');return}
+  _eiScheduleDraft={0:[],1:[],2:[],3:[],4:[]};
+  parsed.forEach(p=>{
+    if(p.errs.length||p.dayIdx===undefined)return;
+    _eiScheduleDraft[p.dayIdx].push({start:p.start,end:p.end,garden:p.garden,note:p.note||''});
+  });
+  renderEiSchedule();
+  if(typeof markEiDirty==='function')markEiDirty();
+  document.getElementById('imp-sched-mo').style.display='none';
+  alert(`✅ יובאו ${parsed.length} שיבוצים ללוז השבועי.\n\n⚠ חשוב: לחצי "שמור" בעריכת המדריכה כדי לשמור לענן בפועל.`);
+}
 async function saveScheduleOnly(){if(!_schedEditingUid){alert('שגיאה: לא מזוהה מדריכה');return}const users=DB.get('users')||[];const idx=users.findIndex(x=>x.uid===_schedEditingUid||String(x.id)===String(_schedEditingUid));if(idx===-1){alert('מדריכה לא נמצאה');return}const uGardens=users[idx].gardens||[];const _cleanSched={0:[],1:[],2:[],3:[],4:[]};Object.keys(_cleanSched).forEach(d=>{(_eiScheduleDraft[d]||[]).forEach(e=>{if(e.garden&&uGardens.includes(e.garden))_cleanSched[d].push({start:e.start||'',end:e.end||'',garden:e.garden,note:e.note||''})})});users[idx].weeklySchedule=_cleanSched;DB.set('users',users);if(users[idx].uid&&window.fbDb){try{await fbDb.collection('users').doc(users[idx].uid).update({weeklySchedule:_cleanSched})}catch(e){alert('שגיאה בסנכרון ענן: '+e.message);return}}const total=Object.values(_cleanSched).reduce((s,a)=>s+a.length,0);alert(`✓ מערכת שבועית נשמרה\n\n📊 ${total} שיבוצים בשבוע`);if(typeof renderInstList==='function')renderInstList()}
 async function toggleScheduleApproval(){if(!_schedEditingUid){alert('שגיאה: לא מזוהה מדריכה');return}const users=DB.get('users')||[];const idx=users.findIndex(x=>x.uid===_schedEditingUid||String(x.id)===String(_schedEditingUid));if(idx===-1){alert('מדריכה לא נמצאה');return}const u=users[idx];if(u.scheduleApprovedAt){if(!confirm('לבטל את אישור המערכת? היא תסומן כטיוטה.'))return;u.scheduleApprovedAt=null;u.scheduleApprovedBy=null}else{const total=Object.values(_eiScheduleDraft).reduce((s,a)=>s+a.length,0);if(!total){if(!confirm('אין שיבוצים במערכת. לאשר בכל זאת?'))return}u.scheduleApprovedAt=new Date().toISOString();u.scheduleApprovedBy=(cu&&(cu.name||cu.username))||'אדמין'}users[idx]=u;DB.set('users',users);if(u.uid&&window.fbDb){try{await fbDb.collection('users').doc(u.uid).update({scheduleApprovedAt:u.scheduleApprovedAt||null,scheduleApprovedBy:u.scheduleApprovedBy||null})}catch(e){alert('שגיאה בסנכרון: '+e.message);return}}renderSchedApprovalStatus(u);if(typeof renderInstList==='function')renderInstList()}
 let _schedImportPending=[];
