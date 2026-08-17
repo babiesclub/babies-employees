@@ -3472,19 +3472,16 @@ async function applyRotationProposal(result, opts){
   const newAssignedByWeek={};
   result.proposal.forEach(w=>{newAssignedByWeek[w.weekISO]=new Set(Object.keys(w.assignments||{}).map(String))});
   let written=0,cleared=0;const frozenSkipped=[];const errors=[];
-  // Phase 1: iterate the proposal weeks — clear ghost + write new
+  // Phase 1: iterate the proposal weeks — NUKE all old assignments + write new
   for(const w of result.proposal){
     if(w.weekISO<cutoff){frozenSkipped.push(w.weekISO);continue}
-    // Clear ghost assignments: for uids covered by the plan but NOT assigned in this specific week
+    // Nuclear clean: clear ALL existing assignments for this week (removes ghosts from previous algo runs / offboarded instructors / etc.)
     const schedule=getWeeklySchedule();
     const existing=schedule[w.weekISO]||{};
     const existingAssigns=existing.assignments||{};
-    const newForWeek=newAssignedByWeek[w.weekISO]||new Set();
     for(const existingUid of Object.keys(existingAssigns)){
-      if(coveredUids.has(existingUid)&&!newForWeek.has(existingUid)){
-        try{await setWschAssignment(w.weekISO,existingUid,'');cleared++}
-        catch(e){errors.push({weekISO:w.weekISO,uid:existingUid,err:'clear: '+(e.message||String(e))})}
-      }
+      try{await setWschAssignment(w.weekISO,existingUid,'');cleared++}
+      catch(e){errors.push({weekISO:w.weekISO,uid:existingUid,err:'clear: '+(e.message||String(e))})}
     }
     // Write new assignments
     for(const[uid,matId] of Object.entries(w.assignments||{})){
