@@ -2832,6 +2832,13 @@ function _matAllowedForGardens(mat, gardenNames, gardensSeen){
   }
   return true;
 }
+// Secondary rule: an instructor cannot repeat the same material in the same year — even if she has no gardens.
+// This is a safety net for cases where garden data is incomplete or the instructor is a placeholder (e.g., not yet assigned gardens).
+function _matAllowedForInstructor(matId, uid, instructorSeenMats){
+  if(!uid)return true;
+  const s=instructorSeenMats[String(uid)];
+  return !s||!s.has(matId);
+}
 // Score a candidate material for a given instructor's context.
 function _scoreMaterial(mat, ctx){
   let score=0;
@@ -2871,6 +2878,7 @@ async function computeAnnualRotation(region, opts){
   const freeAgents=allInRegion.filter(u=>!inGroupUids.has(uidOf(u)));
   // State (accumulates across weeks)
   const gardensSeen={};
+  const instructorSeenMats={}; // {uid: Set(matId)} — safety net when instructor has no gardens
   const lastCategoryByUid={};
   const globallyUsed=new Set();
   const groupPipelines={};
@@ -2893,7 +2901,7 @@ async function computeAnnualRotation(region, opts){
       const headGardens=gardensByUid[headUid]||[];
       // Union of all gardens across the group — material will eventually visit them all
       const allGroupGardens=[];uids.forEach(uu=>{(gardensByUid[uu]||[]).forEach(g=>{if(!allGroupGardens.includes(g))allGroupGardens.push(g)})});
-      let candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,allGroupGardens,gardensSeen));
+      let candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,allGroupGardens,gardensSeen) && uids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats)));
       // Prefer fresh (not used anywhere yet) when available; fall back to any fitting candidate
       const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
       if(freshCandidates.length)candidates=freshCandidates;
@@ -2917,6 +2925,8 @@ async function computeAnnualRotation(region, opts){
             if(!gardensSeen[gn]) gardensSeen[gn]=new Set();
             if(animal) gardensSeen[gn].add(animal);
           });
+          if(!instructorSeenMats[String(uid)])instructorSeenMats[String(uid)]=new Set();
+          instructorSeenMats[String(uid)].add(matId);
           lastCategoryByUid[uid]=mat.category;
         }
       });
@@ -2925,9 +2935,9 @@ async function computeAnnualRotation(region, opts){
     for(const u of freeAgents){
       const uid=uidOf(u);
       const gardens=gardensByUid[uid]||[];
-      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen));
+      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matAllowedForInstructor(m.id,uid,instructorSeenMats));
       if(!candidates.length){
-        warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה השנה`});
+        warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה/למדריכה השנה`});
         continue;
       }
       const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed})}));
@@ -2937,6 +2947,8 @@ async function computeAnnualRotation(region, opts){
       globallyUsed.add(chosen.id);
       const animal=(chosen.animalName||chosen.name||'').trim();
       gardens.forEach(gn=>{if(!gardensSeen[gn]) gardensSeen[gn]=new Set();if(animal) gardensSeen[gn].add(animal)});
+      if(!instructorSeenMats[uid])instructorSeenMats[uid]=new Set();
+      instructorSeenMats[uid].add(chosen.id);
       lastCategoryByUid[uid]=chosen.category;
     }
     proposal.push({weekISO,assignments:weekAssignments});
@@ -3303,6 +3315,7 @@ function _checkAssignmentWarnings(weekId,uid,matId){
     const matsById={};getMaterials().forEach(m=>matsById[m.id]=m);
     const gardensByUid={};users.forEach(u=>{gardensByUid[String(u.uid||u.id)]=u.gardens||[]});
     const repeatingGardens=[];
+    const repeatingWeeksForInstructor=[];
     Object.entries(schedule).forEach(([wId,wData])=>{
       if(wId===weekId||!wData||!wData.assignments)return;
       if(wId<SCHOOL_YEAR.start||wId>SCHOOL_YEAR.end)return;
@@ -3310,13 +3323,19 @@ function _checkAssignmentWarnings(weekId,uid,matId){
         const m=matsById[mid];if(!m)return;
         const otherAnimal=(m.animalName||m.name||'').trim();
         if(otherAnimal!==animal)return;
+        // Check per-garden repeat
         const otherGardens=gardensByUid[String(assignUid)]||[];
         gardens.forEach(g=>{if(otherGardens.includes(g)&&!repeatingGardens.find(x=>x.g===g&&x.wId===wId))repeatingGardens.push({g,wId,otherName:(users.find(u=>String(u.uid||u.id)===String(assignUid))||{}).name})});
+        // Check per-instructor repeat (safety net for gardenless instructors)
+        if(String(assignUid)===String(uid))repeatingWeeksForInstructor.push(wId);
       });
     });
     if(repeatingGardens.length){
       const first=repeatingGardens[0];
       out.push(`חוק #1: "${animal}" כבר הוצג לגן "${first.g}" בשבוע ${first.wId}${first.otherName&&first.otherName!==user.name?` (ע"י ${first.otherName})`:''}${repeatingGardens.length>1?` — ועוד ${repeatingGardens.length-1} גנים`:''}`);
+    } else if(repeatingWeeksForInstructor.length){
+      // Only fire this warning if the per-garden rule DIDN'T catch it (avoids duplicate messages)
+      out.push(`המדריכה כבר שיבצה את "${animal}" בשבוע ${repeatingWeeksForInstructor[0]}${repeatingWeeksForInstructor.length>1?` (ועוד ${repeatingWeeksForInstructor.length-1} שבועות)`:''}`);
     }
   }
   // Rule 3: winter risky category (chick, reptile) in Dec-Feb
