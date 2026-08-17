@@ -2880,6 +2880,7 @@ async function computeAnnualRotation(region, opts){
   const gardensSeen={};
   const instructorSeenMats={}; // {uid: Set(matId)} — safety net when instructor has no gardens
   const lastCategoryByUid={};
+  const catLastWeekByUid={}; // {uid: {category: weekIdx}} — enforces "same category can't repeat to instructor for at least 4 weeks"
   const globallyUsed=new Set();
   const groupPipelines={};
   // State per group: {batch:[matId,...], batchStartWeekIdx:N|null}
@@ -2905,21 +2906,32 @@ async function computeAnnualRotation(region, opts){
       const needNewBatch=state.batchStartWeekIdx===null||weekInBatch>=N;
       if(needNewBatch){
         // Pick N distinct fresh materials, all valid for the whole group.
-        // HARD rule: no two materials in the same batch can share a category (חוק חדש 2026-08-17).
-        const newBatch=[];const usedInBatch=new Set();const usedCategoriesInBatch=new Set();
+        // Per-instructor 4-week cooldown: for material M at slot S, each instructor at pos P sees M at week batchStart + (P - S + N) % N.
+        // We require (seenWeek - catLastWeekByUid[uidP][M.category]) >= 4 for every instructor P in the group.
+        const newBatch=[];const usedInBatch=new Set();
+        const _cooldownOK=(m,slot)=>{
+          if(!m.category)return true;
+          for(let p=0;p<N;p++){
+            const uidP=String(uids[p]);
+            const lastW=(catLastWeekByUid[uidP]||{})[m.category];
+            if(lastW===undefined)continue;
+            const seenWeek=weekIdx+((p-slot+N)%N);
+            if((seenWeek-lastW)<4)return false;
+          }
+          return true;
+        };
         for(let slot=0;slot<N;slot++){
-          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&!usedCategoriesInBatch.has(m.category)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats)));
+          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats))&&_cooldownOK(m,slot));
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
-            warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_batch_material',msg:`אין מספיק מערכים לבאטש בקבוצה "${g.name||'?'}" (תחנה ${slot+1}) — כל הקטגוריות הזמינות כבר בשימוש בבאטש, או שאין מערך שעובר את חוק הגנים/מדריכה`});
+            warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_batch_material',msg:`אין מספיק מערכים לבאטש בקבוצה "${g.name||'?'}" (תחנה ${slot+1}) — כל המערכים מפרים חוק גנים/מדריכה, או חוק הקטגוריה תוך 4 שבועות`});
             break;
           }
           const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed})}));
           scored.sort((a,b)=>b.score-a.score);
           newBatch.push(scored[0].m.id);
           usedInBatch.add(scored[0].m.id);
-          if(scored[0].m.category)usedCategoriesInBatch.add(scored[0].m.category);
           globallyUsed.add(scored[0].m.id);
         }
         state.batch=newBatch;
@@ -2941,6 +2953,7 @@ async function computeAnnualRotation(region, opts){
           if(!instructorSeenMats[String(uid)])instructorSeenMats[String(uid)]=new Set();
           instructorSeenMats[String(uid)].add(matId);
           lastCategoryByUid[uid]=mat.category;
+          if(mat.category){if(!catLastWeekByUid[String(uid)])catLastWeekByUid[String(uid)]={};catLastWeekByUid[String(uid)][mat.category]=weekIdx}
         }
       });
     }
@@ -2948,9 +2961,10 @@ async function computeAnnualRotation(region, opts){
     for(const u of freeAgents){
       const uid=uidOf(u);
       const gardens=gardensByUid[uid]||[];
-      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matAllowedForInstructor(m.id,uid,instructorSeenMats));
+      const catCooldownOK=(m)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
+      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matAllowedForInstructor(m.id,uid,instructorSeenMats) && catCooldownOK(m));
       if(!candidates.length){
-        warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה/למדריכה השנה`});
+        warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה/למדריכה השנה, או שקטגוריה אחרונה עדיין בקירור (4 שבועות)`});
         continue;
       }
       const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed})}));
@@ -2963,6 +2977,7 @@ async function computeAnnualRotation(region, opts){
       if(!instructorSeenMats[uid])instructorSeenMats[uid]=new Set();
       instructorSeenMats[uid].add(chosen.id);
       lastCategoryByUid[uid]=chosen.category;
+      if(chosen.category){if(!catLastWeekByUid[uid])catLastWeekByUid[uid]={};catLastWeekByUid[uid][chosen.category]=weekIdx}
     }
     proposal.push({weekISO,assignments:weekAssignments});
   }
