@@ -2906,17 +2906,29 @@ async function computeAnnualRotation(region, opts){
       const needNewBatch=state.batchStartWeekIdx===null||weekInBatch>=N;
       if(needNewBatch){
         // Pick N distinct fresh materials, all valid for the whole group.
-        // Per-instructor 4-week cooldown: for material M at slot S, each instructor at pos P sees M at week batchStart + (P - S + N) % N.
-        // We require (seenWeek - catLastWeekByUid[uidP][M.category]) >= 4 for every instructor P in the group.
-        const newBatch=[];const usedInBatch=new Set();
+        // Per-instructor 4-week cooldown enforced two ways:
+        //  1. Cross-batch: check catLastWeekByUid (external history) for each instructor's future seen week
+        //  2. Within-batch: for batch size N < 8, two same-category materials would violate the 4-week rule
+        //     for at least one instructor (min cyclic gap = floor(N/2) < 4). So we hard-block category
+        //     duplicates within a batch of size < 8. For N >= 8, we allow if cyclic slot gap >= 4.
+        const newBatch=[];const usedInBatch=new Set();const batchCategoriesAtSlot={}; // {category: [slot,...]}
         const _cooldownOK=(m,slot)=>{
           if(!m.category)return true;
+          // Cross-batch history check
           for(let p=0;p<N;p++){
             const uidP=String(uids[p]);
             const lastW=(catLastWeekByUid[uidP]||{})[m.category];
             if(lastW===undefined)continue;
             const seenWeek=weekIdx+((p-slot+N)%N);
             if((seenWeek-lastW)<4)return false;
+          }
+          // Within-batch category dup check (small batch → any duplicate violates)
+          const prevSlots=batchCategoriesAtSlot[m.category]||[];
+          for(const s of prevSlots){
+            // Cyclic slot distance: min(|slot-s|, N-|slot-s|)
+            const raw=Math.abs(slot-s);
+            const cyclicDist=Math.min(raw,N-raw);
+            if(cyclicDist<4)return false;
           }
           return true;
         };
@@ -2932,6 +2944,7 @@ async function computeAnnualRotation(region, opts){
           scored.sort((a,b)=>b.score-a.score);
           newBatch.push(scored[0].m.id);
           usedInBatch.add(scored[0].m.id);
+          if(scored[0].m.category){if(!batchCategoriesAtSlot[scored[0].m.category])batchCategoriesAtSlot[scored[0].m.category]=[];batchCategoriesAtSlot[scored[0].m.category].push(slot)}
           globallyUsed.add(scored[0].m.id);
         }
         state.batch=newBatch;
