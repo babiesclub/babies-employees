@@ -2871,10 +2871,28 @@ async function computeAnnualRotation(region, opts){
   const uidOf=u=>String(u.uid||u.id);
   const gardensByUid={};
   allInRegion.forEach(u=>{gardensByUid[uidOf(u)]=(u.gardens||[]).slice()});
-  // Rotation groups in this region
-  const groups=(_rotGroups||[]).filter(g=>g.regionName===region);
+  // Rotation groups in this region — merged into super-groups via linkedGroupIds (connected components)
+  const groupsInRegion=(_rotGroups||[]).filter(g=>g.regionName===region);
+  const groupById={};groupsInRegion.forEach(g=>groupById[g.id]=g);
+  // Union-find over linked groups → super-groups (each = array of sub-groups in original order)
+  const seenGroupIds=new Set();
+  const superGroups=[];
+  groupsInRegion.forEach(g=>{
+    if(seenGroupIds.has(g.id))return;
+    // BFS all linked groups from g
+    const cluster=[];const queue=[g.id];const inCluster=new Set();
+    while(queue.length){
+      const cur=queue.shift();
+      if(inCluster.has(cur))continue;
+      inCluster.add(cur);seenGroupIds.add(cur);
+      const grp=groupById[cur];if(!grp)continue;
+      cluster.push(grp);
+      (grp.linkedGroupIds||[]).forEach(otherId=>{if(!inCluster.has(otherId)&&groupById[otherId])queue.push(otherId)});
+    }
+    superGroups.push(cluster);
+  });
   const inGroupUids=new Set();
-  groups.forEach(g=>(g.instructorUids||[]).forEach(uid=>inGroupUids.add(String(uid))));
+  groupsInRegion.forEach(g=>(g.instructorUids||[]).forEach(uid=>inGroupUids.add(String(uid))));
   const freeAgents=allInRegion.filter(u=>!inGroupUids.has(uidOf(u)));
   // State (accumulates across weeks)
   const gardensSeen={};
@@ -2886,15 +2904,124 @@ async function computeAnnualRotation(region, opts){
   // State per group: {batch:[matId,...], batchStartWeekIdx:N|null}
   // Latin Square rotation: batch of N materials, cycled N weeks (each instructor sees each material once).
   // After N weeks, ALL N materials retire and are replaced with N fresh materials.
-  groups.forEach(g=>{groupPipelines[g.id]={batch:[],batchStartWeekIdx:null}});
+  // State keyed by super-group ID (sorted concatenation of sub-group IDs).
+  const superIdOf=cluster=>cluster.map(g=>g.id).sort().join('|');
+  superGroups.forEach(cluster=>{groupPipelines[superIdOf(cluster)]={batch:[],batchStartWeekIdx:null}});
   const weeks=_iterateWeeks(startISO,endISO);
   const proposal=[];
   const warnings=[];
   for(let weekIdx=0;weekIdx<weeks.length;weekIdx++){
     const weekISO=weeks[weekIdx];
     const weekAssignments={};
-    // Rotation groups — Latin Square with batch rollover
-    for(const g of groups){
+    // Rotation groups — Latin Square (single) or pair-swap (linked super-group)
+    for(const cluster of superGroups){
+    if(cluster.length>1){
+      // ===== SUPER-GROUP (linked groups) — pair-swap pattern =====
+      const N_sub=cluster.length;
+      const subGroupSizes=cluster.map(g=>(g.instructorUids||[]).length);
+      const K=subGroupSizes[0];
+      const equalSize=subGroupSizes.every(s=>s===K);
+      if(!equalSize){
+        // Fallback: unequal sub-groups — treat as concatenated single Latin Square (current logic on merged uids)
+        // For simplicity, we skip pair-swap and just warn — MVP supports equal-size sub-groups only.
+        warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'unequal_subgroups',msg:`קבוצות מקושרות "${cluster.map(g=>g.name||'?').join('+')}" בגדלים לא שווים — לא נתמך ב-pair-swap. יש להפריד או להשוות גדלים.`});
+        continue;
+      }
+      const T=N_sub*K;
+      const superId=superIdOf(cluster);
+      const state=groupPipelines[superId];
+      // Union of all gardens across the super-group
+      const allSuperGardens=[];const allSuperUids=[];
+      cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>{allSuperUids.push(String(u));(gardensByUid[String(u)]||[]).forEach(gn=>{if(!allSuperGardens.includes(gn))allSuperGardens.push(gn)})}));
+      // Compute seenWeek for (sub-group sg, position pos) seeing material at (pool p, slot i):
+      // seenWeek = batchStart + ((sg - p + N_sub) % N_sub) * K + ((pos - i + K) % K)
+      const seenWeekFor=(sg,pos,p,i,batchStart)=>batchStart+(((sg-p+N_sub)%N_sub)*K)+(((pos-i+K)%K));
+      // Do we need a new batch? (first ever OR completed T weeks with previous)
+      const weekInCycle=state.batchStartWeekIdx===null?0:(weekIdx-state.batchStartWeekIdx);
+      const needNewBatch=state.batchStartWeekIdx===null||weekInCycle>=T;
+      if(needNewBatch){
+        // Pick T=N_sub*K distinct materials organized as N_sub pools of K each
+        const newBatch=new Array(T).fill(null);
+        const usedInBatch=new Set();const batchCategoriesAtIdx=[]; // {batchIdx: category}
+        const _cooldownOKSuper=(m,batchIdx)=>{
+          if(!m.category)return true;
+          const p=Math.floor(batchIdx/K); const i=batchIdx%K;
+          // Cross-batch external history
+          for(let sg=0;sg<N_sub;sg++){
+            const grp=cluster[sg];const uids=(grp.instructorUids||[]).map(String);
+            for(let pos=0;pos<uids.length;pos++){
+              const uidP=uids[pos];
+              const lastW=(catLastWeekByUid[uidP]||{})[m.category];
+              if(lastW===undefined)continue;
+              const seen=seenWeekFor(sg,pos,p,i,weekIdx);
+              if((seen-lastW)<4)return false;
+            }
+          }
+          // Within-batch category dup check (using seenWeek across all batch pairs)
+          for(const other of batchCategoriesAtIdx){
+            if(other.cat!==m.category)continue;
+            // Compare seenWeek for this M vs the other, for each instructor in super
+            for(let sg=0;sg<N_sub;sg++){
+              const grp=cluster[sg];const uids=(grp.instructorUids||[]).map(String);
+              for(let pos=0;pos<uids.length;pos++){
+                const seenThis=seenWeekFor(sg,pos,p,i,weekIdx);
+                const p2=Math.floor(other.idx/K),i2=other.idx%K;
+                const seenOther=seenWeekFor(sg,pos,p2,i2,weekIdx);
+                if(Math.abs(seenThis-seenOther)<4)return false;
+              }
+            }
+          }
+          return true;
+        };
+        for(let batchIdx=0;batchIdx<T;batchIdx++){
+          const p=Math.floor(batchIdx/K);const i=batchIdx%K;
+          // Score context: use the sub-group at position sg=0 with pos=i (arbitrary but consistent)
+          const contextUid=allSuperUids[batchIdx]||allSuperUids[0];
+          const contextGardens=gardensByUid[contextUid]||[];
+          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats))&&_cooldownOKSuper(m,batchIdx));
+          const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
+          const pool=freshCandidates.length?freshCandidates:candidates;
+          if(!pool.length){
+            warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'no_super_batch_material',msg:`אין מספיק מערכים לסופר-באטש (מיקום ${batchIdx+1}/${T}) — כל המערכים מפרים חוק גנים/מדריכה/קטגוריה`});
+            break;
+          }
+          const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed})}));
+          scored.sort((a,b)=>b.score-a.score);
+          newBatch[batchIdx]=scored[0].m.id;
+          usedInBatch.add(scored[0].m.id);
+          if(scored[0].m.category)batchCategoriesAtIdx.push({idx:batchIdx,cat:scored[0].m.category});
+          globallyUsed.add(scored[0].m.id);
+        }
+        state.batch=newBatch;
+        state.batchStartWeekIdx=weekIdx;
+      }
+      // Assign each instructor for this week
+      const curWeekInCycle=weekIdx-state.batchStartWeekIdx;
+      const outerPos=Math.floor(curWeekInCycle/K);
+      const innerPos=curWeekInCycle%K;
+      cluster.forEach((grp,sg)=>{
+        const uids=(grp.instructorUids||[]).map(String);
+        const poolIdx=((sg-outerPos)%N_sub+N_sub)%N_sub;
+        uids.forEach((uid,pos)=>{
+          const slot=((pos-innerPos)%K+K)%K;
+          const matId=state.batch[poolIdx*K+slot];
+          if(!matId)return;
+          weekAssignments[uid]=matId;
+          const mat=materials.find(m=>m.id===matId);
+          if(mat){
+            const animal=(mat.animalName||mat.name||'').trim();
+            (gardensByUid[uid]||[]).forEach(gn=>{if(!gardensSeen[gn]) gardensSeen[gn]=new Set();if(animal) gardensSeen[gn].add(animal)});
+            if(!instructorSeenMats[uid])instructorSeenMats[uid]=new Set();
+            instructorSeenMats[uid].add(matId);
+            lastCategoryByUid[uid]=mat.category;
+            if(mat.category){if(!catLastWeekByUid[uid])catLastWeekByUid[uid]={};catLastWeekByUid[uid][mat.category]=weekIdx}
+          }
+        });
+      });
+      continue;
+    }
+    // ===== SINGLE GROUP (unlinked) — original Latin Square logic =====
+    { const g=cluster[0];
       const uids=(g.instructorUids||[]).map(String);
       const N=uids.length;
       if(!N) continue;
@@ -2969,7 +3096,8 @@ async function computeAnnualRotation(region, opts){
           if(mat.category){if(!catLastWeekByUid[String(uid)])catLastWeekByUid[String(uid)]={};catLastWeekByUid[String(uid)][mat.category]=weekIdx}
         }
       });
-    }
+    } // end single-group block
+    } // end for(const cluster of superGroups)
     // Free-agent instructors — individual scoring
     for(const u of freeAgents){
       const uid=uidOf(u);
@@ -3326,13 +3454,24 @@ function getInstructorNameByUid(uid){const users=DB.get('users')||[];const u=use
 function getInstructorsInRegion(regionName){const users=DB.get('users')||[];return users.filter(u=>u.role!=='admin'&&u.specialty==='animals').filter(u=>{if(!regionName)return true;if(u.region===regionName)return true;return inferInstructorRegion(u)===regionName}).sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'))}
 function openRotGroupsMo(){let mo=document.getElementById('rotgroups-mo');if(!mo){mo=document.createElement('div');mo.id='rotgroups-mo';mo.className='mo';document.body.appendChild(mo)}mo.innerHTML=`<div class="md" style="max-width:760px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>🔄 ניהול קבוצות רוטציה ומסלולי נהג</span><span class="mc" onclick="document.getElementById('rotgroups-mo').style.display='none'">×</span></div><div style="background:#FFF8E1;border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px;color:#7B5C00;line-height:1.5"><b>💡 שתי שכבות:</b><br>1. <b>מסלול נהג באזור</b> — סדר התחנות (ערים) שהנהג עובר ביניהן<br>2. <b>קבוצות רוטציה</b> — מדריכות שמחלקות מאגר פיזי (Latin square פנימי)</div><details open style="margin-bottom:14px;background:#F5F3FF;border:1.5px solid #C4B5FD;border-radius:8px"><summary style="padding:10px 14px;font-weight:700;font-size:13px;color:#5B21B6;cursor:pointer">🚗 סדר מסלול הנהג באזורים</summary><div style="padding:0 14px 14px"><div id="rr-editor"></div></div></details><details open style="background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:8px"><summary style="padding:10px 14px;font-weight:700;font-size:13px;color:#1B4332;cursor:pointer">🔄 קבוצות רוטציה פנימיות</summary><div style="padding:0 14px 14px"><button class="btn-prim" style="width:100%;margin-bottom:10px;background:#7C3AED;border-color:#7C3AED" onclick="openRotGroupEdit()">+ צרי קבוצת רוטציה חדשה</button><div id="rotgroups-list"></div></div></details></div>`;mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';renderRotGroupsList();renderRouteEditor()}
 async function renderRotGroupsList(){const el=document.getElementById('rotgroups-list');if(!el)return;el.innerHTML='<div style="text-align:center;padding:20px;color:var(--mut)">⏳ טוען...</div>';await syncRotGroups();if(!_rotGroups.length){el.innerHTML='<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">אין עדיין קבוצות רוטציה.<br>לחצי על "+ צרי קבוצת רוטציה חדשה" כדי להתחיל.</div>';return}const byRegion={};_rotGroups.forEach(g=>{const r=g.regionName||'(ללא אזור)';if(!byRegion[r])byRegion[r]=[];byRegion[r].push(g)});const html=Object.keys(byRegion).map(region=>{const color=REGION_COLORS[region]||'#1565C0';const groups=byRegion[region];return `<div style="margin-bottom:18px"><div style="font-weight:700;font-size:14px;color:white;background:${color};padding:8px 12px;border-radius:8px;margin-bottom:8px">📍 ${esc(region)} <span style="background:rgba(255,255,255,0.25);padding:2px 8px;border-radius:8px;font-size:11px;margin-right:6px">${groups.length} קבוצות</span></div>${groups.map(g=>{const uids=g.instructorUids||[];const cycleNote=uids.length===(g.cycleWeeks||0)?'':' ⚠ לא תואם למספר המדריכות';return `<div style="background:white;border:1.5px solid ${color};border-radius:8px;padding:12px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px"><div style="flex:1"><div style="font-weight:700;font-size:14px;color:var(--text)">🔄 ${esc(g.name||'(ללא שם)')}</div><div style="font-size:11px;color:var(--mut);margin-top:4px">📅 מחזור ${g.cycleWeeks||uids.length} שבועות${esc(cycleNote)} · 🚗 ${uids.length} מדריכות במסלול</div></div><div style="display:flex;gap:4px"><button class="btn-ed" onclick='openRotGroupEdit(${JSON.stringify(g.id)})'>ערוך</button><button class="btn-dn" onclick='deleteRotGroup(${JSON.stringify(g.id)},${JSON.stringify(g.name||"")})'>הסר</button></div></div><div style="background:var(--bg);border-radius:6px;padding:8px"><div style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px;text-transform:uppercase">🚗 מסלול הנהג (התחלה → סוף):</div>${uids.length?uids.map((uid,i)=>`<div style="display:inline-flex;align-items:center;gap:4px;background:white;border:1px solid var(--brd);border-radius:14px;padding:4px 10px;margin:2px;font-size:12px"><span style="background:${color};color:white;width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">${i+1}</span>${esc(getInstructorNameByUid(uid))}${i<uids.length-1?'<span style="color:var(--mut);font-size:10px">→</span>':''}</div>`).join(''):'<div style="font-size:11px;color:var(--mut);font-style:italic">אין מדריכות בקבוצה</div>'}</div></div>`}).join('')}</div>`}).join('');el.innerHTML=html}
-function openRotGroupEdit(id){const existing=id?_rotGroups.find(g=>g.id===id):null;_rgEditDraft=existing?{id:existing.id,name:existing.name||'',regionName:existing.regionName||'',instructorUids:[...(existing.instructorUids||[])],cycleWeeks:existing.cycleWeeks||0,notes:existing.notes||''}:{id:null,name:'',regionName:'',instructorUids:[],cycleWeeks:0,notes:''};let mo=document.getElementById('rg-edit-mo');if(!mo){mo=document.createElement('div');mo.id='rg-edit-mo';mo.className='mo';document.body.appendChild(mo)}const regionOpts=['<option value="">— בחרי אזור —</option>'].concat(REGIONS.map(r=>`<option value="${esc(r)}"${_rgEditDraft.regionName===r?' selected':''}>${esc(r)}</option>`)).join('');mo.innerHTML=`<div class="md" style="max-width:620px;max-height:92vh;overflow-y:auto"><div class="mt"><span>${id?'עריכת':'יצירת'} קבוצת רוטציה</span><span class="mc" onclick="document.getElementById('rg-edit-mo').style.display='none'">×</span></div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">שם הקבוצה</label><input type="text" id="rg-name" value="${esc(_rgEditDraft.name)}" class="md-input" placeholder='לדוגמה: "ינון-אשדוד-בני עיש"'><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">📍 אזור</label><select id="rg-region" class="md-input" onchange="onRgRegionChange()">${regionOpts}</select><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">📅 מחזור (שבועות לפני שהנהג מחליף)</label><input type="number" id="rg-cycle" value="${_rgEditDraft.cycleWeeks||''}" class="md-input" min="1" max="52" placeholder="ברירת מחדל = מספר המדריכות בקבוצה"><div style="font-size:10px;color:var(--mut);margin-top:2px;line-height:1.4">השאירי ריק להגדרה אוטומטית לפי מספר המדריכות (Latin square).</div><div style="margin-top:14px;padding:10px;background:#F0F9FF;border-radius:8px"><div style="font-weight:700;font-size:12px;color:#1565C0;margin-bottom:8px">🚗 מסלול הנהג</div><div style="font-size:11px;color:#666;margin-bottom:8px;line-height:1.4">הוסיפי מדריכות לפי הסדר שהנהג עובר. הראשונה ברשימה = תחנת הזנקה. השתמשי בחיצים לשנות סדר.</div><div id="rg-route-list"></div><div style="margin-top:10px"><label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">➕ הוסיפי מדריכה למסלול</label><select id="rg-add-instr" class="md-input" onchange="addRgInstructor(this.value);this.value=''"></select></div></div><div class="ma" style="margin-top:14px"><button class="btn-prim" style="background:#7C3AED;flex:1;margin:0" onclick="saveRotGroup()">${id?'💾 שמור שינויים':'+ צרי קבוצה'}</button><button class="btn-sec" onclick="document.getElementById('rg-edit-mo').style.display='none'">ביטול</button></div></div>`;mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';renderRgRouteAndPicker()}
+function openRotGroupEdit(id){const existing=id?_rotGroups.find(g=>g.id===id):null;_rgEditDraft=existing?{id:existing.id,name:existing.name||'',regionName:existing.regionName||'',instructorUids:[...(existing.instructorUids||[])],cycleWeeks:existing.cycleWeeks||0,notes:existing.notes||'',linkedGroupIds:[...(existing.linkedGroupIds||[])]}:{id:null,name:'',regionName:'',instructorUids:[],cycleWeeks:0,notes:'',linkedGroupIds:[]};let mo=document.getElementById('rg-edit-mo');if(!mo){mo=document.createElement('div');mo.id='rg-edit-mo';mo.className='mo';document.body.appendChild(mo)}const regionOpts=['<option value="">— בחרי אזור —</option>'].concat(REGIONS.map(r=>`<option value="${esc(r)}"${_rgEditDraft.regionName===r?' selected':''}>${esc(r)}</option>`)).join('');mo.innerHTML=`<div class="md" style="max-width:620px;max-height:92vh;overflow-y:auto"><div class="mt"><span>${id?'עריכת':'יצירת'} קבוצת רוטציה</span><span class="mc" onclick="document.getElementById('rg-edit-mo').style.display='none'">×</span></div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">שם הקבוצה</label><input type="text" id="rg-name" value="${esc(_rgEditDraft.name)}" class="md-input" placeholder='לדוגמה: "ינון-אשדוד-בני עיש"'><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">📍 אזור</label><select id="rg-region" class="md-input" onchange="onRgRegionChange()">${regionOpts}</select><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">📅 מחזור (שבועות לפני שהנהג מחליף)</label><input type="number" id="rg-cycle" value="${_rgEditDraft.cycleWeeks||''}" class="md-input" min="1" max="52" placeholder="ברירת מחדל = מספר המדריכות בקבוצה"><div style="font-size:10px;color:var(--mut);margin-top:2px;line-height:1.4">השאירי ריק להגדרה אוטומטית לפי מספר המדריכות (Latin square).</div><div style="margin-top:14px;padding:10px;background:#F0F9FF;border-radius:8px"><div style="font-weight:700;font-size:12px;color:#1565C0;margin-bottom:8px">🚗 מסלול הנהג</div><div style="font-size:11px;color:#666;margin-bottom:8px;line-height:1.4">הוסיפי מדריכות לפי הסדר שהנהג עובר. הראשונה ברשימה = תחנת הזנקה. השתמשי בחיצים לשנות סדר.</div><div id="rg-route-list"></div><div style="margin-top:10px"><label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">➕ הוסיפי מדריכה למסלול</label><select id="rg-add-instr" class="md-input" onchange="addRgInstructor(this.value);this.value=''"></select></div></div><div id="rg-linked-section" style="margin-top:14px;padding:10px;background:#FEF3C7;border-radius:8px"></div><div class="ma" style="margin-top:14px"><button class="btn-prim" style="background:#7C3AED;flex:1;margin:0" onclick="saveRotGroup()">${id?'💾 שמור שינויים':'+ צרי קבוצה'}</button><button class="btn-sec" onclick="document.getElementById('rg-edit-mo').style.display='none'">ביטול</button></div></div>`;mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';renderRgRouteAndPicker();renderRgLinkedSection()}
+function renderRgLinkedSection(){if(!_rgEditDraft)return;const el=document.getElementById('rg-linked-section');if(!el)return;const region=_rgEditDraft.regionName;if(!region){el.innerHTML='<div style="font-size:11px;color:#78350F;font-style:italic">בחרי אזור כדי לראות אפשרויות קישור לקבוצות אחרות באזור</div>';return}const otherGroups=(_rotGroups||[]).filter(g=>g.regionName===region&&g.id!==_rgEditDraft.id);const linkedSet=new Set(_rgEditDraft.linkedGroupIds||[]);const opts=otherGroups.map(g=>{const isLinked=linkedSet.has(g.id);const instCount=(g.instructorUids||[]).length;return`<label style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:white;border:1.5px solid ${isLinked?'#F59E0B':'#FDE68A'};border-radius:6px;margin-bottom:4px;cursor:pointer;font-size:12px"><input type="checkbox" ${isLinked?'checked':''} onchange="toggleRgLink('${esc(g.id)}',this.checked)" style="width:16px;height:16px"><span style="flex:1"><b>${esc(g.name)}</b> — ${instCount} מדריכות · מחזור ${g.cycleWeeks||instCount}</span></label>`}).join('');el.innerHTML=`<div style="font-weight:700;font-size:12px;color:#7B5C00;margin-bottom:8px">🔗 קישור לקבוצות אחרות באזור (סופר-קבוצה)</div><div style="font-size:11px;color:#7B5C00;margin-bottom:8px;line-height:1.5">קישור 2+ קבוצות באותו אזור יגרום לאלגוריתם לחלוק ביניהן מאגר מערכים אחד ולעשות <b>pair-swap rotation</b> (חילוף פנימי בזוגות + חילוף בין הזוגות). כל צד של הקישור מזין את עצמו לצד השני אוטומטית.</div>${otherGroups.length?opts:'<div style="font-size:11px;color:#78350F;font-style:italic;padding:8px">אין קבוצות אחרות באזור זה לקישור</div>'}`}
+function toggleRgLink(otherId,checked){if(!_rgEditDraft)return;const set=new Set(_rgEditDraft.linkedGroupIds||[]);if(checked)set.add(otherId);else set.delete(otherId);_rgEditDraft.linkedGroupIds=[...set];renderRgLinkedSection()}
 function onRgRegionChange(){_rgEditDraft.regionName=document.getElementById('rg-region').value;_rgEditDraft.instructorUids=[];renderRgRouteAndPicker()}
 function renderRgRouteAndPicker(){if(!_rgEditDraft)return;const list=document.getElementById('rg-route-list');const picker=document.getElementById('rg-add-instr');const uids=_rgEditDraft.instructorUids;if(list){if(!uids.length){list.innerHTML='<div style="padding:10px;text-align:center;color:var(--mut);font-size:11px;font-style:italic;background:white;border-radius:6px">אין מדריכות במסלול עדיין</div>'}else{list.innerHTML=uids.map((uid,i)=>{const name=getInstructorNameByUid(uid);const upDisabled=i===0;const downDisabled=i===uids.length-1;return `<div style="display:flex;align-items:center;gap:6px;background:white;border:1px solid #BAE6FD;border-radius:6px;padding:6px 8px;margin-bottom:4px"><span style="background:#1565C0;color:white;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">${i+1}</span><span style="flex:1;font-size:12px;font-weight:600">${esc(name)}</span><button onclick="moveRgInstructor('${uid}',-1)" ${upDisabled?'disabled':''} style="background:${upDisabled?'#F5F5F5':'white'};border:1px solid var(--brd);border-radius:4px;width:24px;height:24px;cursor:${upDisabled?'not-allowed':'pointer'};font-size:13px;opacity:${upDisabled?'0.4':'1'}" title="העלי במסלול">▲</button><button onclick="moveRgInstructor('${uid}',1)" ${downDisabled?'disabled':''} style="background:${downDisabled?'#F5F5F5':'white'};border:1px solid var(--brd);border-radius:4px;width:24px;height:24px;cursor:${downDisabled?'not-allowed':'pointer'};font-size:13px;opacity:${downDisabled?'0.4':'1'}" title="הורידי במסלול">▼</button><button onclick="removeRgInstructor('${uid}')" style="background:#FEE2E2;border:1px solid #FCA5A5;color:#991B1B;border-radius:4px;width:24px;height:24px;cursor:pointer;font-size:14px" title="הסירי מהקבוצה">×</button></div>`}).join('')}}if(picker){const region=_rgEditDraft.regionName;const usedInOtherGroups=new Set();_rotGroups.forEach(g=>{if(g.id===_rgEditDraft.id)return;(g.instructorUids||[]).forEach(u=>usedInOtherGroups.add(String(u)))});const avail=getInstructorsInRegion(region).filter(u=>{const uid=u.uid||String(u.id);return !uids.includes(uid)&&!usedInOtherGroups.has(uid)});if(!region){picker.innerHTML='<option value="">— בחרי אזור קודם —</option>';picker.disabled=true}else if(!avail.length){picker.innerHTML='<option value="">— אין מדריכות זמינות באזור —</option>';picker.disabled=true}else{picker.disabled=false;picker.innerHTML='<option value="">— בחרי מדריכה להוספה —</option>'+avail.map(u=>`<option value="${esc(u.uid||u.id)}">${esc(u.name)} (@${esc(u.username||'')})</option>`).join('')}}}
 function addRgInstructor(uid){if(!uid||!_rgEditDraft)return;if(!_rgEditDraft.instructorUids.includes(uid))_rgEditDraft.instructorUids.push(uid);renderRgRouteAndPicker()}
 function removeRgInstructor(uid){if(!_rgEditDraft)return;_rgEditDraft.instructorUids=_rgEditDraft.instructorUids.filter(x=>x!==uid);renderRgRouteAndPicker()}
 function moveRgInstructor(uid,dir){if(!_rgEditDraft)return;const arr=_rgEditDraft.instructorUids;const i=arr.indexOf(uid);if(i<0)return;const j=i+dir;if(j<0||j>=arr.length)return;[arr[i],arr[j]]=[arr[j],arr[i]];renderRgRouteAndPicker()}
-async function saveRotGroup(){if(!_rgEditDraft)return;const name=document.getElementById('rg-name').value.trim();const region=document.getElementById('rg-region').value;const cycleRaw=document.getElementById('rg-cycle').value.trim();const cycleWeeks=cycleRaw?parseInt(cycleRaw,10):_rgEditDraft.instructorUids.length;if(!name){alert('שם הקבוצה חובה');return}if(!region){alert('יש לבחור אזור');return}if(!_rgEditDraft.instructorUids.length){alert('יש להוסיף לפחות מדריכה אחת');return}if(!cycleWeeks||cycleWeeks<1){alert('מחזור לא תקין');return}const data={name,regionName:region,instructorUids:_rgEditDraft.instructorUids,cycleWeeks,updatedAt:new Date().toISOString(),updatedBy:cu.uid||cu.username||'admin'};try{const wasUpdate=!!_rgEditDraft.id;if(wasUpdate){await fbDb.collection('rotationGroups').doc(_rgEditDraft.id).set(data,{merge:true})}else{data.createdAt=new Date().toISOString();data.createdBy=cu.uid||cu.username||'admin';await fbDb.collection('rotationGroups').add(data)}await syncRotGroups();if(typeof markRegionDirty==='function')markRegionDirty(region,wasUpdate?`קבוצת רוטציה עודכנה: ${name}`:`נוצרה קבוצת רוטציה: ${name}`);document.getElementById('rg-edit-mo').style.display='none';_rgEditDraft=null;renderRotGroupsList();_wschSubTab=null;renderWschGrid()}catch(e){alert('שגיאה בשמירה: '+(e.message||e))}}
+async function saveRotGroup(){if(!_rgEditDraft)return;const name=document.getElementById('rg-name').value.trim();const region=document.getElementById('rg-region').value;const cycleRaw=document.getElementById('rg-cycle').value.trim();const cycleWeeks=cycleRaw?parseInt(cycleRaw,10):_rgEditDraft.instructorUids.length;if(!name){alert('שם הקבוצה חובה');return}if(!region){alert('יש לבחור אזור');return}if(!_rgEditDraft.instructorUids.length){alert('יש להוסיף לפחות מדריכה אחת');return}if(!cycleWeeks||cycleWeeks<1){alert('מחזור לא תקין');return}const linkedGroupIds=(_rgEditDraft.linkedGroupIds||[]).filter(x=>x);const data={name,regionName:region,instructorUids:_rgEditDraft.instructorUids,cycleWeeks,linkedGroupIds,updatedAt:new Date().toISOString(),updatedBy:cu.uid||cu.username||'admin'};try{const wasUpdate=!!_rgEditDraft.id;let savedId;if(wasUpdate){await fbDb.collection('rotationGroups').doc(_rgEditDraft.id).set(data,{merge:true});savedId=_rgEditDraft.id}else{data.createdAt=new Date().toISOString();data.createdBy=cu.uid||cu.username||'admin';const ref=await fbDb.collection('rotationGroups').add(data);savedId=ref.id}
+    // Auto-mirror linkage: for each linked group, ensure it has this group in its own linkedGroupIds.
+    // Also un-mirror groups that were unlinked (compared to old state).
+    const oldLinked=new Set((wasUpdate&&_rotGroups.find(g=>g.id===savedId)||{linkedGroupIds:[]}).linkedGroupIds||[]);
+    const newLinked=new Set(linkedGroupIds);
+    const toAdd=[...newLinked].filter(x=>!oldLinked.has(x));
+    const toRemove=[...oldLinked].filter(x=>!newLinked.has(x));
+    for(const otherId of toAdd){const other=_rotGroups.find(g=>g.id===otherId);if(!other)continue;const otherLinked=new Set(other.linkedGroupIds||[]);otherLinked.add(savedId);try{await fbDb.collection('rotationGroups').doc(otherId).set({linkedGroupIds:[...otherLinked]},{merge:true})}catch(e){console.warn('mirror-link failed:',otherId,e)}}
+    for(const otherId of toRemove){const other=_rotGroups.find(g=>g.id===otherId);if(!other)continue;const otherLinked=(other.linkedGroupIds||[]).filter(x=>x!==savedId);try{await fbDb.collection('rotationGroups').doc(otherId).set({linkedGroupIds:otherLinked},{merge:true})}catch(e){console.warn('unmirror-link failed:',otherId,e)}}
+    await syncRotGroups();if(typeof markRegionDirty==='function')markRegionDirty(region,wasUpdate?`קבוצת רוטציה עודכנה: ${name}`:`נוצרה קבוצת רוטציה: ${name}`);document.getElementById('rg-edit-mo').style.display='none';_rgEditDraft=null;renderRotGroupsList();_wschSubTab=null;renderWschGrid()}catch(e){alert('שגיאה בשמירה: '+(e.message||e))}}
 async function deleteRotGroup(id,name){if(!confirm('למחוק את קבוצת הרוטציה "'+name+'"?\n\n(שיבוצים עתידיים של מדריכות הקבוצה לא יושפעו, אבל הן יחזרו לרוטציה אישית רגילה)'))return;const grp=(_rotGroups||[]).find(g=>g.id===id);const region=grp&&grp.regionName;try{await fbDb.collection('rotationGroups').doc(id).delete();await syncRotGroups();if(region&&typeof markRegionDirty==='function')markRegionDirty(region,`נמחקה קבוצת רוטציה: ${name}`);renderRotGroupsList();_wschSubTab=null;renderWschGrid()}catch(e){alert('שגיאה: '+(e.message||e))}}
 function getSharedAudio(){return _sharedAudio}
 function renderAudioCard(a,bg,labelHtml){return `<div style="background:${bg};padding:6px 10px;border-radius:6px;margin-bottom:4px">${labelHtml?`<div style="font-size:10px;font-weight:700;color:#1565C0;margin-bottom:2px">${labelHtml}</div>`:''}<div style="font-size:11px;font-weight:600;margin-bottom:4px">${esc(a.name)}</div><audio controls preload="none" src="${esc(a.url)}" style="width:100%;height:32px"></audio></div>`}
