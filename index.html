@@ -2840,6 +2840,11 @@ function _matAllowedForInstructor(matId, uid, instructorSeenMats){
   const s=instructorSeenMats[String(uid)];
   return !s||!s.has(matId);
 }
+// Wrapper that applies the safety net ONLY when the instructor has no gardens. When she has gardens, per-garden rule already handles it and applying the per-instructor rule too becomes overly restrictive (blocks materials that could safely rotate through different instructor lineups).
+function _matInstructorConstraintOK(matId, uid, gardens, instructorSeenMats){
+  if(gardens && gardens.length > 0) return true;
+  return _matAllowedForInstructor(matId, uid, instructorSeenMats);
+}
 // Score a candidate material for a given instructor's context.
 function _scoreMaterial(mat, ctx){
   let score=0;
@@ -2979,7 +2984,7 @@ async function computeAnnualRotation(region, opts){
           // Score context: use the sub-group at position sg=0 with pos=i (arbitrary but consistent)
           const contextUid=allSuperUids[batchIdx]||allSuperUids[0];
           const contextGardens=gardensByUid[contextUid]||[];
-          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats))&&_cooldownOKSuper(m,batchIdx));
+          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx));
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
@@ -3061,7 +3066,7 @@ async function computeAnnualRotation(region, opts){
           return true;
         };
         for(let slot=0;slot<N;slot++){
-          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matAllowedForInstructor(m.id,uu,instructorSeenMats))&&_cooldownOK(m,slot));
+          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot));
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
@@ -3104,7 +3109,7 @@ async function computeAnnualRotation(region, opts){
       const uid=uidOf(u);
       const gardens=gardensByUid[uid]||[];
       const catCooldownOK=(m)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
-      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matAllowedForInstructor(m.id,uid,instructorSeenMats) && catCooldownOK(m));
+      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats) && catCooldownOK(m));
       if(!candidates.length){
         warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה/למדריכה השנה, או שקטגוריה אחרונה עדיין בקירור (4 שבועות)`});
         continue;
