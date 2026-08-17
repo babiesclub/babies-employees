@@ -2876,6 +2876,18 @@ function _scoreMaterial(mat, ctx){
   if(mat.seasonality && mat.seasonality!=='any') score += 8;
   // Freshness: prefer materials that haven't been used anywhere yet in the plan
   if(ctx.globallyUsed && !ctx.globallyUsed.has(mat.id)) score += 15;
+  // NEW: Save scarce winter-safe categories (insect, generic) for winter batches.
+  // In non-winter, prefer chick+reptile (winter-blocked) over insect+generic (winter-safe).
+  // This reserves winter-safe supplies for when they're really needed.
+  if(ctx.weekMonthIdx!==undefined){
+    const isWinter=ctx.weekMonthIdx===11||ctx.weekMonthIdx===0||ctx.weekMonthIdx===1;
+    if(!isWinter){
+      const scarceInWinter=['insect','generic'];
+      const winterBlocked=['chick','reptile'];
+      if(scarceInWinter.includes(mat.category)) score -= 40; // Save for winter
+      if(winterBlocked.includes(mat.category)) score += 20; // Use now, they're blocked in winter
+    }
+  }
   return score;
 }
 // Main algorithm — compute the annual rotation for a region.
@@ -3017,7 +3029,7 @@ async function computeAnnualRotation(region, opts){
           }
           const prevCat=(state.prevSlotCategories||{})[batchIdx];
           const scored=pool.map(m=>{
-            let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed});
+            let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)});
             // BIG bonus if this material's category matches the same slot in previous batch —
             // ensures every instructor sees the same category at the same offset each batch,
             // which respects the 4-week cooldown perfectly.
@@ -3109,7 +3121,7 @@ async function computeAnnualRotation(region, opts){
             warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_batch_material',msg:`אין מספיק מערכים לבאטש בקבוצה "${g.name||'?'}" (תחנה ${slot+1}) — כל המערכים מפרים חוק גנים/מדריכה, או חוק הקטגוריה תוך 4 שבועות`});
             continue;
           }
-          const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed})}));
+          const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)})}));
           scored.sort((a,b)=>b.score-a.score);
           newBatch.push(scored[0].m.id);
           usedInBatch.add(scored[0].m.id);
@@ -3150,7 +3162,7 @@ async function computeAnnualRotation(region, opts){
         warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה/למדריכה השנה, או שקטגוריה אחרונה עדיין בקירור (4 שבועות)`});
         continue;
       }
-      const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed})}));
+      const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)})}));
       scored.sort((a,b)=>b.score-a.score);
       const chosen=scored[0].m;
       weekAssignments[uid]=chosen.id;
