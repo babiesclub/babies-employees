@@ -2842,8 +2842,8 @@ function _matSeasonFits(mat, weekISO, holidayDates){
   if(seasDef && seasDef.months && !seasDef.months.includes(monthIdx)) return false;
   return true;
 }
-// Auto-detect animal family based on shared first word in animalName.
-// Materials that start with the same 3+ character word are treated as related family (e.g., "ארנב", "ארנב חדש", "ארנב וצב" → family "ארנב").
+// Auto-detect animal family based on shared prefix (4+ chars) in animalName's first word.
+// Handles Hebrew morphology: ארנב + ארנבת + ארנב חדש + ארנב וצב → family "ארנב" (shared 4-char prefix).
 // Cached per allMaterials array to avoid recomputation.
 let _familyCache=null,_familyCacheKey=null;
 function _familyOf(mat, allMats){
@@ -2853,18 +2853,31 @@ function _familyOf(mat, allMats){
   if(_familyCache[mat.id]!==undefined)return _familyCache[mat.id];
   const myAnimal=(mat.animalName||mat.name||'').trim();
   if(!myAnimal){_familyCache[mat.id]=null;return null}
-  const firstWord=myAnimal.split(/[\s\-]+/)[0];
-  if(firstWord.length<3){_familyCache[mat.id]=null;return null}
-  // Find at least one other material starting with the same first word
-  const hasRelative=allMats.some(x=>{
-    if(x.id===mat.id)return false;
-    const otherAnimal=(x.animalName||x.name||'').trim();
+  const myFirst=myAnimal.split(/[\s\-]+/)[0];
+  if(myFirst.length<4){_familyCache[mat.id]=null;return null}
+  // For each other material, compute common prefix. If 4+ chars, they're same family.
+  // Family = the shortest first-word among all matches (the "stem").
+  let familyStem=null;
+  for(const other of allMats){
+    if(other.id===mat.id)continue;
+    const otherAnimal=(other.animalName||other.name||'').trim();
     const otherFirst=otherAnimal.split(/[\s\-]+/)[0];
-    return otherFirst===firstWord;
-  });
-  const fam=hasRelative?firstWord:null;
-  _familyCache[mat.id]=fam;
-  return fam;
+    if(!otherFirst||otherFirst.length<4)continue;
+    // Compute common prefix
+    let common='';
+    const maxLen=Math.min(myFirst.length,otherFirst.length);
+    for(let i=0;i<maxLen;i++){
+      if(myFirst[i]===otherFirst[i])common+=myFirst[i];
+      else break;
+    }
+    if(common.length>=4){
+      // Use the SHORTER first word as the family root (assumed to be the "base form")
+      const root=myFirst.length<=otherFirst.length?myFirst:otherFirst;
+      if(!familyStem||root.length<familyStem.length)familyStem=root;
+    }
+  }
+  _familyCache[mat.id]=familyStem;
+  return familyStem;
 }
 // Have any of these gardens already seen this material's animal this year?
 function _matAllowedForGardens(mat, gardenNames, gardensSeen){
