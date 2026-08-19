@@ -3387,6 +3387,11 @@ async function computeAnnualRotation(region, opts){
           let _relax=0;
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx));_relax=1}
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relax=2}
+          // Level 3: allow the same material to appear multiple times in the same batch (drops !usedInBatch check).
+          // Duplicate assignments within a week are OK — different instructors can share the same material as long as each garden hasn't seen the animal this year.
+          if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relax=3}
+          // Level 4: last resort — drop the "garden hasn't seen this animal" rule too. Sacrifices per-garden variety to fill the slot.
+          if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates));_relax=4}
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
@@ -3489,6 +3494,10 @@ async function computeAnnualRotation(region, opts){
           let _relaxG=0;
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot));_relaxG=1}
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relaxG=2}
+          // Level 3: allow same material in multiple batch slots (duplicates within a week).
+          if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relaxG=3}
+          // Level 4: last resort — drop garden-no-repeat rule too.
+          if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates));_relaxG=4}
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
@@ -3540,6 +3549,8 @@ async function computeAnnualRotation(region, opts){
       let _relaxA=0;
       if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,gardens,gardensSeen)&&_matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats)&&catCooldownOK(m));_relaxA=1}
       if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,gardens,gardensSeen)&&_matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats));_relaxA=2}
+      // Level 3: last resort — drop garden-no-repeat rule so we place ANY seasonally-valid material rather than leave a null cell.
+      if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates));_relaxA=3}
       if(!candidates.length){
         warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה/למדריכה השנה, או שקטגוריה אחרונה עדיין בקירור (4 שבועות)`});
         continue;
