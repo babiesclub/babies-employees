@@ -3187,8 +3187,9 @@ function _scoreMaterial(mat, ctx){
   if(ctx.lastCategory && mat.category===ctx.lastCategory) score -= 20;
   // Criterion 3: seasonal/holiday materials get a boost when their window is active
   if(mat.seasonality && mat.seasonality!=='any') score += 8;
-  // Freshness: prefer materials that haven't been used anywhere yet in the plan
-  if(ctx.globallyUsed && !ctx.globallyUsed.has(mat.id)) score += 15;
+  // Freshness: strong preference for materials that haven't been used anywhere yet in the plan.
+  // Bumped from 15 → 120 so unused materials compete effectively with the per-garden bonus (100/garden).
+  if(ctx.globallyUsed && !ctx.globallyUsed.has(mat.id)) score += 120;
   // NEW: Save scarce winter-safe categories (insect, generic) for winter batches.
   // In non-winter, prefer chick+reptile (winter-blocked) over insect+generic (winter-safe).
   // This reserves winter-safe supplies for when they're really needed.
@@ -3377,13 +3378,18 @@ async function computeAnnualRotation(region, opts){
           const contextUid=allSuperUids[batchIdx]||allSuperUids[0];
           const contextGardens=gardensByUid[contextUid]||[];
           const _famCooldownOKSuper=(m,batchIdx)=>{const fam=_familyOf(m,materials);if(!fam)return true;const p=Math.floor(batchIdx/K);const i=batchIdx%K;for(let sg=0;sg<N_sub;sg++){const grp=cluster[sg];const uids=(grp.instructorUids||[]).map(String);for(let pos=0;pos<uids.length;pos++){const uidP=uids[pos];const lastW=(familyLastWeekByUid[uidP]||{})[fam];if(lastW===undefined)continue;const seen=seenWeekFor(sg,pos,p,i,weekIdx);if((seen-lastW)<8)return false}}return true};
-          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx)&&_famCooldownOKSuper(m,batchIdx));
+          // Progressive relaxation: try strict first, then drop family cooldown, then category cooldown. Prevents empty slots when strict rules over-block.
+          let candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx)&&_famCooldownOKSuper(m,batchIdx));
+          let _relax=0;
+          if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx));_relax=1}
+          if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relax=2}
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
             warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'no_super_batch_material',msg:`אין מספיק מערכים לסופר-באטש (מיקום ${batchIdx+1}/${T}) — כל המערכים מפרים חוק גנים/מדריכה/קטגוריה`});
             continue;
           }
+          if(_relax>0)warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'relaxed_cooldown',msg:`שבוע ${weekISO}: הותרה חריגה מ${_relax===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ מערך זמין (מיקום ${batchIdx+1}/${T})`});
           const prevCat=(state.prevSlotCategories||{})[batchIdx];
           const scored=pool.map(m=>{
             let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)});
@@ -3474,13 +3480,18 @@ async function computeAnnualRotation(region, opts){
         };
         for(let slot=0;slot<N;slot++){
           const _famCooldownOK_G=(m,slot)=>{const fam=_familyOf(m,materials);if(!fam)return true;for(let p=0;p<N;p++){const uidP=String(uids[p]);const lastW=(familyLastWeekByUid[uidP]||{})[fam];if(lastW===undefined)continue;const seenWeek=weekIdx+((p-slot+N)%N);if((seenWeek-lastW)<8)return false}return true};
-          const candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot)&&_famCooldownOK_G(m,slot));
+          // Progressive relaxation: strict → drop family cooldown → drop category cooldown too.
+          let candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot)&&_famCooldownOK_G(m,slot));
+          let _relaxG=0;
+          if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot));_relaxG=1}
+          if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relaxG=2}
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
             warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'no_batch_material',msg:`אין מספיק מערכים לבאטש בקבוצה "${g.name||'?'}" (תחנה ${slot+1}) — כל המערכים מפרים חוק גנים/מדריכה, או חוק הקטגוריה תוך 4 שבועות`});
             continue;
           }
+          if(_relaxG>0)warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'relaxed_cooldown',msg:`שבוע ${weekISO} קבוצה "${g.name||'?'}": הותרה חריגה מ${_relaxG===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ`});
           const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)})}));
           scored.sort((a,b)=>b.score-a.score);
           newBatch.push(scored[0].m.id);
@@ -3520,11 +3531,16 @@ async function computeAnnualRotation(region, opts){
       const gardens=gardensByUid[uid]||[];
       const catCooldownOK=(m)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
       const famCooldownOK=(m)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=8};
-      const candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats) && catCooldownOK(m) && famCooldownOK(m));
+      // Progressive relaxation for free-agent: strict → drop family cooldown → drop category cooldown too.
+      let candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats) && catCooldownOK(m) && famCooldownOK(m));
+      let _relaxA=0;
+      if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,gardens,gardensSeen)&&_matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats)&&catCooldownOK(m));_relaxA=1}
+      if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,gardens,gardensSeen)&&_matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats));_relaxA=2}
       if(!candidates.length){
         warnings.push({weekISO,uid,name:u.name,type:'no_material_for_agent',msg:`אין מערך זמין ל-${u.name} — כל המערכים כבר הוצגו לגניה/למדריכה השנה, או שקטגוריה אחרונה עדיין בקירור (4 שבועות)`});
         continue;
       }
+      if(_relaxA>0)warnings.push({weekISO,uid,name:u.name,type:'relaxed_cooldown',msg:`שבוע ${weekISO} ${u.name}: הותרה חריגה מ${_relaxA===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ מערך זמין`});
       const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)})}));
       scored.sort((a,b)=>b.score-a.score);
       const chosen=scored[0].m;
