@@ -3059,14 +3059,30 @@ function _iterateWeeks(startISO,endISO){const out=[];let cur=startISO;while(cur<
 function _monthOfISO(iso){return parseInt(iso.split('-')[1],10)-1}
 function _isWinter(monthIdx){return monthIdx===11||monthIdx===0||monthIdx===1}
 // Does this material fit this week (seasonality + winter rule)?
-// Holiday-only weeks: from Rosh Hashana through end of Sukkot.
-// Only holiday-specific materials (דבורה, דגים ראש השנה) allowed. Everything else blocked.
-const HOLIDAY_ONLY_WEEKS = new Set(['2026-09-13','2026-09-20','2026-09-27']);
-const HOLIDAY_ONLY_MATERIAL_KEYWORDS = ['דבורה','ראש השנה'];
-function _matIsHolidayOnly(mat){const n=String((mat&&(mat.animalName||mat.name))||'');return HOLIDAY_ONLY_MATERIAL_KEYWORDS.some(k=>n.includes(k))}
+// Holiday-only weeks: during the week of a Jewish holiday, only holiday-specific materials are allowed.
+// Match by seasonality tag (matchSeasons) OR by keyword in material name (matchKeywords). Either one is enough.
+// Duplicates are allowed — all instructors in a region can share the same holiday material so all gardens get it.
+const HOLIDAY_ONLY_WEEKS = {
+  '2026-09-13': {name:'ראש השנה',     matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2026-09-20': {name:'יום כיפור',    matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2026-09-27': {name:'סוכות',        matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2027-03-14': {name:'מתחפשים פורים', matchSeasons:['near_purim','before_purim'],                    matchKeywords:['פורים','טווס']},
+  '2027-03-21': {name:'פורים',        matchSeasons:['near_purim','before_purim'],                    matchKeywords:['פורים','טווס']},
+  '2027-05-09': {name:'יום העצמאות',   matchSeasons:['before_independence_day'],                       matchKeywords:['עצמאות','דואר']},
+  '2027-06-06': {name:'שבועות',       matchSeasons:[],                                                matchKeywords:['שבועות']},
+};
+function _matIsHolidayOnlyFor(mat, weekISO){
+  const wk = HOLIDAY_ONLY_WEEKS[weekISO];
+  if(!wk) return false;
+  const seas = (mat && mat.seasonality) || 'any';
+  if(wk.matchSeasons && wk.matchSeasons.includes(seas)) return true;
+  const n = String((mat && (mat.animalName || mat.name)) || '');
+  if(wk.matchKeywords && wk.matchKeywords.some(k => n.includes(k))) return true;
+  return false;
+}
 function _matSeasonFits(mat, weekISO, holidayDates){
-  // Rule: during Rosh Hashana → end of Sukkot, allow only holiday-specific materials.
-  if(HOLIDAY_ONLY_WEEKS.has(weekISO) && !_matIsHolidayOnly(mat)) return false;
+  // Rule: during a holiday week, allow only holiday-specific materials for that holiday.
+  if(HOLIDAY_ONLY_WEEKS[weekISO] && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
   const monthIdx=_monthOfISO(weekISO);
   const catInfo=MAT_CATEGORIES[mat.category]||{};
   if(catInfo.winterRisky && _isWinter(monthIdx)) return false;
@@ -3236,10 +3252,11 @@ async function computeAnnualRotation(region, opts){
       proposal.push({weekISO,assignments:{},holiday:holidayForWeek.name,skipped:true});
       continue;
     }
-    // Holiday-only weeks (RH/YK weeks): assign holiday materials directly, duplicates allowed, skip Latin Square logic.
-    // Every instructor gets one of the whitelisted materials in round-robin.
-    if(HOLIDAY_ONLY_WEEKS.has(weekISO)){
-      const holidayMats=materials.filter(m=>_matIsHolidayOnly(m));
+    // Holiday-only weeks: assign holiday materials directly, duplicates allowed, skip Latin Square logic.
+    // Covers ראש השנה, יום כיפור, סוכות, פורים, יום העצמאות, שבועות (per HOLIDAY_ONLY_WEEKS map).
+    // Every instructor in the region gets one of the whitelisted materials in round-robin so all gardens see the holiday content.
+    if(HOLIDAY_ONLY_WEEKS[weekISO]){
+      const holidayMats=materials.filter(m=>_matIsHolidayOnlyFor(m,weekISO));
       if(holidayMats.length){
         const weekAssignmentsH={};
         const _allUids=[];
