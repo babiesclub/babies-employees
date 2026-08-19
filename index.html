@@ -3059,7 +3059,14 @@ function _iterateWeeks(startISO,endISO){const out=[];let cur=startISO;while(cur<
 function _monthOfISO(iso){return parseInt(iso.split('-')[1],10)-1}
 function _isWinter(monthIdx){return monthIdx===11||monthIdx===0||monthIdx===1}
 // Does this material fit this week (seasonality + winter rule)?
+// Holiday-only weeks: from Rosh Hashana through end of Sukkot.
+// Only holiday-specific materials (דבורה, דגים ראש השנה) allowed. Everything else blocked.
+const HOLIDAY_ONLY_WEEKS = new Set(['2026-09-13','2026-09-20','2026-09-27']);
+const HOLIDAY_ONLY_MATERIAL_KEYWORDS = ['דבורה','ראש השנה'];
+function _matIsHolidayOnly(mat){const n=String((mat&&(mat.animalName||mat.name))||'');return HOLIDAY_ONLY_MATERIAL_KEYWORDS.some(k=>n.includes(k))}
 function _matSeasonFits(mat, weekISO, holidayDates){
+  // Rule: during Rosh Hashana → end of Sukkot, allow only holiday-specific materials.
+  if(HOLIDAY_ONLY_WEEKS.has(weekISO) && !_matIsHolidayOnly(mat)) return false;
   const monthIdx=_monthOfISO(weekISO);
   const catInfo=MAT_CATEGORIES[mat.category]||{};
   if(catInfo.winterRisky && _isWinter(monthIdx)) return false;
