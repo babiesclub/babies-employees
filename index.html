@@ -3190,6 +3190,9 @@ function _scoreMaterial(mat, ctx){
   // Freshness: strong preference for materials that haven't been used anywhere yet in the plan.
   // Bumped from 15 → 120 so unused materials compete effectively with the per-garden bonus (100/garden).
   if(ctx.globallyUsed && !ctx.globallyUsed.has(mat.id)) score += 120;
+  // Cross-region physical inventory: penalize picking a material that's already assigned to another region this same week.
+  // Prevents unnecessary duplication of physical materials. Not a hard block — sometimes duplication is unavoidable.
+  if(ctx.sharedThisWeek && ctx.sharedThisWeek.has(mat.id)) score -= 80;
   // NEW: Save scarce winter-safe categories (insect, generic) for winter batches.
   // In non-winter, prefer chick+reptile (winter-blocked) over insect+generic (winter-safe).
   // This reserves winter-safe supplies for when they're really needed.
@@ -3392,7 +3395,7 @@ async function computeAnnualRotation(region, opts){
           if(_relax>0)warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'relaxed_cooldown',msg:`שבוע ${weekISO}: הותרה חריגה מ${_relax===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ מערך זמין (מיקום ${batchIdx+1}/${T})`});
           const prevCat=(state.prevSlotCategories||{})[batchIdx];
           const scored=pool.map(m=>{
-            let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)});
+            let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()});
             // BIG bonus if this material's category matches the same slot in previous batch —
             // ensures every instructor sees the same category at the same offset each batch,
             // which respects the 4-week cooldown perfectly.
@@ -3492,7 +3495,7 @@ async function computeAnnualRotation(region, opts){
             continue;
           }
           if(_relaxG>0)warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'relaxed_cooldown',msg:`שבוע ${weekISO} קבוצה "${g.name||'?'}": הותרה חריגה מ${_relaxG===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ`});
-          const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)})}));
+          const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
           scored.sort((a,b)=>b.score-a.score);
           newBatch.push(scored[0].m.id);
           usedInBatch.add(scored[0].m.id);
@@ -3541,7 +3544,7 @@ async function computeAnnualRotation(region, opts){
         continue;
       }
       if(_relaxA>0)warnings.push({weekISO,uid,name:u.name,type:'relaxed_cooldown',msg:`שבוע ${weekISO} ${u.name}: הותרה חריגה מ${_relaxA===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ מערך זמין`});
-      const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO)})}));
+      const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
       scored.sort((a,b)=>b.score-a.score);
       const chosen=scored[0].m;
       weekAssignments[uid]=chosen.id;
@@ -3590,12 +3593,19 @@ async function _smartRotRun(){
   try{
     let r;
     if(allRegions){
-      // Compute per region, then merge — each region has its own state, so results don't collide.
+      // Compute per region, sharing a physical inventory tracker so later regions PREFER materials not already used elsewhere that week.
+      // This minimizes duplicate physical copies needed while keeping per-region rules independent.
       const perRegion=[];const skippedRegions=[];
+      const sharedWeekUsage={}; // {weekISO: Set(matId)}
       for(const region of REGIONS){
-        const rr=await computeAnnualRotation(region);
+        const rr=await computeAnnualRotation(region,{sharedWeekUsage});
         if(rr.error){skippedRegions.push({region,error:rr.error});continue}
         perRegion.push(rr);
+        // After this region's assignments are computed — update the shared tracker so next regions know what's "in use".
+        rr.proposal.forEach(w=>{
+          if(!sharedWeekUsage[w.weekISO])sharedWeekUsage[w.weekISO]=new Set();
+          Object.values(w.assignments||{}).forEach(matId=>{if(matId)sharedWeekUsage[w.weekISO].add(matId)});
+        });
       }
       if(!perRegion.length){resultEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px;font-size:13px">⚠ לא נמצאו מדריכות חוגי חיות באף אזור.<br><br><b>אזורים שדולגו:</b><br>${skippedRegions.map(s=>`• ${esc(s.region)}: ${esc(s.error)}`).join('<br>')}</div>`;return}
       // Merge: for each week, combine assignments from all regions
