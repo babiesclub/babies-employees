@@ -3387,10 +3387,10 @@ async function computeAnnualRotation(region, opts){
           let _relax=0;
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx));_relax=1}
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relax=2}
-          // Level 3: allow the same material to appear multiple times in the same batch (drops !usedInBatch check).
-          // Duplicate assignments within a week are OK — different instructors can share the same material as long as each garden hasn't seen the animal this year.
-          if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relax=3}
-          // Level 4: last resort — drop the "garden hasn't seen this animal" rule too. Sacrifices per-garden variety to fill the slot.
+          // Level 3: drop the garden-no-repeat rule so we get MORE VARIETY (different materials per slot) at the cost of some gardens seeing an animal again.
+          // This is preferred over Level 4 duplicates because visually it's less jarring — 6 different materials in a week beats 6× the same material.
+          if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relax=3}
+          // Level 4: LAST resort — drop batch-uniqueness. Same material fills multiple slots. Only when even Level 3 finds nothing.
           if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates));_relax=4}
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
@@ -3494,9 +3494,9 @@ async function computeAnnualRotation(region, opts){
           let _relaxG=0;
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot));_relaxG=1}
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relaxG=2}
-          // Level 3: allow same material in multiple batch slots (duplicates within a week).
-          if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relaxG=3}
-          // Level 4: last resort — drop garden-no-repeat rule too.
+          // Level 3: drop garden-no-repeat for MORE VARIETY. Better than Level 4 duplicates.
+          if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relaxG=3}
+          // Level 4: LAST resort — allow same material in multiple slots.
           if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates));_relaxG=4}
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
