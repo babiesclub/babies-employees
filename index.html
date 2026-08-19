@@ -3236,6 +3236,31 @@ async function computeAnnualRotation(region, opts){
       proposal.push({weekISO,assignments:{},holiday:holidayForWeek.name,skipped:true});
       continue;
     }
+    // Holiday-only weeks (RH/YK weeks): assign holiday materials directly, duplicates allowed, skip Latin Square logic.
+    // Every instructor gets one of the whitelisted materials in round-robin.
+    if(HOLIDAY_ONLY_WEEKS.has(weekISO)){
+      const holidayMats=materials.filter(m=>_matIsHolidayOnly(m));
+      if(holidayMats.length){
+        const weekAssignmentsH={};
+        const _allUids=[];
+        superGroups.forEach(cluster=>cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>_allUids.push(String(u)))));
+        freeAgents.forEach(u=>_allUids.push(String(uidOf(u))));
+        _allUids.forEach((uid,idx)=>{
+          const mat=holidayMats[idx%holidayMats.length];
+          weekAssignmentsH[uid]=mat.id;
+          catLastWeekByUid[uid]=catLastWeekByUid[uid]||{};
+          if(mat.category)catLastWeekByUid[uid][mat.category]=weekIdx;
+          familyLastWeekByUid[uid]=familyLastWeekByUid[uid]||{};
+          const fam=_familyOf(mat,materials);
+          if(fam)familyLastWeekByUid[uid][fam]=weekIdx;
+          lastCategoryByUid[uid]=mat.category||lastCategoryByUid[uid];
+        });
+        // Reset group pipelines so the next batch starts fresh after the holiday window.
+        superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id]){groupPipelines[id].batchStartWeekIdx=null;groupPipelines[id].batch=[];groupPipelines[id].prevSlotCategories={}}});
+        proposal.push({weekISO,assignments:weekAssignmentsH,holidayOnly:true});
+        continue;
+      }
+    }
     const weekAssignments={};
     // Rotation groups — Latin Square (single) or pair-swap (linked super-group)
     for(const cluster of superGroups){
