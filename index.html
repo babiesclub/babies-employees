@@ -3262,9 +3262,20 @@ async function computeAnnualRotation(region, opts){
         const _allUids=[];
         superGroups.forEach(cluster=>cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>_allUids.push(String(u)))));
         freeAgents.forEach(u=>_allUids.push(String(uidOf(u))));
+        // Rotate assignment each holiday week: offset by weekIdx so an instructor doesn't get the same material twice.
+        // Also track per-instructor which holiday mats they've already had, and skip them if another is available.
         _allUids.forEach((uid,idx)=>{
-          const mat=holidayMats[idx%holidayMats.length];
+          const seenH=instructorSeenMats[uid]||new Set();
+          // Try to pick a material this instructor hasn't had yet.
+          let mat=null;
+          for(let off=0;off<holidayMats.length;off++){
+            const cand=holidayMats[(idx+weekIdx+off)%holidayMats.length];
+            if(!seenH.has(cand.id)){mat=cand;break}
+          }
+          // Fallback: if all have been seen (more holiday weeks than materials), use the rotating pick.
+          if(!mat)mat=holidayMats[(idx+weekIdx)%holidayMats.length];
           weekAssignmentsH[uid]=mat.id;
+          instructorSeenMats[uid]=seenH;seenH.add(mat.id);
           catLastWeekByUid[uid]=catLastWeekByUid[uid]||{};
           if(mat.category)catLastWeekByUid[uid][mat.category]=weekIdx;
           familyLastWeekByUid[uid]=familyLastWeekByUid[uid]||{};
