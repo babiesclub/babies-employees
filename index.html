@@ -3190,9 +3190,10 @@ function _scoreMaterial(mat, ctx){
   // Freshness: strong preference for materials that haven't been used anywhere yet in the plan.
   // Bumped from 15 → 120 so unused materials compete effectively with the per-garden bonus (100/garden).
   if(ctx.globallyUsed && !ctx.globallyUsed.has(mat.id)) score += 120;
-  // Cross-region physical inventory: penalize picking a material that's already assigned to another region this same week.
-  // Prevents unnecessary duplication of physical materials. Not a hard block — sometimes duplication is unavoidable.
-  if(ctx.sharedThisWeek && ctx.sharedThisWeek.has(mat.id)) score -= 80;
+  // Cross-region physical inventory: mild preference to pick materials NOT already assigned in another region this week.
+  // -30 is enough to break ties toward diversification without crowding out valid options — critical because later regions in the compute order
+  // (e.g., דרום is 6th of 6) would otherwise have most materials penalized and end up with sparse schedules.
+  if(ctx.sharedThisWeek && ctx.sharedThisWeek.has(mat.id)) score -= 30;
   // NEW: Save scarce winter-safe categories (insect, generic) for winter batches.
   // In non-winter, prefer chick+reptile (winter-blocked) over insect+generic (winter-safe).
   // This reserves winter-safe supplies for when they're really needed.
