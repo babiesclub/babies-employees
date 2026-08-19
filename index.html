@@ -669,6 +669,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
           <div id="region-dirty-banner" style="display:none"></div>
           <button class="btn-sec" style="width:100%;margin-bottom:14px;background:#EDE9FE;border-color:#7C3AED;color:#5B21B6;font-size:12px;padding:8px;font-weight:700" onclick="openRotGroupsMo()">🔄 ניהול קבוצות רוטציה (מסלולי נהג)</button>
           <button class="btn-sec" style="width:100%;margin-bottom:14px;background:#FCE7F3;border-color:#DB2777;color:#831843;font-size:12px;padding:8px;font-weight:700" onclick="openSubstitutesManager()">🔄 ניהול השלמות (החלפות פר תאריך)</button>
+          <button class="btn-sec" style="width:100%;margin-bottom:14px;background:#FEF3C7;border-color:#F59E0B;color:#78350F;font-size:12px;padding:8px;font-weight:700" onclick="openUnusedMaterialsMo()">📊 מערכים שלא שובצו השנה</button>
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
             <button class="btn-sec" id="wsch-prev-btn" onclick="wschPrevMonth()">◄ חודש קודם</button>
             <div id="wsch-title" style="flex:1;text-align:center;font-weight:700;font-size:16px;color:var(--p)"></div>
@@ -3803,9 +3804,98 @@ function analyzeInventoryAlerts(proposal, opts){
       });
     }
   });
+  // Alert 4: unused materials — materials that never got assigned to anyone across the whole proposal.
+  // Reasons could be: seasonality never matched, gardens already saw them, excluded manually, or algorithm skipped.
+  const usedMatIds=new Set();
+  proposal.proposal.forEach(w=>{Object.values(w.assignments||{}).forEach(matId=>{if(matId)usedMatIds.add(matId)})});
+  const unused=materials.filter(m=>!m.excludeFromAuto && !usedMatIds.has(m.id));
+  if(unused.length>0){
+    const preview=unused.slice(0,10).map(m=>m.name||m.id).join(' · ');
+    const rest=unused.length>10?` · ועוד ${unused.length-10}`:'';
+    alerts.push({
+      type:'materials_unused', severity:'medium',
+      title:`${unused.length} מערכים לא שובצו השנה`,
+      detail:`המערכים הבאים לא הגיעו לשיבוץ באף שבוע: ${preview}${rest}`,
+      action:'לבדוק אם רלוונטיים לעונה, אם הגנים כבר ראו אותם, או להסיר מהמאגר',
+      matIds:unused.map(m=>m.id), matNames:unused.map(m=>m.name||m.id),
+    });
+  }
   // Sort by severity + type
   alerts.sort((a,b)=>{const s={high:0,medium:1,low:2};return s[a.severity]-s[b.severity]});
   return alerts;
+}
+// Unused materials report — scans the current saved weeklySchedule and lists which materials never got used across the school year.
+// Broken down globally + per region (so admin can see "material X wasn't used in North" even if it was in South).
+function openUnusedMaterialsMo(){
+  const materials=getMaterials();
+  const matById={};materials.forEach(m=>matById[m.id]=m);
+  const schedule=getWeeklySchedule();
+  const users=DB.get('users')||[];
+  const uidRegion={};
+  users.filter(u=>u.role!=='admin').forEach(u=>{uidRegion[String(u.uid||u.id)]=u.region||inferInstructorRegion(u)||'ללא אזור'});
+  (typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]).forEach(v=>{uidRegion[String(v.id)]=v.region||'ללא אזור'});
+  // Only count weeks within the school year to avoid noise from stale data.
+  const [ys,ms,ds]=SCHOOL_YEAR.start.split('-').map(n=>parseInt(n,10));
+  const [ye,me,de]=SCHOOL_YEAR.end.split('-').map(n=>parseInt(n,10));
+  const startTS=new Date(ys,ms-1,ds).getTime();
+  const endTS=new Date(ye,me-1,de).getTime();
+  const usedGlobal=new Set();
+  const usedByRegion={};REGIONS.forEach(r=>usedByRegion[r]=new Set());usedByRegion['ללא אזור']=new Set();
+  Object.entries(schedule).forEach(([weekId,wd])=>{
+    if(!wd||!wd.assignments)return;
+    const wTS=new Date(weekId).getTime();
+    if(isNaN(wTS)||wTS<startTS||wTS>endTS)return;
+    Object.entries(wd.assignments).forEach(([uid,matId])=>{
+      if(!matId)return;
+      usedGlobal.add(matId);
+      const r=uidRegion[String(uid)]||'ללא אזור';
+      if(!usedByRegion[r])usedByRegion[r]=new Set();
+      usedByRegion[r].add(matId);
+    });
+  });
+  const activeMats=materials.filter(m=>!m.excludeFromAuto);
+  const unusedGlobal=activeMats.filter(m=>!usedGlobal.has(m.id));
+  const matCard=m=>{const cat=(typeof MAT_CATEGORIES!=='undefined'&&MAT_CATEGORIES[m.category])||{color:'#64748B',emoji:'📦',label:m.category||''};return `<div style="background:white;border:1.5px solid ${cat.color};border-radius:8px;padding:8px 10px;font-size:12px;display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="background:${cat.color};color:white;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">${cat.emoji}</span><span style="font-weight:700;flex:1">${esc(m.name||'?')}</span><span style="font-size:10px;color:var(--mut)">${esc(cat.label)}${m.seasonality&&m.seasonality!=='any'?' · '+(MAT_SEASONALITY[m.seasonality]?MAT_SEASONALITY[m.seasonality].label:(SEASON_HOLIDAY_WINDOWS[m.seasonality]?SEASON_HOLIDAY_WINDOWS[m.seasonality].label:m.seasonality)):''}</span></div>`};
+  const globalSection=unusedGlobal.length?`<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:10px;padding:12px;margin-bottom:14px"><div style="font-weight:800;font-size:14px;color:#78350F;margin-bottom:8px">⚠ ${unusedGlobal.length} מערכים לא בשימוש בכלל השנה</div>${unusedGlobal.map(matCard).join('')}<div style="font-size:11px;color:#78350F;margin-top:6px;line-height:1.6">💡 סיבות אפשריות: (1) העונתיות לא התאימה לאף שבוע, (2) כל הגנים כבר ראו אותם השנה, (3) מסומן "אל-אוטומטי", או (4) האלגוריתם דילג עליהם. חשבי אם כדאי להוסיף גנים/מדריכות או להוריד מערך.</div></div>`:`<div style="background:#D1FAE5;border:1.5px solid #10B981;border-radius:10px;padding:12px;margin-bottom:14px;text-align:center;font-weight:800;color:#065F46">✓ כל ${activeMats.length} המערכים בשימוש השנה!</div>`;
+  const regionSections=Object.entries(usedByRegion).map(([r,usedSet])=>{
+    if(usedSet.size===0&&r==='ללא אזור')return '';
+    const unusedInRegion=activeMats.filter(m=>!usedSet.has(m.id));
+    if(!unusedInRegion.length)return `<div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#166534"><b>${esc(r)}</b> — כל המערכים בשימוש ✓</div>`;
+    const color=REGION_COLORS[r]||'#6B7280';
+    return `<details style="margin-bottom:8px;background:white;border:1.5px solid ${color};border-radius:10px;padding:10px 12px"><summary style="cursor:pointer;font-weight:700;font-size:13px;color:${color}">📍 ${esc(r)} — ${unusedInRegion.length} לא בשימוש</summary><div style="margin-top:8px">${unusedInRegion.map(matCard).join('')}</div></details>`;
+  }).filter(Boolean).join('');
+  // Per-instructor breakdown — which materials she never got assigned across the year.
+  const usedByUid={};
+  Object.entries(schedule).forEach(([weekId,wd])=>{
+    if(!wd||!wd.assignments)return;
+    const wTS=new Date(weekId).getTime();
+    if(isNaN(wTS)||wTS<startTS||wTS>endTS)return;
+    Object.entries(wd.assignments).forEach(([uid,matId])=>{
+      if(!matId)return;
+      if(!usedByUid[uid])usedByUid[uid]=new Set();
+      usedByUid[uid].add(matId);
+    });
+  });
+  const animalInsts=users.filter(u=>u.role!=='admin'&&u.specialty==='animals'&&!u.offboarded);
+  const virtInsts=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]).filter(v=>v.specialty==='animals');
+  const allInsts=[...animalInsts,...virtInsts].sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
+  const uidUsed=uid=>usedByUid[String(uid)]||new Set();
+  const instructorSections=allInsts.map(u=>{
+    const uid=String(u.uid||u.id);
+    const used=uidUsed(uid);
+    const unused=activeMats.filter(m=>!used.has(m.id));
+    const usedCount=used.size;
+    const isVirt=u._isVirtual===true;
+    const regionBadge=u.region?`<span style="background:${REGION_COLORS[u.region]||'#1565C0'};color:white;padding:1px 7px;border-radius:8px;font-size:10px;margin-right:4px">📍 ${esc(u.region)}</span>`:'';
+    const virtBadge=isVirt?'<span style="background:#F59E0B;color:white;padding:1px 7px;border-radius:8px;font-size:10px;margin-right:4px">🕐 עתידית</span>':'';
+    const summaryBg=usedCount===0?'#FEE2E2':(unused.length===0?'#D1FAE5':'#F3F4F6');
+    const summaryFg=usedCount===0?'#991B1B':(unused.length===0?'#065F46':'#374151');
+    return `<details style="margin-bottom:6px;background:white;border:1px solid var(--brd);border-radius:8px;padding:8px 10px"><summary style="cursor:pointer;font-size:12px;color:${summaryFg};display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:${summaryBg};padding:4px 8px;border-radius:6px;margin:-4px -6px 0"><span style="font-weight:700">${esc(u.name)}</span>${regionBadge}${virtBadge}<span style="margin-right:auto;font-size:11px">${usedCount>0?`שובצה עם ${usedCount} מערכים · לא קיבלה ${unused.length}`:`⚠ לא קיבלה כלום השנה`}</span></summary>${unused.length?`<div style="margin-top:8px;max-height:280px;overflow-y:auto">${unused.map(matCard).join('')}</div>`:'<div style="margin-top:8px;font-size:11px;color:#065F46">✓ קיבלה את כל המערכים</div>'}</details>`;
+  }).join('');
+  let mo=document.getElementById('unused-mats-mo');
+  if(!mo){mo=document.createElement('div');mo.id='unused-mats-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:680px;max-height:92vh;overflow-y:auto"><div class="mt"><span>📊 מערכים שלא שובצו השנה (${SCHOOL_YEAR.start} → ${SCHOOL_YEAR.end})</span><span class="mc" onclick="document.getElementById('unused-mats-mo').style.display='none'">×</span></div>${globalSection}<div style="font-weight:700;font-size:13px;color:var(--mut);margin-bottom:8px;padding-top:8px;border-top:1px dashed var(--brd)">📍 פירוט לפי אזור:</div>${regionSections||'<div style="color:var(--mut);font-size:12px;font-style:italic;text-align:center;padding:10px">אין נתונים לפי אזור</div>'}<div style="font-weight:700;font-size:13px;color:var(--mut);margin:14px 0 8px;padding-top:8px;border-top:1px dashed var(--brd)">👤 פירוט פר מדריכה (איזה מערכים היא <b>לא</b> קיבלה):</div>${instructorSections||'<div style="color:var(--mut);font-size:12px;font-style:italic;text-align:center;padding:10px">אין מדריכות</div>'}<div class="ma" style="margin-top:14px"><button class="btn-sec" onclick="document.getElementById('unused-mats-mo').style.display='none'">סגור</button></div></div>`;
+  mo.style.display='flex';mo.style.alignItems='flex-start';mo.style.justifyContent='center';mo.style.padding='20px 10px';mo.style.overflow='auto';
 }
 // Apply a proposal to weeklySchedule with a 2-week freeze from today.
 // Also CLEARS old "ghost" assignments for instructors covered by the new proposal
