@@ -3081,8 +3081,10 @@ function _matIsHolidayOnlyFor(mat, weekISO){
   return false;
 }
 function _matSeasonFits(mat, weekISO, holidayDates){
-  // Rule: during a holiday week, allow only holiday-specific materials for that holiday.
-  if(HOLIDAY_ONLY_WEEKS[weekISO] && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
+  // Rule: during a holiday week WITH enough holiday materials, allow only holiday-specific materials.
+  // If the region doesn't have ≥2 matching materials, we don't lock (avoid year-repeats + empty cells).
+  // window._activeHolidayLockdown is populated by the algorithm at the start of each run.
+  if(HOLIDAY_ONLY_WEEKS[weekISO] && (window._activeHolidayLockdown||new Set()).has(weekISO) && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
   const monthIdx=_monthOfISO(weekISO);
   const catInfo=MAT_CATEGORIES[mat.category]||{};
   if(catInfo.winterRisky && _isWinter(monthIdx)) return false;
@@ -3195,6 +3197,10 @@ async function computeAnnualRotation(region, opts){
   const holidayDates=opts.holidayDates||HOLIDAYS_5787;
   const materials=getMaterials().filter(m=>!m.excludeFromAuto);
   if(!materials.length) return { region, error:'אין מערכים זמינים באלגוריתם. ודאי שיש מערכים ושלא מסומנים "אל-אוטומטי".' };
+  // Precompute which holiday weeks have ENOUGH matching materials to justify a lockdown (≥2).
+  // Weeks below this threshold fall through to normal Latin Square — the material still gets priority via seasonality scoring.
+  window._activeHolidayLockdown=new Set();
+  Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{const cnt=materials.filter(m=>_matIsHolidayOnlyFor(m,wISO)).length;if(cnt>=2)window._activeHolidayLockdown.add(wISO)});
   // Gather instructors in region (real active + virtual pending)
   const realUsers=(DB.get('users')||[]).filter(u=>u.role!=='admin'&&u.specialty==='animals'&&!u.offboarded);
   const virtUsers=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]).filter(v=>v.specialty==='animals');
@@ -3253,11 +3259,12 @@ async function computeAnnualRotation(region, opts){
       continue;
     }
     // Holiday-only weeks: assign holiday materials directly, duplicates allowed, skip Latin Square logic.
-    // Covers ראש השנה, יום כיפור, סוכות, פורים, יום העצמאות, שבועות (per HOLIDAY_ONLY_WEEKS map).
-    // Every instructor in the region gets one of the whitelisted materials in round-robin so all gardens see the holiday content.
-    if(HOLIDAY_ONLY_WEEKS[weekISO]){
+    // Only lockdown if we have ENOUGH holiday materials to rotate — otherwise fall through to normal Latin Square,
+    // which will still prefer the holiday material via seasonality scoring but won't force it 4× per week.
+    // Rule: min 2 distinct holiday materials required for lockdown (so per-instructor no-repeat can be satisfied across the holiday weeks).
+    if(HOLIDAY_ONLY_WEEKS[weekISO] && (window._activeHolidayLockdown||new Set()).has(weekISO)){
       const holidayMats=materials.filter(m=>_matIsHolidayOnlyFor(m,weekISO));
-      if(holidayMats.length){
+      if(holidayMats.length>=2){
         const weekAssignmentsH={};
         const _allUids=[];
         superGroups.forEach(cluster=>cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>_allUids.push(String(u)))));
