@@ -3529,12 +3529,27 @@ exports.markinvoicepaid = onCall(
 
       // Step 2 - Create receipt in Morning if requested
       if (createReceipt) {
-        if (!invoice.gardenName) throw new HttpsError("failed-precondition", "Invoice missing gardenName");
-        const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
-        const allGardens = gardensDoc.exists ? gardensDoc.data().items || [] : [];
-        const garden = allGardens.find((g) => (typeof g === "string" ? g : g.name) === invoice.gardenName);
-        if (!garden || !garden.morningClientId) {
-          throw new HttpsError("failed-precondition", "Garden missing Morning client ID");
+        // Camp invoices: client lives in camp_clients, not meta/gardens.
+        // Regular invoices: client is a garden in meta/gardens.
+        const isCampInvoice = invoice.source === "camp";
+        let clientPayer; // { morningClientId, email, name, networkName? }
+        if (isCampInvoice) {
+          const cid = String(invoice.campClientId || "");
+          if (!cid) throw new HttpsError("failed-precondition", "Camp invoice missing campClientId");
+          const ccSnap = await admin.firestore().collection("camp_clients").doc(cid).get();
+          if (!ccSnap.exists) throw new HttpsError("not-found", "Camp client not found: " + cid);
+          const cc = ccSnap.data();
+          if (!cc.morningClientId) throw new HttpsError("failed-precondition", "Camp client missing Morning client ID");
+          clientPayer = { morningClientId: cc.morningClientId, email: cc.email || "", name: cc.name || invoice.gardenName || "", networkName: null };
+        } else {
+          if (!invoice.gardenName) throw new HttpsError("failed-precondition", "Invoice missing gardenName");
+          const gardensDoc = await admin.firestore().collection("meta").doc("gardens").get();
+          const allGardens = gardensDoc.exists ? gardensDoc.data().items || [] : [];
+          const garden = allGardens.find((g) => (typeof g === "string" ? g : g.name) === invoice.gardenName);
+          if (!garden || !garden.morningClientId) {
+            throw new HttpsError("failed-precondition", "Garden missing Morning client ID");
+          }
+          clientPayer = { morningClientId: garden.morningClientId, email: garden.email || "", name: garden.name || "", networkName: garden.networkName || null };
         }
 
         const monthParts = String(invoice.month || "").split("-");
@@ -3544,10 +3559,10 @@ exports.markinvoicepaid = onCall(
 
         const token = await morningAuth(morningApiKeyId.value(), morningApiSecret.value());
 
-        const receiptGardenEmails = parseEmails(garden.email);
-        // WIZO detection: prefer explicit networkName, fallback to name including "ויצו".
-        const isWizoGarden = (garden.networkName === "ויצו") ||
-          (typeof garden.name === "string" && garden.name.includes("ויצו"));
+        const receiptGardenEmails = parseEmails(clientPayer.email);
+        // WIZO detection: only for regular (garden) invoices, not camps.
+        const isWizoGarden = !isCampInvoice && ((clientPayer.networkName === "ויצו") ||
+          (typeof clientPayer.name === "string" && clientPayer.name.includes("ויצו")));
         // WIZO billing contact — loaded from meta/networkContacts.items['ויצו'].email if set,
         // otherwise default to kerend@wizo.org.
         let wizoRecipientEmail = "kerend@wizo.org";
@@ -3564,7 +3579,7 @@ exports.markinvoicepaid = onCall(
             logger.warn("markinvoicepaid: failed to load WIZO contact from meta", { error: String(e && e.message || e) });
           }
         }
-        const receiptClientObj = { id: String(garden.morningClientId) };
+        const receiptClientObj = { id: String(clientPayer.morningClientId) };
         // For WIZO — DON'T pass emails on the client object. This prevents Morning from
         // auto-emailing the garden's regular addresses upon document creation. We will
         // explicitly /distribute to the WIZO billing contact below.
