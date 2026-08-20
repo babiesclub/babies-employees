@@ -3387,10 +3387,8 @@ async function computeAnnualRotation(region, opts){
           let _relax=0;
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx));_relax=1}
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relax=2}
-          // Level 3: allow same material in multiple batch slots (duplicate assignments within one week).
-          // STILL enforces garden-no-repeat — if the same material would be shown twice to the SAME garden across the year, it's blocked.
-          // No further relaxation: garden rule is absolute per user's memory ("אסור שמערך יחזור פעמיים באותה שנת לימודים לאותו גן"). If pool is still empty → cell stays null.
-          if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relax=3}
+          // No L3+ in super-group: duplicating a slot triggers Latin Square rotation across all instructors → gardens see same animal T times → violates the garden rule indirectly.
+          // If pool is empty at L2, the slot stays null and a visible gap surfaces the shortage cleanly.
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
@@ -3493,8 +3491,7 @@ async function computeAnnualRotation(region, opts){
           let _relaxG=0;
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot));_relaxG=1}
           if(!candidates.length){candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relaxG=2}
-          // Level 3: allow same material in multiple batch slots. STILL enforces garden-no-repeat (absolute rule).
-          if(!candidates.length){candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)));_relaxG=3}
+          // No L3+ in single-group Latin Square either: same rotation problem as super-group. Empty slots surface real inventory issues.
           const freshCandidates=candidates.filter(m=>!globallyUsed.has(m.id));
           const pool=freshCandidates.length?freshCandidates:candidates;
           if(!pool.length){
