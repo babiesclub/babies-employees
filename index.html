@@ -3318,18 +3318,29 @@ async function computeAnnualRotation(region, opts){
     const weekAssignments={};
     // Rotation groups — Latin Square (single) or pair-swap (linked super-group)
     for(const cluster of superGroups){
-    if(cluster.length>1){
+    /* Effective cluster after normalization — unequal-size super-groups get flattened
+       into a single virtual merged group so they run through the Latin Square path
+       below rather than being dropped. */
+    let _actCluster=cluster;
+    if(_actCluster.length>1){
       // ===== SUPER-GROUP (linked groups) — pair-swap pattern =====
       const N_sub=cluster.length;
       const subGroupSizes=cluster.map(g=>(g.instructorUids||[]).length);
       const K=subGroupSizes[0];
       const equalSize=subGroupSizes.every(s=>s===K);
       if(!equalSize){
-        // Fallback: unequal sub-groups — treat as concatenated single Latin Square (current logic on merged uids)
-        // For simplicity, we skip pair-swap and just warn — MVP supports equal-size sub-groups only.
-        warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'unequal_subgroups',msg:`קבוצות מקושרות "${cluster.map(g=>g.name||'?').join('+')}" בגדלים לא שווים — לא נתמך ב-pair-swap. יש להפריד או להשוות גדלים.`});
-        continue;
-      }
+        /* Fallback: unequal sub-groups (e.g. 3 + 2 = 5) — flatten into a single virtual
+           group and let the Latin Square path below handle it. Cycle length = total
+           instructors. This is pedagogically identical to a single group of N. */
+        const mergedName=cluster.map(g=>g.name||'?').join(' + ');
+        const allMergedUids=cluster.flatMap(g=>(g.instructorUids||[]).map(String));
+        const _mergedId=superIdOf(cluster);
+        _actCluster=[{id:_mergedId,name:mergedName,instructorUids:allMergedUids}];
+        if(!groupPipelines[_mergedId])groupPipelines[_mergedId]={batch:[],batchStartWeekIdx:null,prevSlotCategories:{}};
+        // Warn ONCE per super-cluster (on the first pass — before the first batch is created).
+        if(groupPipelines[_mergedId].batchStartWeekIdx===null){warnings.push({weekISO,superGroup:mergedName,type:'merged_unequal',msg:`סופר-קלסטר "${mergedName}" בגדלים לא-שווים (${cluster.map(g=>(g.instructorUids||[]).length).join('+')}) — שובץ כ-Latin Square יחיד של ${allMergedUids.length} מדריכות. מחזור: ${allMergedUids.length} שבועות.`})}
+        // Fall through to single-group block below (using _actCluster).
+      } else {
       const T=N_sub*K;
       const superId=superIdOf(cluster);
       const state=groupPipelines[superId];
@@ -3444,9 +3455,10 @@ async function computeAnnualRotation(region, opts){
         });
       });
       continue;
+      } // end else (equalSize) — for unequal, we fall through to single-group below
     }
-    // ===== SINGLE GROUP (unlinked) — original Latin Square logic =====
-    { const g=cluster[0];
+    // ===== SINGLE GROUP (unlinked or unequal-super flattened) — Latin Square logic =====
+    { const g=_actCluster[0];
       const uids=(g.instructorUids||[]).map(String);
       const N=uids.length;
       if(!N) continue;
