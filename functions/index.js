@@ -5747,6 +5747,100 @@ ${instructorName ? `- שם המדריכה: ${instructorName} (לידיעה).` : 
   }
 );
 
+// Parse NETWORK (afterschool/branches) schedule image via Claude Vision.
+// Table shape: right column = branch name + address, then contact person + phone,
+// then day columns (Sun-Fri) with times. Each row = one branch (school/institution).
+// Returns branches[] with sessions[] (day, start, end, note) — client creates gardens
+// under networkName + assigns to a single instructor's weeklySchedule.
+exports.parsenetworkscheduleimage = onCall(
+  { region: "us-central1", timeoutSeconds: 120, memory: "512MiB", secrets: [anthropicApiKey] },
+  async (req) => {
+    await requireAdmin(req.auth);
+    const { imageBase64, mimeType, networkName, defaultCity, instructorName, afterSchoolType } = req.data || {};
+    if (!imageBase64) throw new HttpsError("invalid-argument", "missing imageBase64");
+    if (!anthropicApiKey.value()) throw new HttpsError("failed-precondition", "ANTHROPIC_API_KEY לא הוגדר");
+    const mime = mimeType || "image/png";
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic({ apiKey: anthropicApiKey.value() });
+    const cityHint = (defaultCity && String(defaultCity).trim()) || "";
+    const asrTypeLbl = { tzaharon: "צהרון", talan: 'תל"ן', nivkharot: "נבחרות" }[afterSchoolType] || "צהרון";
+    const SYSTEM = `אתה מומחה לקריאת טבלאות שיבוץ שבועי של רשתות אפטר סקול / צהרונים בישראל. אתה מקבל תמונה של טבלה — כל שורה מייצגת סניף (בית ספר או מוסד חינוכי), ומחזיר JSON מובנה.
+
+מבנה נפוץ של הטבלה:
+- עמודה ימנית (הרחוקה ביותר) = שם הסניף + כתובת (רחוב, מספר, עיר)
+- עמודה שאחריה = פרטי איש קשר (שם + טלפון)
+- שאר העמודות = ימי השבוע (ראשון עד שישי) עם שעות ופעילויות בכל תא
+- תא ריק ביום מסוים = אין פעילות באותו יום בסניף הזה
+
+פענוח תאי הימים:
+- "החל מ HH:MM" או "החל מ־HH:MM" = שעת התחלה. אם לא מצוינת שעת סיום — הנח משך של שעה (start+60min).
+- "HH:MM-HH:MM" = start-end במפורש
+- הערות בתא (כמו "חיות עם נטלי (בייביז)") מגדירות שהפעילות שייכת ל${asrTypeLbl}. אל תכניסי אותן ל-note אלא אם הן מוסיפות מידע ייחודי (כמו קבוצה מסוימת).
+- אם התא חוזר על עצמו לאורך כמה שורות מאותה שעה → זה סימן לחזרה שבועית, כל שורה = הפעלה נפרדת (למשל מספר קבוצות עוקבות). כלול את כולן.
+
+הפלט חייב להיות JSON בלבד — לא markdown, לא טקסט מסביב:
+{
+  "branches": [
+    {
+      "name": "שם הסניף (בית הספר / המוסד), בלי כתובת",
+      "address": "רחוב, מספר, עיר (מלא)",
+      "contactName": "שם איש קשר",
+      "contactPhone": "טלפון בפורמט 05X-XXXXXXX (רק ספרות ומקף אחד)",
+      "sessions": [
+        { "day": 0, "start": "HH:MM", "end": "HH:MM", "note": null }
+      ]
+    }
+  ],
+  "warnings": []
+}
+
+מיפוי ימים: ראשון=0, שני=1, שלישי=2, רביעי=3, חמישי=4, שישי=5.
+
+- אם הכתובת לא כוללת עיר ובחרנו עיר ברירת מחדל "${cityHint || "(לא נבחרה)"}" — הוסיפי אותה בסוף הכתובת. אם צוינה כתובת חלקית (רק רחוב) והעיר ברירת המחדל היא ${cityHint || "לא ידועה"}, הוסיפי ", ${cityHint}".
+- אל תמציאי סניפים שלא בתמונה. אל תמציאי הפעלות שלא ראית.
+- אם שדה לא ברור/חסר — החזירי null (לא "?" ולא מחרוזת ריקה).
+- מספרי טלפון: נרמלי לפורמט 05X-XXXXXXX. אם הפורמט לא ברור — החזירי כפי שראית.
+${instructorName ? `- שם המדריכה שתשוייך לכל השיבוצים: ${instructorName} (רק לידיעה — אין צורך להכניס לפלט).` : ""}
+- מיין את הסניפים לפי הסדר שהם מופיעים בתמונה (מלמעלה למטה).
+- מיין את הsessions בכל סניף לפי day ואז start.
+- החזירי רק JSON תקין, בלי טקסט לפני או אחרי, בלי markdown, בלי \`\`\`.`;
+
+    let resp;
+    try {
+      resp = await callAnthropicWithRetry(client, {
+        model: "claude-sonnet-5",
+        max_tokens: 16384,
+        system: SYSTEM,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mime, data: imageBase64 } },
+            { type: "text", text: `פרקי את טבלת הסניפים של רשת "${networkName || "אפטר סקול"}" (סוג: ${asrTypeLbl}) ל-JSON לפי הסכמה. החזירי רק JSON.` },
+          ],
+        }], // fallbackModels: ["claude-opus-4-7"]
+      }, { fallbackModels: ["claude-opus-4-7"] });
+    } catch (e) { throw translateAnthropicError(e, "קריאת טבלת רשת אפטר סקול מתמונה (parsenetworkscheduleimage)"); }
+    const text = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const _truncated = resp.stop_reason === "max_tokens";
+    let parsed;
+    try {
+      let cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(m ? m[0] : cleaned);
+    } catch (e) {
+      logger.error("parsenetworkscheduleimage parse failed:", { stop_reason: resp.stop_reason, len: text.length, tail: text.slice(-200) });
+      const hint = _truncated
+        ? "התגובה מ-Claude נחתכה כי הטבלה גדולה מדי (max_tokens=16384). נסי להעלות תמונה של חצי טבלה בכל פעם, או קטני את התמונה."
+        : "תגובת Claude לא בפורמט JSON תקין. תחילת התגובה: " + text.slice(0, 200);
+      throw new HttpsError("internal", hint);
+    }
+    if (!parsed.branches || !Array.isArray(parsed.branches)) parsed.branches = [];
+    if (!parsed.warnings) parsed.warnings = [];
+    logger.info("parsenetworkscheduleimage:", { network: networkName, branches: parsed.branches.length, inTokens: resp.usage.input_tokens, outTokens: resp.usage.output_tokens });
+    return { branches: parsed.branches, warnings: parsed.warnings, tokens: { input: resp.usage.input_tokens, output: resp.usage.output_tokens } };
+  }
+);
+
 // Analyze a tender / RFP / contract PDF via Claude and return structured JSON.
 exports.analyzetender = onCall(
   { region: "us-central1", timeoutSeconds: 300, memory: "1GiB", secrets: [anthropicApiKey] },
