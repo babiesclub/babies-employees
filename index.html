@@ -5372,7 +5372,10 @@ async function _nimgApply(){
   const u=users[uidx];
   if(!Array.isArray(u.gardens))u.gardens=[];
   const _ws=u.weeklySchedule&&typeof u.weeklySchedule==='object'?{...u.weeklySchedule}:{};
-  for(let d=0;d<=5;d++)if(!Array.isArray(_ws[d]))_ws[d]=Array.isArray(_ws[d])?_ws[d]:[];
+  /* Editor supports Sun-Thu (0-4) only; clamp so Friday sessions don't survive
+     the next sched-mo/ei save (which reconstructs weeklySchedule from days 0-4). */
+  for(let d=0;d<=4;d++)if(!Array.isArray(_ws[d]))_ws[d]=[];
+  let _skippedFriday=0;
   let created=0,skipped=0,sessionsAdded=0;
   for(const b of included){
     if(!b.name||!String(b.name).trim()){skipped++;continue}
@@ -5388,7 +5391,8 @@ async function _nimgApply(){
     if(!u.gardens.includes(fullName))u.gardens.push(fullName);
     (b.sessions||[]).forEach(s=>{
       const d=Number(s.day);
-      if(isNaN(d)||d<0||d>5)return;
+      if(isNaN(d)||d<0)return;
+      if(d>4){_skippedFriday++;return}
       _ws[d].push({start:String(s.start||'').trim(),end:String(s.end||'').trim(),garden:fullName,note:String(s.note||'').trim()});
       sessionsAdded++;
     });
@@ -5400,12 +5404,27 @@ async function _nimgApply(){
   if(window.fbDb&&u.uid){
     try{await fbDb.collection('users').doc(u.uid).set({gardens:u.gardens,weeklySchedule:_ws},{merge:true})}catch(e){console.error('user sync failed:',e);alert('אזהרה: השמירה לענן נכשלה — נסי שוב.\n'+String(e.message||e))}
   }
+  /* Critical: if a schedule editor is currently open for this instructor, the
+     in-memory _eiScheduleDraft is now stale. If the user later clicks "save"
+     in that editor, it would overwrite our fresh weeklySchedule with the old
+     snapshot. Refresh the draft in-place + re-render so both are in sync. */
+  const _affectedId=String(u.uid||u.id);
+  const _matchesSched=(typeof _schedEditingUid!=='undefined')&&_schedEditingUid&&String(_schedEditingUid)===_affectedId;
+  const _matchesEi=(typeof editId!=='undefined')&&editId&&String(editId)===_affectedId;
+  if(_matchesSched||_matchesEi){
+    if(typeof _eiScheduleDraft!=='undefined'){
+      for(let d=0;d<=4;d++){_eiScheduleDraft[d]=Array.isArray(_ws[d])?_ws[d].map(e=>({...e})):[]}
+    }
+    try{if(typeof renderEiSchedule==='function')renderEiSchedule()}catch(e){console.warn('re-render sched:',e)}
+  }
   _nimgClose();
   if(typeof renderAdm==='function')renderAdm();
   if(typeof initApp==='function')initApp();
   const parts=[`✓ נוצרו ${created} סניפים תחת רשת "${network}"`];
   if(skipped>0)parts.push(`⏭ ${skipped} דולגו (כפילות שם או ללא שם)`);
   parts.push(`🗓 ${sessionsAdded} שיבוצים נוספו למערכת השבועית של ${u.name}`);
+  if(_skippedFriday>0)parts.push(`⚠ ${_skippedFriday} שיבוצים בימי שישי דולגו (העורך לא תומך בשישי)`);
+  if(_matchesSched||_matchesEi)parts.push(`\n🔄 העורך הפתוח רוענן — לא צריך ללחוץ "שמור" שוב במערכת השבועית (כבר נשמרה).`);
   alert(parts.join('\n'));
 }
 function delGarden(name){const recs=DB.get('records')||[];const cnt=recs.filter(r=>r.garden===name).length;const users=DB.get('users')||[];const assignedTo=users.filter(u=>(u.gardens||[]).includes(name)).map(u=>u.name);const msg=`🗑 למחוק את הגן "${name}"?\n\n📊 ${cnt} דיווחים היסטוריים בגן זה — יישמרו אך יופיעו כ"חסרים ברשימה".\n${assignedTo.length?`👤 משויך ל-${assignedTo.length} מדריכות: ${assignedTo.join(', ')}\n`:''}\n⚠ הפעולה בלתי הפיכה. ניתן להוסיף בחזרה דרך לשונית "👻 חסרים ברשימה".`;if(!confirm(msg))return;console.warn('[GARDEN DELETE]',new Date().toISOString(),'name:',name,'records:',cnt,'assignedTo:',assignedTo,'by:',(cu&&(cu.username||cu.name))||'unknown');const g=DB.get('gardens')||[];const i=g.findIndex(x=>(typeof x==='string'?x:x.name)===name);if(i===-1)return;g.splice(i,1);DB.set('gardens',g);renderAdm();initApp()}
