@@ -5250,7 +5250,7 @@ async function openNetworkImageImportMo(preselectInstrUid){
   const activeUsers=(DB.get('users')||[]).filter(u=>u.role!=='admin'&&!u.offboarded&&!u.accessBlocked).sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
   const preselectStr=preselectInstrUid!=null?String(preselectInstrUid):'';
   const instrOpts=activeUsers.map(u=>{const v=String(u.uid||u.id);return `<option value="${esc(v)}"${v===preselectStr?' selected':''}>${esc(u.name)}</option>`}).join('');
-  mo.innerHTML=`<div class="md" style="max-width:640px;max-height:92vh;overflow-y:auto"><div class="mt"><span>📷 ייבוא סניפי רשת מתמונה</span><span class="mc" onclick="_nimgClose()">×</span></div><div style="background:#EDE9FE;border-right:4px solid #7C3AED;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7"><b>💡 איך זה עובד:</b><br>1. מלאי פרטים למטה: שם רשת, סוג פעילות, המדריכה שתקבל את הסניפים ועיר ברירת מחדל<br>2. עלי תמונה של הטבלה של הלקוח (או Ctrl+V / drag)<br>3. Claude Vision יזהה סניפים+שיבוצים ויציג לאישור<br>4. אשרי → סניפים ייווצרו, שיבוצים ייכנסו למערכת השבועית של המדריכה</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">שם רשת</label><input type="text" id="nimg-network" class="md-input" value="אפטר סקול" placeholder="אפטר סקול"></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">סוג פעילות</label><select id="nimg-asrtype" class="md-input"><option value="tzaharon">🎨 צהרון</option><option value="talan">🎒 תל"ן</option><option value="nivkharot">🏆 נבחרות</option></select></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">מדריכה לשיוך</label><select id="nimg-instr" class="md-input"><option value="">— בחרי מדריכה —</option>${instrOpts}</select></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">עיר ברירת מחדל</label><input type="text" id="nimg-city" class="md-input" value="נתניה" placeholder="נתניה"></div></div><div id="nimg-drop" style="border:2px dashed #7C3AED;border-radius:10px;padding:24px;background:#FAF5FF;text-align:center;cursor:pointer;margin-bottom:12px" onclick="document.getElementById('nimg-file').click()"><div style="font-size:32px;margin-bottom:6px">📷</div><div style="font-weight:700;color:#5B21B6;font-size:13px">לחצי / הדביקי (Ctrl+V) / גררי תמונה של הטבלה</div><input type="file" id="nimg-file" accept="image/*" style="display:none" onchange="_nimgFile(event)"></div><div id="nimg-preview" style="margin-top:10px;text-align:center"></div><div id="nimg-result" style="margin-top:12px"></div><div class="ma" style="margin-top:14px"><button class="btn-prim" id="nimg-parse-btn" style="flex:1;margin:0;background:#7C3AED" onclick="_nimgParse()" disabled>🧠 פרקי את התמונה</button><button class="btn-sec" onclick="_nimgClose()">סגור</button></div></div>`;
+  mo.innerHTML=`<div class="md" style="max-width:640px;max-height:92vh;overflow-y:auto"><div class="mt"><span>📷 ייבוא סניפי רשת מתמונה</span><span class="mc" onclick="_nimgClose()">×</span></div><div style="background:#EDE9FE;border-right:4px solid #7C3AED;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7"><b>💡 איך זה עובד:</b><br>1. מלאי פרטים למטה: שם רשת, סוג פעילות, המדריכה שתקבל את הסניפים ועיר ברירת מחדל<br>2. עלי תמונה של הטבלה של הלקוח (או Ctrl+V / drag)<br>3. Claude Vision יזהה סניפים+שיבוצים ויציג לאישור<br>4. אשרי → סניפים ייווצרו, שיבוצים ייכנסו למערכת השבועית של המדריכה</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">שם רשת</label><input type="text" id="nimg-network" class="md-input" value="אפטר סקול" placeholder="אפטר סקול"></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">סוג פעילות</label><select id="nimg-asrtype" class="md-input"><option value="tzaharon">🎨 צהרון</option><option value="talan">🎒 תל"ן</option><option value="nivkharot">🏆 נבחרות</option></select></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">מדריכה לשיוך</label><select id="nimg-instr" class="md-input"><option value="">— בחרי מדריכה —</option>${instrOpts}</select></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">עיר ברירת מחדל</label><input type="text" id="nimg-city" class="md-input" value="נתניה" placeholder="נתניה"></div></div><div style="margin-bottom:10px"><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">⏱ משך פעילות פר קבוצה</label><select id="nimg-duration" class="md-input"><option value="30">30 דקות</option><option value="40" selected>40 דקות</option></select><div style="font-size:10px;color:var(--mut);margin-top:4px;line-height:1.4">💡 אם הטבלה מציגה מספר קבוצות באותה שעת התחלה (למשל 4× 13:00), האפליקציה תרחיב אוטומטית לרצף: 13:00-13:40, 13:40-14:20 וכו' לפי המשך שבחרת. אפשר לשנות גם אחרי הפרסינג.</div></div><div id="nimg-drop" style="border:2px dashed #7C3AED;border-radius:10px;padding:24px;background:#FAF5FF;text-align:center;cursor:pointer;margin-bottom:12px" onclick="document.getElementById('nimg-file').click()"><div style="font-size:32px;margin-bottom:6px">📷</div><div style="font-weight:700;color:#5B21B6;font-size:13px">לחצי / הדביקי (Ctrl+V) / גררי תמונה של הטבלה</div><input type="file" id="nimg-file" accept="image/*" style="display:none" onchange="_nimgFile(event)"></div><div id="nimg-preview" style="margin-top:10px;text-align:center"></div><div id="nimg-result" style="margin-top:12px"></div><div class="ma" style="margin-top:14px"><button class="btn-prim" id="nimg-parse-btn" style="flex:1;margin:0;background:#7C3AED" onclick="_nimgParse()" disabled>🧠 פרקי את התמונה</button><button class="btn-sec" onclick="_nimgClose()">סגור</button></div></div>`;
   mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
   window._nimgImage=null;window._nimgResult=null;
   const drop=document.getElementById('nimg-drop');
@@ -5277,6 +5277,7 @@ async function _nimgParse(){
   const asrtype=document.getElementById('nimg-asrtype').value;
   const instrId=document.getElementById('nimg-instr').value;
   const city=(document.getElementById('nimg-city').value||'').trim();
+  const durationMin=Number(document.getElementById('nimg-duration').value)||40;
   if(!network){alert('חובה לבחור שם רשת');return}
   if(!instrId){alert('חובה לבחור מדריכה לשיוך');return}
   const instr=(DB.get('users')||[]).find(u=>String(u.uid||u.id)===instrId);
@@ -5289,16 +5290,58 @@ async function _nimgParse(){
     const res=await fn({imageBase64:window._nimgImage.base64,mimeType:window._nimgImage.mime,networkName:network,defaultCity:city,instructorName:instr.name,afterSchoolType:asrtype});
     const d=res.data||{};
     if(!d.branches||!d.branches.length){document.getElementById('nimg-result').innerHTML='<div style="background:#FEE2E2;color:#991B1B;padding:12px;border-radius:8px;font-size:12px">⚠ לא זוהו סניפים בתמונה. נסי תמונה ברורה יותר של אותה טבלה.</div>';btn.innerHTML='🧠 פרקי שוב';btn.disabled=false;return}
-    window._nimgResult={branches:d.branches,network,asrtype,instr,city,warnings:d.warnings||[]};
+    /* Save raw response so duration changes can re-process without another CF call. */
+    window._nimgOrigBranches=JSON.parse(JSON.stringify(d.branches));
+    window._nimgResult={branches:_nimgProcessBranches(d.branches,durationMin),network,asrtype,instr,city,warnings:d.warnings||[],durationMin};
     _nimgRenderResult();
   }catch(e){
     document.getElementById('nimg-result').innerHTML=`<div style="background:#FEE2E2;color:#991B1B;padding:12px;border-radius:8px;font-size:12px">⚠ שגיאה: ${esc(e.message||String(e))}</div>`;
     btn.innerHTML='🧠 פרקי שוב';btn.disabled=false;
   }
 }
+/* Time helpers for consecutive-slot expansion. */
+function _nimgParseTime(str){const m=String(str||'').trim().match(/^(\d{1,2}):(\d{2})$/);if(!m)return null;return Number(m[1])*60+Number(m[2])}
+function _nimgMinToTime(min){min=((min%1440)+1440)%1440;const h=Math.floor(min/60),m=min%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')}
+/* Post-process CF branches: expand identical-start groups to consecutive slots by duration,
+   sort each branch's sessions by day+time, sort branches by earliest day. */
+function _nimgProcessBranches(rawBranches,durationMin){
+  const branches=JSON.parse(JSON.stringify(rawBranches));
+  branches.forEach(b=>{
+    const groups={};
+    (b.sessions||[]).forEach(s=>{const key=String(s.day)+'|'+String(s.start||'');if(!groups[key])groups[key]=[];groups[key].push(s)});
+    const expanded=[];
+    Object.keys(groups).forEach(key=>{
+      const list=groups[key];
+      if(list.length===1){expanded.push(list[0]);return}
+      const [dayStr,startStr]=key.split('|');
+      const startMin=_nimgParseTime(startStr);
+      if(startMin===null){expanded.push(...list);return}
+      list.forEach((s,i)=>{
+        const sStart=startMin+i*durationMin;const sEnd=sStart+durationMin;
+        expanded.push({day:Number(dayStr),start:_nimgMinToTime(sStart),end:_nimgMinToTime(sEnd),note:s.note||null});
+      });
+    });
+    b.sessions=expanded.sort((a,b)=>((Number(a.day)||0)-(Number(b.day)||0))||String(a.start||'').localeCompare(String(b.start||'')));
+  });
+  branches.sort((a,b)=>{
+    const minA=(a.sessions&&a.sessions.length)?Math.min(...a.sessions.map(s=>Number(s.day)||999)):999;
+    const minB=(b.sessions&&b.sessions.length)?Math.min(...b.sessions.map(s=>Number(s.day)||999)):999;
+    return minA-minB;
+  });
+  return branches;
+}
+function _nimgReprocess(newDurStr){
+  const dur=Number(newDurStr)||40;
+  if(!window._nimgOrigBranches){alert('אין מקור לעיבוד מחדש — פרקי מחדש');return}
+  if(!window._nimgResult){return}
+  window._nimgResult.branches=_nimgProcessBranches(window._nimgOrigBranches,dur);
+  window._nimgResult.durationMin=dur;
+  _nimgRenderResult();
+}
 function _nimgRenderResult(){
   const _r=window._nimgResult;if(!_r)return;
-  const {branches,network,asrtype,instr,warnings}=_r;
+  const {branches,network,asrtype,instr,warnings,durationMin}=_r;
+  const _curDur=Number(durationMin)||40;
   const DAY=['ראשון','שני','שלישי','רביעי','חמישי','שישי'];
   const asrCol={tzaharon:{bg:'#FB923C',lbl:'🎨 צהרון'},talan:{bg:'#3B82F6',lbl:'🎒 תל"ן'},nivkharot:{bg:'#F59E0B',lbl:'🏆 נבחרות'}}[asrtype]||{bg:'#888',lbl:asrtype};
   const rows=branches.map((b,i)=>{
@@ -5307,7 +5350,8 @@ function _nimgRenderResult(){
     return `<div style="background:white;border:1.5px solid var(--brd);border-radius:10px;padding:10px;margin-bottom:8px"><label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="nimg-inc" data-idx="${_idxSafe}" checked style="width:16px;height:16px"><span style="font-weight:800;color:#5B21B6;font-size:13px">${esc(b.name||'(ללא שם)')}</span></label><div style="font-size:11px;color:#666;margin-bottom:3px">🏠 ${esc(b.address||'—')}</div><div style="font-size:11px;color:#666;margin-bottom:6px">📞 ${esc(b.contactName||'')}${b.contactPhone?' · '+esc(b.contactPhone):' · —'}</div><div style="border-top:1px dashed #E5E7EB;padding-top:6px">${sessHtml||'<span style="color:var(--mut);font-size:11px;font-style:italic">אין שיבוצים</span>'}</div></div>`;
   }).join('');
   const warnHtml=warnings.length?`<div style="background:#FEF3C7;border:1px solid #F59E0B;color:#78350F;padding:8px 12px;border-radius:6px;font-size:11px;margin-bottom:8px">⚠ ${warnings.length} אזהרות מקלוד:<br>${warnings.slice(0,5).map(w=>'• '+esc(String(w))).join('<br>')}</div>`:'';
-  document.getElementById('nimg-result').innerHTML=`<div style="background:#F0FDF4;border:1.5px solid #52B788;border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;color:#166534"><b>✓ זוהו ${branches.length} סניפים</b> · יווצרו תחת רשת <b>"${esc(network)}"</b> (${asrCol.lbl}) · ישויכו ל־<b>${esc(instr.name)}</b></div>${warnHtml}${rows}<div class="ma" style="margin-top:10px"><button class="btn-prim" style="flex:1;margin:0;background:#059669" onclick="_nimgApply()">✓ צור סניפים ושיבוצים</button></div>`;
+  const durHtml=`<div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:8px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><label style="font-size:12px;font-weight:700;color:#0C4A6E">⏱ משך פעילות פר קבוצה:</label><select onchange="_nimgReprocess(this.value)" style="padding:4px 10px;border:1.5px solid #90CDF4;border-radius:6px;font-family:inherit;font-size:12px;background:white"><option value="30"${_curDur===30?' selected':''}>30 דקות</option><option value="40"${_curDur===40?' selected':''}>40 דקות</option></select><span style="font-size:11px;color:#0C4A6E">שינוי מחשב מיד את השיבוצים לרצף (למשל 4 קבוצות מ־13:00 → 13:00-${_curDur===40?'13:40':'13:30'}, ...)</span></div>`;
+  document.getElementById('nimg-result').innerHTML=`<div style="background:#F0FDF4;border:1.5px solid #52B788;border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;color:#166534"><b>✓ זוהו ${branches.length} סניפים</b> · יווצרו תחת רשת <b>"${esc(network)}"</b> (${asrCol.lbl}) · ישויכו ל־<b>${esc(instr.name)}</b> · מסודר לפי היום המוקדם ביותר</div>${durHtml}${warnHtml}${rows}<div class="ma" style="margin-top:10px"><button class="btn-prim" style="flex:1;margin:0;background:#059669" onclick="_nimgApply()">✓ צור סניפים ושיבוצים</button></div>`;
   const b=document.getElementById('nimg-parse-btn');if(b){b.innerHTML='🔄 פרקי שוב';b.disabled=false}
 }
 async function _nimgApply(){
