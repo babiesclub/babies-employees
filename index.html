@@ -598,6 +598,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <button class="btn-sec" style="margin-top:8px;width:100%;background:#E3F2FD;border-color:#64B5F6;color:#1565C0" onclick="openMatchClientsMo()">🔍 התאמת לקוחות מורנינג ↔ לו"ז מדריכים</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:#FFEBEE;border-color:#EF5350;color:#C62828" onclick="openGardenDupesMo()">🧹 חפש וטפל בכפילויות גנים</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:#FFF3E0;border-color:#FB923C;color:#9A3412" onclick="openPhoneDupesMo()">📞 בדוק כפילויות טלפון בין גנים</button>
+            <button class="btn-sec" style="margin-top:8px;width:100%;background:#FEE2E2;border-color:#DC2626;color:#7F1D1D;font-weight:700" onclick="openNetworkCleanupMo()">🧹 נקה גני רשת (מחיקה בבת אחת של כל הסניפים)</button>
           </div>
           <div style="margin-top:14px;padding-top:14px;border-top:1px dashed var(--brd)">
             <p style="font-size:11px;color:var(--mut);margin-bottom:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">📋 דוחות חיצוניים ללקוח</p>
@@ -5168,6 +5169,76 @@ function addNetworkBranch(){const inp=document.getElementById('nw-branch');const
 function removeNetworkBranch(name){_networkBranches=_networkBranches.filter(b=>b!==name);renderNetworkBranches()}
 function renderNetworkBranches(){const wrap=document.getElementById('nw-branches-list');if(!wrap)return;if(!_networkBranches.length){wrap.innerHTML='<div style="color:#888;font-size:12px;font-style:italic;padding:8px">אין סניפים עדיין - הוסיפי לפחות אחד</div>';return}wrap.innerHTML=_networkBranches.map(b=>`<div style="display:inline-flex;align-items:center;gap:6px;background:#E0F2F1;color:#004D40;padding:6px 12px;border-radius:14px;margin:2px;font-size:13px;font-weight:600">📍 ${esc(b)}<button onclick="removeNetworkBranch(${JSON.stringify(b)})" style="background:none;border:none;color:#c00;cursor:pointer;font-size:14px;padding:0;line-height:1">×</button></div>`).join('')}
 function saveNetwork(){const name=document.getElementById('nw-name').value.trim();if(!name){alert('יש להזין שם רשת');return}if(!_networkBranches.length){alert('יש להוסיף לפחות סניף אחד');return}const gardens=DB.get('gardens')||[];const existingNames=GN(gardens);const toAdd=[];const skipped=[];for(const branch of _networkBranches){const fullName=name+' - '+branch;if(existingNames.includes(fullName)){skipped.push(fullName);continue}toAdd.push({name:fullName,networkName:name,branchName:branch,address:'',phone:''})}if(!toAdd.length){alert('כל הסניפים כבר קיימים. לא נוסף כלום.');return}gardens.push(...toAdd);DB.set('gardens',gardens);let msg=`✓ נוצרו ${toAdd.length} גנים חדשים תחת הרשת "${name}":\n`+toAdd.map(g=>'• '+g.name).join('\n');if(skipped.length)msg+='\n\n⚠ דולגו (כבר קיימים):\n'+skipped.map(n=>'• '+n).join('\n');msg+='\n\n📝 הצעד הבא: ערכי כל גן והגדירי תעריפים + Morning Client ID זהה לכולם.';alert(msg);closeNetworkMo();renderAdm()}
+/* ========= Network cleanup — bulk-delete all branches under a network ========= */
+async function openNetworkCleanupMo(){
+  let mo=document.getElementById('net-cleanup-mo');
+  if(!mo){mo=document.createElement('div');mo.id='net-cleanup-mo';mo.className='mo';document.body.appendChild(mo)}
+  const gardens=DB.get('gardens')||[];
+  const byNet={};
+  gardens.forEach(g=>{const o=typeof g==='string'?{name:g}:g;const nn=(o.networkName||'').trim();if(!nn)return;if(!byNet[nn])byNet[nn]={network:nn,branches:[],isAfterSchool:(typeof _isAfterSchool==='function'?_isAfterSchool(nn):false)};byNet[nn].branches.push(o)});
+  const nets=Object.values(byNet).sort((a,b)=>{if(a.isAfterSchool&&!b.isAfterSchool)return -1;if(!a.isAfterSchool&&b.isAfterSchool)return 1;return (a.network||'').localeCompare(b.network||'','he')});
+  const netsHtml=nets.length?nets.map(n=>{
+    const emoji=n.isAfterSchool?'🎒':'🏢';
+    const bg=n.isAfterSchool?'#FFF7ED':'#F0F9FF';
+    const brdCol=n.isAfterSchool?'#FB923C':'#7DD3FC';
+    const escNet=esc(n.network).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    const asrTag=n.isAfterSchool?'<span style="font-size:9px;font-weight:700;background:#FB923C;color:white;padding:1px 6px;border-radius:6px;margin-right:6px">אפטר סקול</span>':'';
+    const branchList=n.branches.slice(0,20).map(b=>`<li style="font-size:11px;color:var(--mut);padding:1px 0">• ${esc(b.branchName||b.name)}</li>`).join('');
+    const moreLbl=n.branches.length>20?`<li style="font-size:11px;color:var(--mut);font-style:italic;padding:2px 0">... ועוד ${n.branches.length-20} סניפים</li>`:'';
+    return `<div style="background:${bg};border:1.5px solid ${brdCol};border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+        <div style="font-weight:800;font-size:13px;color:var(--text)">${emoji} ${esc(n.network)}${asrTag} <span style="font-size:11px;color:var(--mut);font-weight:400">· ${n.branches.length} סניפים</span></div>
+        <button data-net="${escNet}" onclick="_confirmNetworkCleanup(this.dataset.net)" style="background:#DC2626;color:white;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700">🗑 נקה כל הסניפים</button>
+      </div>
+      <details style="font-size:11px"><summary style="cursor:pointer;color:var(--mut);font-weight:600">סניפים ברשת (${n.branches.length})</summary><ul style="margin:6px 0 0 0;padding:0;list-style:none">${branchList}${moreLbl}</ul></details>
+    </div>`;
+  }).join(''):'<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">אין רשתות מוגדרות בגנים</div>';
+  mo.innerHTML=`<div class="md" style="max-width:640px;max-height:92vh;overflow-y:auto"><div class="mt"><span>🧹 ניקוי גני רשת</span><span class="mc" onclick="document.getElementById('net-cleanup-mo').style.display='none'">×</span></div><div style="background:#FEF3C7;border-right:4px solid #F59E0B;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#78350F;line-height:1.7"><b>💡 מה קורה בניקוי:</b><br>• מוחק את <b>כל הסניפים</b> (הגן/הסניף עצמו) של הרשת שבחרת<br>• מסיר מכל המדריכות ששויכו אליהם — גם מ־gardens, gardenLimits, gardenActivityType ו-gardenPayHistory<br>• <b>שומר</b> דיווחי היסטוריה — הם יופיעו ב"היסטוריה" כטקסט חופשי (המדריכה לא תוכל לדווח חדשים שם)<br>• שומר הגדרות רשת (יעד חיוב, מיילים לרשת) — לא נגוע<br><b>⚠ בלתי הפיך.</b> טוב לפני ייבוא מחדש של רשימת סניפים.</div>${netsHtml}<div class="ma" style="margin-top:14px"><button class="btn-sec" style="flex:1" onclick="document.getElementById('net-cleanup-mo').style.display='none'">סגור</button></div></div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function _confirmNetworkCleanup(networkName){
+  const gardens=DB.get('gardens')||[];
+  const branches=gardens.filter(g=>{const o=typeof g==='string'?{name:g}:g;return (o.networkName||'').trim()===networkName});
+  if(!branches.length){alert('לא נמצאו סניפים לרשת "'+networkName+'"');return}
+  const branchNames=branches.map(b=>typeof b==='string'?b:b.name);
+  const users=DB.get('users')||[];
+  let affectedUsersCount=0;
+  users.forEach(u=>{if((u.gardens||[]).some(gn=>branchNames.includes(gn)))affectedUsersCount++});
+  const records=DB.get('records')||[];
+  const recCount=records.filter(r=>branchNames.includes(r.garden)).length;
+  const preview=branchNames.slice(0,10).map(n=>'  · '+n).join('\n')+(branchNames.length>10?`\n  ... ועוד ${branchNames.length-10}`:'');
+  const msg=`🚨 ניקוי רשת "${networkName}"\n\n• ${branches.length} סניפים יימחקו:\n${preview}\n\n• ${affectedUsersCount} מדריכות יפגעו — הסניפים יוסרו מהרשימות שלהן\n• ${recCount} דיווחים היסטוריים יישמרו (לא נמחקים)\n\n⚠ בלתי הפיך.\n\nהקלידי \"אישור\" כדי לאשר:`;
+  const typed=prompt(msg);
+  if(typed!=='אישור'){alert('הפעולה בוטלה — לא נמחק כלום');return}
+  const remaining=gardens.filter(g=>{const o=typeof g==='string'?{name:g}:g;return (o.networkName||'').trim()!==networkName});
+  DB.set('gardens',remaining);
+  const updatedUids=new Set();
+  users.forEach(u=>{
+    if(!Array.isArray(u.gardens))u.gardens=[];
+    const before=u.gardens.length;
+    u.gardens=u.gardens.filter(gn=>!branchNames.includes(gn));
+    let changed=(u.gardens.length!==before);
+    branchNames.forEach(gn=>{
+      if(u.gardenLimits&&u.gardenLimits[gn]){delete u.gardenLimits[gn];changed=true}
+      if(u.gardenActivityType&&u.gardenActivityType[gn]){delete u.gardenActivityType[gn];changed=true}
+      if(u.gardenPayHistory&&u.gardenPayHistory[gn]){delete u.gardenPayHistory[gn];changed=true}
+    });
+    if(changed&&u.uid)updatedUids.add(u.uid);
+  });
+  localStorage.setItem('bz3_users',JSON.stringify(users));
+  if(window.fbDb){
+    for(const uid of updatedUids){
+      const u=users.find(x=>x.uid===uid);
+      if(!u)continue;
+      try{await fbDb.collection('users').doc(uid).set({gardens:u.gardens||[],gardenLimits:u.gardenLimits||{},gardenActivityType:u.gardenActivityType||{},gardenPayHistory:u.gardenPayHistory||{}},{merge:true})}catch(e){console.error('user sync failed for',uid,e)}
+    }
+  }
+  console.warn('[NETWORK CLEANUP]',new Date().toISOString(),'network:',networkName,'branches:',branchNames,'affectedUsers:',affectedUsersCount,'by:',(cu&&(cu.username||cu.name))||'unknown');
+  document.getElementById('net-cleanup-mo').style.display='none';
+  if(typeof renderAdm==='function')renderAdm();
+  if(typeof initApp==='function')initApp();
+  alert(`✓ נמחקו ${branches.length} סניפים של "${networkName}"\n• עודכנו ${updatedUids.size} מדריכות\n• ${recCount} דיווחים היסטוריים נשמרו\n\nכעת אפשר לייבא מחדש את הרשימה של הרשת.`);
+}
 function delGarden(name){const recs=DB.get('records')||[];const cnt=recs.filter(r=>r.garden===name).length;const users=DB.get('users')||[];const assignedTo=users.filter(u=>(u.gardens||[]).includes(name)).map(u=>u.name);const msg=`🗑 למחוק את הגן "${name}"?\n\n📊 ${cnt} דיווחים היסטוריים בגן זה — יישמרו אך יופיעו כ"חסרים ברשימה".\n${assignedTo.length?`👤 משויך ל-${assignedTo.length} מדריכות: ${assignedTo.join(', ')}\n`:''}\n⚠ הפעולה בלתי הפיכה. ניתן להוסיף בחזרה דרך לשונית "👻 חסרים ברשימה".`;if(!confirm(msg))return;console.warn('[GARDEN DELETE]',new Date().toISOString(),'name:',name,'records:',cnt,'assignedTo:',assignedTo,'by:',(cu&&(cu.username||cu.name))||'unknown');const g=DB.get('gardens')||[];const i=g.findIndex(x=>(typeof x==='string'?x:x.name)===name);if(i===-1)return;g.splice(i,1);DB.set('gardens',g);renderAdm();initApp()}
 function duplicateGarden(name){const g=DB.get('gardens')||[];const src=g.find(x=>(typeof x==='string'?x:x.name)===name);if(!src){alert('הגן לא נמצא');return}const srcObj=typeof src==='string'?{name:src}:src;const existingNames=new Set(g.map(x=>typeof x==='string'?x:x.name));let newName=srcObj.name+' (העתק)';let counter=2;while(existingNames.has(newName)){newName=srcObj.name+' (העתק '+counter+')';counter++}const suggested=prompt('שם הגן החדש:',newName);if(!suggested)return;const finalName=suggested.trim();if(!finalName){alert('שם ריק');return}if(existingNames.has(finalName)){alert('גן בשם זה כבר קיים');return}const copy={...srcObj,name:finalName,monthlyChildCounts:{}};if(srcObj.networkName){const branchSuggested=prompt('שם הסניף (אופציונלי, למשל "כפר סבא"):',srcObj.branchName||'');if(branchSuggested!==null){copy.branchName=branchSuggested.trim()||null}}delete copy.signedAt;g.push(copy);DB.set('gardens',g);if(window.fbDb){fbDb.collection('meta').doc('gardens').set({items:g},{merge:true}).catch(e=>console.error('cloud:',e))}renderAdm();initApp();setTimeout(()=>openGEdit(finalName),120)}
 async function syncMaterials(){if(!window.fbDb||!cu)return false;try{const snap=await fbDb.collection('materials').get();const recs=[];snap.forEach(d=>recs.push({...d.data(),_docId:d.id}));recs.sort((a,b)=>(b.uploadedAt||0)-(a.uploadedAt||0));localStorage.setItem('bz3_materials',JSON.stringify(recs));_matColorMap=null;return true}catch(e){console.error('materials sync failed:',e);return false}}
