@@ -3207,6 +3207,15 @@ function _matInstructorConstraintOK(matId, uid, gardens, instructorSeenMats){
   return _matAllowedForInstructor(matId, uid, instructorSeenMats);
 }
 // Score a candidate material for a given instructor's context.
+/* Prefer materials with 0 concurrent usage this week. If any exist, drop the shared
+   ones from the pool. This is a HARD filter, harder than the -50/-150/-300 scoring
+   penalty which can be overwhelmed by large per-garden bonuses. */
+function _preferZeroConcurrent(candidates, sharedMap){
+  if(!sharedMap || typeof sharedMap.get !== 'function') return candidates;
+  if(!candidates || candidates.length<2) return candidates;
+  const zero = candidates.filter(m => !(sharedMap.get(m.id) > 0));
+  return zero.length >= 1 ? zero : candidates;
+}
 function _scoreMaterial(mat, ctx){
   let score=0;
   const animal=(mat.animalName||mat.name||'').trim();
@@ -3544,7 +3553,8 @@ async function computeAnnualRotation(region, opts){
           }
           if(_relax>0)warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'relaxed_cooldown',msg:`שבוע ${weekISO}: הותרה חריגה מ${_relax===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ מערך זמין (מיקום ${batchIdx+1}/${T})`});
           const prevCat=(state.prevSlotCategories||{})[batchIdx];
-          const scored=pool.map(m=>{
+          const _prefPool_ps=_preferZeroConcurrent(pool,(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||null);
+          const scored=_prefPool_ps.map(m=>{
             let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()});
             // BIG bonus if this material's category matches the same slot in previous batch —
             // ensures every instructor sees the same category at the same offset each batch,
@@ -3647,7 +3657,8 @@ async function computeAnnualRotation(region, opts){
             continue;
           }
           if(_relaxG>0)warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'relaxed_cooldown',msg:`שבוע ${weekISO} קבוצה "${g.name||'?'}": הותרה חריגה מ${_relaxG===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ`});
-          const scored=pool.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
+          const _prefPool_sg=_preferZeroConcurrent(pool,(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||null);
+          const scored=_prefPool_sg.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
           scored.sort((a,b)=>b.score-a.score);
           newBatch.push(scored[0].m.id);
           usedInBatch.add(scored[0].m.id);
@@ -3697,7 +3708,8 @@ async function computeAnnualRotation(region, opts){
         continue;
       }
       if(_relaxA>0)warnings.push({weekISO,uid,name:u.name,type:'relaxed_cooldown',msg:`שבוע ${weekISO} ${u.name}: הותרה חריגה מ${_relaxA===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ מערך זמין`});
-      const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
+      const _prefCand_fa=_preferZeroConcurrent(candidates,(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||null);
+      const scored=_prefCand_fa.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
       scored.sort((a,b)=>b.score-a.score);
       const chosen=scored[0].m;
       weekAssignments[uid]=chosen.id;
