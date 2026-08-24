@@ -3354,7 +3354,87 @@ async function computeAnnualRotation(region, opts){
        below rather than being dropped. */
     let _actCluster=cluster;
     if(_actCluster.length>1){
-      // ===== SUPER-GROUP (linked groups) — pair-swap pattern =====
+      // ===== NEW: 3 pairs of 2 — driver-optimized pipeline (Shir's spec) =====
+      /* Cluster of exactly 3 sub-groups × 2 instructors each. Materials flow linearly:
+         Pair0 (entry) → Pair1 (middle) → Pair2 (exit). Every 2 weeks: shift + 2 new
+         materials enter Pair0. Within a pair, 2 materials swap between the 2
+         instructors between week 1 and week 2 of the batch. NO material ever repeats
+         at the same instructor within a year. Warm start: 3 different batches placed
+         in the 3 pairs at week 1. */
+      if(_actCluster.length===3 && _actCluster.every(g=>(g.instructorUids||[]).length===2)){
+        const superId=superIdOf(_actCluster);
+        if(!groupPipelines[superId+'::triple'])groupPipelines[superId+'::triple']={pairs:[null,null,null],lastShiftIdx:-1};
+        const state=groupPipelines[superId+'::triple'];
+        const shiftIdx=Math.floor(weekIdx/2);
+        const weekInShift=weekIdx%2;
+        // Union of all gardens in the super-cluster (for constraint filtering)
+        const allSuperGardens=[];_actCluster.forEach(g=>(g.instructorUids||[]).forEach(u=>{(gardensByUid[String(u)]||[]).forEach(gn=>{if(!allSuperGardens.includes(gn))allSuperGardens.push(gn)})}));
+        const allSuperUids=_actCluster.flatMap(g=>(g.instructorUids||[]).map(String));
+        /* Helper: pick 2 fresh materials for a pair that (a) haven't been used
+           anywhere in the super-cluster this year (b) fit season/holiday
+           (c) satisfy garden-no-repeat for ALL uids in super-cluster (they'll
+           each visit all 6 eventually) (d) satisfy per-instructor 4-week
+           category cooldown + 8-week family cooldown. */
+        const pickTwoFresh=()=>{
+          const _catOK=(m,uid)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
+          const _famOK=(m,uid)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=8};
+          let candidates=materials.filter(m=>
+            !globallyUsed.has(m.id) &&
+            _matSeasonFits(m,weekISO,holidayDates) &&
+            _matAllowedForGardens(m,allSuperGardens,gardensSeen) &&
+            allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)) &&
+            allSuperUids.every(uu=>_catOK(m,uu)) &&
+            allSuperUids.every(uu=>_famOK(m,uu))
+          );
+          if(candidates.length<2){candidates=materials.filter(m=>!globallyUsed.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&allSuperUids.every(uu=>_catOK(m,uu)))}
+          if(candidates.length<2){candidates=materials.filter(m=>!globallyUsed.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)))}
+          if(candidates.length<2){warnings.push({weekISO,superGroup:_actCluster.map(g=>g.name||'?').join('+'),type:'no_triple_pair_materials',msg:`אין מספיק מערכים חופשיים לסופר-קלסטר בשבוע ${weekISO} (נדרשים 2, זמינים ${candidates.length})`});return null}
+          const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens:allSuperGardens,gardensSeen,lastCategory:null,globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
+          scored.sort((a,b)=>b.score-a.score);
+          const chosen=[scored[0].m.id,scored[1].m.id];
+          chosen.forEach(id=>globallyUsed.add(id));
+          return chosen;
+        };
+        // On shift boundary (every 2 weeks): move batches down the pipeline + inject new at Pair0.
+        if(shiftIdx>state.lastShiftIdx){
+          if(state.lastShiftIdx<0){
+            // First shift — warm start: fill all 3 pairs with different fresh batches.
+            state.pairs[2]=pickTwoFresh(); // pair 2 (exit) — will only cover 2 instructors before exiting
+            state.pairs[1]=pickTwoFresh(); // pair 1 (middle) — will cover 4 instructors (pair1 + pair2)
+            state.pairs[0]=pickTwoFresh(); // pair 0 (entry) — will cover all 6 instructors
+          } else {
+            state.pairs[2]=state.pairs[1]; // middle → exit
+            state.pairs[1]=state.pairs[0]; // entry → middle
+            state.pairs[0]=pickTwoFresh(); // new batch at entry
+          }
+          state.lastShiftIdx=shiftIdx;
+        }
+        // Assign each pair's 2 instructors this week: inst0 gets mat[weekInShift], inst1 gets mat[(weekInShift+1)%2]
+        _actCluster.forEach((pair,pIdx)=>{
+          const mats=state.pairs[pIdx];
+          if(!mats)return;
+          const uids=(pair.instructorUids||[]).map(String);
+          uids.forEach((uid,pos)=>{
+            const matIdx=(pos+weekInShift)%2;
+            const matId=mats[matIdx];
+            if(!matId)return;
+            weekAssignments[uid]=matId;
+            const mat=materials.find(m=>m.id===matId);
+            if(mat){
+              const animal=(mat.animalName||mat.name||'').trim();
+              (gardensByUid[uid]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();if(animal)gardensSeen[gn].add(animal)});
+              if(!instructorSeenMats[uid])instructorSeenMats[uid]=new Set();
+              instructorSeenMats[uid].add(matId);
+              lastCategoryByUid[uid]=mat.category;
+              if(mat.category){if(!catLastWeekByUid[uid])catLastWeekByUid[uid]={};catLastWeekByUid[uid][mat.category]=weekIdx}
+              const _fam=_familyOf(mat,materials);
+              if(_fam){if(!familyLastWeekByUid[uid])familyLastWeekByUid[uid]={};familyLastWeekByUid[uid][_fam]=weekIdx}
+            }
+          });
+        });
+        continue;
+      }
+      // ===== SUPER-GROUP (linked groups) — pair-swap pattern (existing algorithm for OTHER configs) =====
       const N_sub=cluster.length;
       const subGroupSizes=cluster.map(g=>(g.instructorUids||[]).length);
       const K=subGroupSizes[0];
