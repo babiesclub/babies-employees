@@ -5291,7 +5291,9 @@ async function _nimgParse(){
   btn.disabled=true;btn.innerHTML='⏳ קלוד קורא את הטבלה...';
   document.getElementById('nimg-result').innerHTML='<div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">⏳ קלוד ויז\'ן מפרק את התמונה — זה יכול לקחת 15-30 שניות</div>';
   try{
-    const fn=window.fbFunctions.httpsCallable('parsenetworkscheduleimage');
+    /* Client-side timeout defaults to 70s; the CF is set to 540s, so we override
+       so the client waits long enough for Vision to finish on complex tables. */
+    const fn=window.fbFunctions.httpsCallable('parsenetworkscheduleimage',{timeout:540000});
     const res=await fn({imageBase64:window._nimgImage.base64,mimeType:window._nimgImage.mime,networkName:network,defaultCity:city,instructorName:instr.name,afterSchoolType:asrtype});
     const d=res.data||{};
     if(!d.branches||!d.branches.length){document.getElementById('nimg-result').innerHTML='<div style="background:#FEE2E2;color:#991B1B;padding:12px;border-radius:8px;font-size:12px">⚠ לא זוהו סניפים בתמונה. נסי תמונה ברורה יותר של אותה טבלה.</div>';btn.innerHTML='🧠 פרקי שוב';btn.disabled=false;return}
