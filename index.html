@@ -3363,10 +3363,15 @@ async function computeAnnualRotation(region, opts){
          in the 3 pairs at week 1. */
       if(_actCluster.length===3 && _actCluster.every(g=>(g.instructorUids||[]).length===2)){
         const superId=superIdOf(_actCluster);
-        if(!groupPipelines[superId+'::triple'])groupPipelines[superId+'::triple']={pairs:[null,null,null],lastShiftIdx:-1};
+        if(!groupPipelines[superId+'::triple'])groupPipelines[superId+'::triple']={pairs:[null,null,null],lastShiftIdx:-1,runCount:0};
         const state=groupPipelines[superId+'::triple'];
-        const shiftIdx=Math.floor(weekIdx/2);
-        const weekInShift=weekIdx%2;
+        /* Count only weeks where THIS code actually runs — holiday-full weeks and
+           holiday-only-lockdown weeks skip before reaching here, and shouldn't
+           consume "shift" slots. First real working week starts the pipeline. */
+        const runIdx=state.runCount;
+        const shiftIdx=Math.floor(runIdx/2);
+        const weekInShift=runIdx%2;
+        state.runCount++;
         // Union of all gardens in the super-cluster (for constraint filtering)
         const allSuperGardens=[];_actCluster.forEach(g=>(g.instructorUids||[]).forEach(u=>{(gardensByUid[String(u)]||[]).forEach(gn=>{if(!allSuperGardens.includes(gn))allSuperGardens.push(gn)})}));
         const allSuperUids=_actCluster.flatMap(g=>(g.instructorUids||[]).map(String));
