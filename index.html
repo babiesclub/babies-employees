@@ -3094,6 +3094,15 @@ function _matIsHolidayOnlyFor(mat, weekISO){
   if(wk.matchKeywords && wk.matchKeywords.some(k => n.includes(k))) return true;
   return false;
 }
+/* Reverse rule: a material that matches ANY holiday-only week is considered
+   "holiday-only" and must NEVER appear in a regular week. Prevents "דגים ראש
+   השנה" / "דבורה דבש" from being scheduled in October, November, etc. */
+function _matIsHolidayOnlyMaterial(mat){
+  for(const wISO in HOLIDAY_ONLY_WEEKS){
+    if(_matIsHolidayOnlyFor(mat, wISO)) return true;
+  }
+  return false;
+}
 // End-of-year materials: must only appear in the final stretch of the school year (June-August).
 // דגים = summer fish, לובסטר = summer lobster (memory: 'סוף שנה, קיץ' / 'אזור מאי-יולי').
 // "דגים - ראש השנה" is excluded (it's a Rosh Hashana material, not end-of-year).
@@ -3110,6 +3119,10 @@ function _matSeasonFits(mat, weekISO, holidayDates){
   // If the region doesn't have ≥2 matching materials, we don't lock (avoid year-repeats + empty cells).
   // window._activeHolidayLockdown is populated by the algorithm at the start of each run.
   if(HOLIDAY_ONLY_WEEKS[weekISO] && (window._activeHolidayLockdown||new Set()).has(weekISO) && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
+  // REVERSE rule: holiday-only material blocked from non-holiday weeks. If this
+  // week isn't in HOLIDAY_ONLY_WEEKS at all, or is in it but doesn't match this
+  // specific material's keywords/season → the material is out of place → block.
+  if(_matIsHolidayOnlyMaterial(mat) && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
   // End-of-year lockdown: fish/lobster only in summer months (June-August).
   if(_matIsEndOfYear(mat) && !END_OF_YEAR_MONTHS.includes(_monthOfISO(weekISO))) return false;
   const monthIdx=_monthOfISO(weekISO);
