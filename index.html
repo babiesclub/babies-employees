@@ -5300,7 +5300,10 @@ async function _nimgParse(){
     window._nimgResult={branches:_nimgProcessBranches(d.branches,durationMin),network,asrtype,instr,city,warnings:d.warnings||[],durationMin,institutionType};
     _nimgRenderResult();
   }catch(e){
-    document.getElementById('nimg-result').innerHTML=`<div style="background:#FEE2E2;color:#991B1B;padding:12px;border-radius:8px;font-size:12px">⚠ שגיאה: ${esc(e.message||String(e))}</div>`;
+    const msg=String(e.message||e||'');
+    const isTimeout=msg.includes('deadline-exceeded')||msg.includes('timeout');
+    const helpHtml=isTimeout?`<div style="margin-top:8px;padding:8px 10px;background:#FEF3C7;border:1px solid #F59E0B;color:#78350F;border-radius:6px;font-size:11px;line-height:1.5"><b>💡 מה עושים:</b><br>1. חתכי את התמונה לחצי (חצי עליון + חצי תחתון) והעלי בנפרד — נוצרים סניפים ומצטרפים לאותה רשת<br>2. תוודאי שהתמונה נקייה — בלי טקסט מיותר או שוליים לבנים גדולים<br>3. אם התמונה קטנה יחסית — נסי שוב, לפעמים זה טעות רשת חד־פעמית</div>`:'';
+    document.getElementById('nimg-result').innerHTML=`<div style="background:#FEE2E2;color:#991B1B;padding:12px;border-radius:8px;font-size:12px">⚠ שגיאה: ${esc(msg)}</div>${helpHtml}`;
     btn.innerHTML='🧠 פרקי שוב';btn.disabled=false;
   }
 }

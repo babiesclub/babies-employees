@@ -5753,7 +5753,7 @@ ${instructorName ? `- שם המדריכה: ${instructorName} (לידיעה).` : 
 // Returns branches[] with sessions[] (day, start, end, note) — client creates gardens
 // under networkName + assigns to a single instructor's weeklySchedule.
 exports.parsenetworkscheduleimage = onCall(
-  { region: "us-central1", timeoutSeconds: 120, memory: "512MiB", secrets: [anthropicApiKey] },
+  { region: "us-central1", timeoutSeconds: 540, memory: "1GiB", secrets: [anthropicApiKey] },
   async (req) => {
     await requireAdmin(req.auth);
     const { imageBase64, mimeType, networkName, defaultCity, instructorName, afterSchoolType } = req.data || {};
