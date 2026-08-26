@@ -3919,24 +3919,27 @@ async function _smartRotRun(){
       return html;
     };
     const previewHtml=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div style="font-weight:700;color:var(--mut);font-size:12px">👁 תצוגה מקדימה: ${window._smartRotPreviewFull?'כל השנה':'4 שבועות ראשונים'}</div><button class="btn-sec" style="font-size:11px;padding:4px 10px" onclick="_smartRotTogglePreview()">${window._smartRotPreviewFull?'הצג רק 4 שבועות':`הצג את כל ${r.proposal.length} השבועות`}</button></div><div style="max-height:400px;overflow-y:auto;border:1.5px solid var(--brd);border-radius:8px">${previewWeeks.map(w=>`<div style="padding:10px 12px;border-bottom:1px solid var(--brd)"><div style="font-weight:700;color:#7C3AED;font-size:12px;margin-bottom:6px">📅 ${esc(w.weekISO)}</div>${renderWeekBlock(w)}</div>`).join('')}</div>`;
-    const applyBtn=`<button class="btn-prim" style="width:100%;margin-top:12px;background:#059669" onclick="_smartRotApply()">✓ החל שיבוץ</button><div style="font-size:11px;color:var(--mut);margin-top:6px;line-height:1.5">💡 <b>הקפאה חכמה</b>: שיבוצים <b>קיימים</b> ב-14 הימים הקרובים נשמרים (מדריכות כבר יודעות עליהם). תאים <b>ריקים</b> בחלון הזה — כן ימולאו. שיבוצים לתאריכים העתידיים יידרסו.</div>`;
+    const applyBtn=`<button class="btn-prim" style="width:100%;margin-top:12px;background:#059669" onclick="_smartRotApply(false)">✓ החל שיבוץ (הקפאה חכמה)</button><button class="btn-prim" style="width:100%;margin-top:8px;background:#DC2626" onclick="_smartRotApply(true)">🔥 החל שיבוץ + דרוס גם את חלון ההקפאה</button><div style="font-size:11px;color:var(--mut);margin-top:6px;line-height:1.5">💡 <b>הקפאה חכמה</b>: שיבוצים <b>קיימים</b> ב-14 הימים הקרובים נשמרים (מדריכות כבר יודעות עליהם). תאים <b>ריקים</b> בחלון הזה — כן ימולאו.<br>🔥 <b>דריסה</b>: כשהחלת שינוי אלגוריתם (למשל pool ר״ה חדש) — משתמשים בזה כדי לוודא שגם השיבוצים הישנים בחלון ההקפאה יידרסו לחדשים.</div>`;
     resultEl.innerHTML=statsHtml+invHtml+warnHtml+previewHtml+applyBtn;
   }catch(e){resultEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px">שגיאה: ${esc(e.message||e)}</div>`}
 }
-async function _smartRotApply(){
+async function _smartRotApply(forceOverwriteFreeze){
   const r=window._lastRotProposal;if(!r)return;
-  if(!confirm('להחיל את השיבוץ המחושב על ה-weeklySchedule?\n\nכל שיבוץ שכבר קיים בשבועות העתידיים (מעבר לשבועיים הקרובים) יידרס.'))return;
+  const msg=forceOverwriteFreeze
+    ?'🔥 להחיל את השיבוץ ולדרוס גם את חלון ההקפאה (14 יום הקרובים)?\n\nהערה: מדריכות שכבר קיבלו הודעה על שיבוץ בשבועיים הקרובים — השיבוץ שלהן יידרס לגרסה החדשה.'
+    :'להחיל את השיבוץ המחושב על ה-weeklySchedule?\n\nכל שיבוץ שכבר קיים בשבועות העתידיים (מעבר לשבועיים הקרובים) יידרס. שיבוצים קיימים בחלון ההקפאה יישמרו.';
+  if(!confirm(msg))return;
   const btn=event.target;btn.disabled=true;btn.textContent='⏳ שומר...';
   try{
-    const res=await applyRotationProposal(r);
+    const res=await applyRotationProposal(r,{forceOverwriteFreeze:!!forceOverwriteFreeze});
     // Clear dirty flags for the regions that were computed and applied
     if(r.allRegions){REGIONS.forEach(rn=>clearRegionDirty(rn))}
     else if(r.region){clearRegionDirty(r.region)}
     if(window._lastRotProposalRegionForClear){clearRegionDirty(window._lastRotProposalRegionForClear);window._lastRotProposalRegionForClear=null}
-    alert(`✓ הוחל בהצלחה!\n\n✍ נכתבו ${res.written} שיבוצים חדשים${res.filledFrozen?` (מתוכם ${res.filledFrozen} מילאו תאים ריקים בחלון ההקפאה)`:''}\n🧹 נוקו ${res.cleared||0} שיבוצים ישנים ("רפאים")\n❄ ${res.frozenSkipped} שבועות בחלון הקפאה — שיבוצים קיימים נשמרו${res.errors.length?`\n⚠ ${res.errors.length} שגיאות`:''}`);
+    alert(`✓ הוחל בהצלחה!\n\n✍ נכתבו ${res.written} שיבוצים חדשים${res.filledFrozen?` (מתוכם ${res.filledFrozen} מילאו תאים ריקים בחלון ההקפאה)`:''}${res.overwroteFrozen?`\n🔥 ${res.overwroteFrozen} שיבוצים בחלון הקפאה נדרסו (כי בחרת 'דרוס')`:''}\n🧹 נוקו ${res.cleared||0} שיבוצים ישנים ("רפאים")\n❄ ${res.frozenSkipped} שבועות בחלון הקפאה — שיבוצים קיימים ${forceOverwriteFreeze?'נדרסו':'נשמרו'}${res.errors.length?`\n⚠ ${res.errors.length} שגיאות`:''}`);
     document.getElementById('smart-rot-mo').style.display='none';
     renderWschGrid();
-  }catch(e){alert('שגיאה: '+(e.message||e));btn.disabled=false;btn.textContent='✓ החל שיבוץ (שבוע הבא ואילך)'}
+  }catch(e){alert('שגיאה: '+(e.message||e));btn.disabled=false;btn.textContent='✓ החל שיבוץ'}
 }
 // Track which regions have had structural changes since last rotation recompute.
 // Shown as a banner at the top of the wsch panel — click to recompute for that region.
@@ -4235,14 +4238,16 @@ async function applyRotationProposal(result, opts){
   // Build a map: weekISO → set of uids assigned in the new proposal for that week
   const newAssignedByWeek={};
   result.proposal.forEach(w=>{newAssignedByWeek[w.weekISO]=new Set(Object.keys(w.assignments||{}).map(String))});
-  let written=0,cleared=0,filledFrozen=0;const frozenSkipped=[];const errors=[];
+  const forceOverwriteFreeze=!!opts.forceOverwriteFreeze;
+  let written=0,cleared=0,filledFrozen=0,overwroteFrozen=0;const frozenSkipped=[];const errors=[];
   // Phase 1: iterate the proposal weeks — clear covered uids' old assignments + write new.
   // Freeze semantics (weekISO < cutoff): per-uid, not per-week — protect uids that ALREADY have
   // an assignment in this week (instructors were already told), but FILL uids with empty slots
   // (nobody was told anything for them yet). This means a re-computed rotation still populates
   // 6.9 even when today is 26.8 and cutoff is 9.9.
+  // forceOverwriteFreeze=true bypasses the freeze entirely (used when the algorithm changed).
   for(const w of result.proposal){
-    const isFrozenWeek=w.weekISO<cutoff;
+    const isFrozenWeek=w.weekISO<cutoff && !forceOverwriteFreeze;
     const schedule=getWeeklySchedule();
     const existing=schedule[w.weekISO]||{};
     const existingAssigns=existing.assignments||{};
@@ -4256,14 +4261,16 @@ async function applyRotationProposal(result, opts){
       catch(e){errors.push({weekISO:w.weekISO,uid:existingUid,err:'clear: '+(e.message||String(e))})}
     }
     // Write new assignments — in frozen weeks, skip uids that already had a value.
+    const _isForcedOverwriteWeek=forceOverwriteFreeze && w.weekISO<cutoff;
     for(const[uid,matId] of Object.entries(w.assignments||{})){
       if(isFrozenWeek && existingAssigns[uid])continue;
+      if(_isForcedOverwriteWeek && existingAssigns[uid] && existingAssigns[uid]!==matId)overwroteFrozen++;
       try{await setWschAssignment(w.weekISO,uid,matId);written++;if(isFrozenWeek)filledFrozen++}
       catch(e){errors.push({weekISO:w.weekISO,uid,err:e.message||String(e)})}
     }
     if(isFrozenWeek)frozenSkipped.push(w.weekISO);
   }
-  return {written,cleared,frozenSkipped:frozenSkipped.length,filledFrozen,errors};
+  return {written,cleared,frozenSkipped:frozenSkipped.length,filledFrozen,overwroteFrozen,errors};
 }
 // Yellow card for virtual/pending instructor rows in the admin instructor list. Distinct from real instructor rows.
 function renderVirtualInstructorRow(v){const isArchived=(v.status==='archived');const bg=isArchived?'#F3F4F6':'#FEF3C7';const border=isArchived?'#9CA3AF':'#F59E0B';const fg=isArchived?'#4B5563':'#7B5C00';const icon=isArchived?'📦':'🕐';const statusTag=isArchived?'<span style="font-size:10px;color:white;background:#6B7280;padding:2px 7px;border-radius:8px;font-weight:700">📦 בארכיון</span>':'<span style="font-size:10px;color:white;background:#F59E0B;padding:2px 7px;border-radius:8px;font-weight:700">🕐 עתידית</span>';const regionBadge=v.region?`<span style="font-size:10px;color:white;background:${REGION_COLORS[v.region]||'#1565C0'};padding:2px 7px;border-radius:8px;font-weight:700">📍 ${esc(v.region)}</span>`:'<span style="font-size:10px;color:white;background:#DC2626;padding:2px 7px;border-radius:8px;font-weight:700">⚠ אין אזור</span>';const specLabel=v.specialty&&SPEC_LABELS[v.specialty]?`<span style="font-size:10px;color:${(SPEC_COLORS[v.specialty]||{}).fg||'white'};background:${(SPEC_COLORS[v.specialty]||{}).bg||'#888'};padding:2px 7px;border-radius:8px;font-weight:700">${SPEC_LABELS[v.specialty]}</span>`:'';const gCount=(v.gardens||[]).length;const gBadge=`<span style="font-size:10px;font-weight:700;background:${gCount>0?'#D8F3DC':'#FFEBEE'};color:${gCount>0?'#1B4332':'#C62828'};padding:2px 7px;border-radius:10px">🏫 ${gCount} גנים</span>`;const label=v.pendingLabel?`<div style="font-size:11px;color:${fg};margin-top:4px;font-style:italic">📝 ${esc(v.pendingLabel)}</div>`:'';const actions=isArchived?`<button class="btn-ed" style="background:#DCFCE7;border-color:#86EFAC;color:#166534;font-weight:700" onclick="restoreVirtualInstructor('${esc(v.id)}')" title="שחזור מהארכיון">↩ שחזור</button><button class="btn-dn" onclick="deleteVirtualInstructorHard('${esc(v.id)}')" title="מחיקה סופית">🗑</button>`:`<button class="btn-ed" style="background:#D1FAE5;border-color:#10B981;color:#065F46;font-weight:800" onclick="openConvertVirtualMo('${esc(v.id)}')" title="גייסת מדריכה — המירי לפעילה">🎉 גייסתי</button><button class="btn-ed" onclick="openAddVirtualInstructorMo('${esc(v.id)}')">✏</button><button class="btn-ed" style="background:#F3F4F6;border-color:#9CA3AF;color:#4B5563;font-weight:700" onclick="archiveVirtualInstructor('${esc(v.id)}')" title="העברה לארכיון">📦</button>`;return`<div style="background:${bg};border:1.5px solid ${border};border-radius:10px;padding:10px;margin-bottom:8px;position:relative"><div style="display:flex;align-items:center;gap:10px"><div style="width:36px;height:36px;background:${border};color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${icon}</div><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-weight:700;font-size:14px;color:${fg}">${esc(v.name||'ללא שם')}</span>${statusTag}${regionBadge}${specLabel}</div>${label}</div><div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${actions}</div></div><div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:5px">${gBadge}<span style="font-size:10px;font-weight:700;background:#EDE9FE;color:#5B21B6;padding:2px 7px;border-radius:10px" title="לא משתתפת בשכר, WhatsApp, או פרונט לקוחות">🚫 מוסתרת ממערכות תפעוליות</span></div></div>`}
