@@ -2430,14 +2430,14 @@ function _mySchedYmd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padSta
 function _mySchedWeekDates(weekOffset){const now=new Date();const dayOfWeek=now.getDay();const daysUntilSun=-dayOfWeek;const sunday=new Date(now);sunday.setDate(now.getDate()+daysUntilSun+weekOffset*7);sunday.setHours(0,0,0,0);const dates=[];for(let i=0;i<6;i++){const d=new Date(sunday);d.setDate(sunday.getDate()+i);dates.push(d)}return dates}
 function _mySchedFindReport(date,garden){const recs=DB.get('records')||[];return recs.find(r=>r.date===date&&r.garden===garden&&(r.instructorId==cu.id||r.instructorUid===cu.uid))||null}
 // Effective start of the school year work — after Rosh Hashanah + Yom Kippur + Sukkot weeks.
-const _MYSCHED_EFFECTIVE_START='2026-09-14';
-const _MYSCHED_EFFECTIVE_START_LABEL='שני, 14.9.26';
+const _MYSCHED_EFFECTIVE_START='2026-09-06';
+const _MYSCHED_EFFECTIVE_START_LABEL='ראשון, 6.9.26';
 async function renderMySchedule(){const el=document.getElementById('mysched-content');if(!el||!cu)return;const sched=cu.weeklySchedule||{0:[],1:[],2:[],3:[],4:[],5:[]};const weekDates=_mySchedWeekDates(_mySchedWeekOffset);const today=new Date();today.setHours(0,0,0,0);const todayStr=_mySchedYmd(today);if(_mySchedActiveDay===null){const todayIdx=weekDates.findIndex(d=>_mySchedYmd(d)===todayStr);_mySchedActiveDay=todayIdx>=0?todayIdx:0}const activeDate=weekDates[_mySchedActiveDay];const activeDateStr=_mySchedYmd(activeDate);const _activeParity=_weekParityFor(activeDate);const activeEntries=(sched[_mySchedActiveDay]||[]).map(_readEntry).filter(e=>_entryMatchesWeek(e,_activeParity)).slice().sort((a,b)=>(a.start||'').localeCompare(b.start||''));const allGardens=DB.get('gardens')||[];const gardenByName=new Map();allGardens.forEach(g=>{const o=typeof g==='string'?{name:g}:g;gardenByName.set(o.name,o)});const weekLabel=_mySchedWeekOffset===0?'השבוע':(_mySchedWeekOffset===-1?'שבוע שעבר':(_mySchedWeekOffset===1?'שבוע הבא':`שבוע +${_mySchedWeekOffset}`));const weekNav=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;background:white;border:1.5px solid var(--brd);border-radius:10px;padding:8px 12px"><button onclick="_mySchedNav(-1)" style="background:transparent;border:0;color:#2D6A4F;font-size:20px;cursor:pointer;font-family:inherit">▶</button><div style="flex:1;text-align:center"><div style="font-weight:700;font-size:13px;color:#2D6A4F">${esc(weekLabel)}</div><div style="font-size:11px;color:var(--mut)">${weekDates[0].getDate()}/${weekDates[0].getMonth()+1} - ${weekDates[5].getDate()}/${weekDates[5].getMonth()+1}</div></div><button onclick="_mySchedNav(1)" style="background:transparent;border:0;color:#2D6A4F;font-size:20px;cursor:pointer;font-family:inherit">◀</button></div>${_mySchedWeekOffset!==0?`<div style="text-align:center;margin-bottom:12px"><button onclick="_mySchedGoToday()" style="background:#2D6A4F;color:white;border:0;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit">חזרה להיום</button></div>`:''}`;const dayTabs=`<div style="display:flex;gap:4px;margin-bottom:14px;overflow-x:auto;padding-bottom:4px;direction:rtl">${weekDates.map((d,i)=>{const dStr=_mySchedYmd(d);const isToday=dStr===todayStr;const isActive=i===_mySchedActiveDay;const _parityD=_weekParityFor(d);const dayEntries=(sched[i]||[]).map(_readEntry).filter(e=>_entryMatchesWeek(e,_parityD));const cnt=dayEntries.length;const reportedCnt=dayEntries.filter(e=>e.garden&&_mySchedFindReport(dStr,e.garden)).length;const badge=cnt>0?(reportedCnt===cnt?' ✓':` ${reportedCnt}/${cnt}`):'';return `<button onclick="_mySchedSelectDay(${i})" style="flex:1;min-width:70px;background:${isActive?'#2D6A4F':'white'};color:${isActive?'white':'var(--text)'};border:1.5px solid ${isActive?'#2D6A4F':'var(--brd)'};padding:8px 4px;border-radius:8px;cursor:pointer;font-family:inherit;text-align:center;position:relative">${isToday?`<div style="font-size:9px;color:${isActive?'#FBC02D':'#F59E0B'};font-weight:700">היום</div>`:'<div style="font-size:9px;visibility:hidden">-</div>'}<div style="font-weight:700;font-size:12px">${esc(_mySchedDayNames[i])}</div><div style="font-size:11px;opacity:0.9">${d.getDate()}/${d.getMonth()+1}</div>${badge?`<div style="font-size:10px;font-weight:700;margin-top:2px">${badge}</div>`:''}</button>`}).join('')}</div>`;const hideContacts=!!cu.hideGardenContacts;const entriesHtml=activeEntries.length?activeEntries.map((e,idx)=>{const gObj=gardenByName.get(e.garden)||{name:e.garden};const addr=hideContacts?'':(gObj.address||'');const phone=hideContacts?'':(gObj.phone||'');const phoneClean=phone.replace(/\D/g,'').replace(/^0/,'972');const rec=e.garden?_mySchedFindReport(activeDateStr,e.garden):null;const isReported=rec&&rec.status!=='not_executed';const isNotExec=rec&&rec.status==='not_executed';const isPast=activeDateStr<todayStr;const isToday=activeDateStr===todayStr;const bg=isReported?'#E8F5E9':(isNotExec?'#FEE2E2':(isPast?'#FFF8E1':'white'));const border=isReported?'#52B788':(isNotExec?'#DC2626':(isPast?'#F59E0B':'#B8B8B8'));const timeStr=e.start&&e.end?`${e.start}-${e.end}`:(e.start||'');const contactLinks=[addr?`<a href="https://maps.google.com/?q=${encodeURIComponent(addr)}" target="_blank" style="color:#1565C0;text-decoration:none;font-size:11px;background:#E1F2FA;padding:2px 8px;border-radius:6px">📍 מפה</a>`:'',phone?`<a href="tel:${esc(phone)}" style="color:#1565C0;text-decoration:none;font-size:11px;background:#E1F2FA;padding:2px 8px;border-radius:6px">📞 חייג</a>`:'',phoneClean?`<a href="https://wa.me/${phoneClean}" target="_blank" style="color:#25D366;text-decoration:none;font-size:11px;background:#D8F3DC;padding:2px 8px;border-radius:6px">💬 WA</a>`:''].filter(Boolean).join(' ');let statusFooter='';if(isReported){const rt=rec.createdAt?new Date(rec.createdAt).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'';statusFooter=`<div style="margin-top:8px;padding:6px 10px;background:#52B788;color:white;border-radius:6px;font-size:11px;font-weight:700;text-align:center">✓ דווח${rt?' · '+rt:''}</div>`}else if(isNotExec){const reason=rec.notExecutedReason||'';statusFooter=`<div style="margin-top:8px;padding:6px 10px;background:#DC2626;color:white;border-radius:6px;font-size:11px;font-weight:700;text-align:center">❌ לא בוצע · ${esc(reason)}</div>`}else{const canReport=activeDateStr<=todayStr;const dayStr=String(_mySchedActiveDay);const idxStr=String(idx);statusFooter=`<div style="margin-top:8px;display:flex;gap:6px">${canReport?`<button onclick="_mySchedReport(${dayStr},${idxStr},'${activeDateStr}')" style="flex:1;background:#52B788;color:white;border:0;padding:10px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit">✓ דווח שבוצע</button>`:`<div style="flex:1;padding:9px;background:#F5F5F5;color:#888;border:1.5px dashed #BBB;border-radius:6px;font-size:11px;text-align:center;font-weight:600">🔒 יתאפשר ביום עצמו</div>`}<button onclick="_mySchedNotExec(${dayStr},${idxStr},'${activeDateStr}')" style="flex:1;background:white;color:#DC2626;border:1.5px solid #DC2626;padding:9px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit">❌ לא בוצע</button></div>`}const addrText=addr?`<div style="font-size:12px;color:#0C4A6E;margin-top:3px;line-height:1.4;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><a href="https://maps.google.com/?q=${encodeURIComponent(addr)}" target="_blank" style="color:#1565C0;text-decoration:none">📍 ${esc(addr)}</a>${phone?`<a href="tel:${esc(phone)}" title="חייגי לאיש קשר של ${esc(e.garden||'')}" style="background:#D8F3DC;border:1px solid #52B788;color:#1B4332;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;text-decoration:none">📞</a>`:''}</div>`:(phone?`<div style="margin-top:3px"><a href="tel:${esc(phone)}" title="חייגי לאיש קשר של ${esc(e.garden||'')}" style="background:#D8F3DC;border:1px solid #52B788;color:#1B4332;border-radius:6px;padding:2px 10px;font-size:12px;font-weight:700;text-decoration:none">📞 איש קשר</a></div>`:'');const biBadge=e.biweekly?`<span style="font-size:10px;font-weight:700;background:#EDE9FE;color:#5B21B6;padding:2px 8px;border-radius:10px;margin-right:6px" title="לסרוגין — מופיע רק בשבוע ${_BIWEEKLY_LABEL[e.weekParity||0]}">🔄 שבוע ${_BIWEEKLY_LABEL[e.weekParity||0]}</span>`:'';const _timeHtml=timeStr?`<div style="font-size:16px;font-weight:800;color:#0C4A6E;background:#E1F2FA;padding:6px 12px;border-radius:8px;margin-top:6px;display:inline-block;border:1.5px solid #90CDF4">🕐 ${esc(timeStr)}</div>`:`<div style="font-size:12px;font-weight:700;color:#991B1B;background:#FEE2E2;padding:5px 10px;border-radius:8px;margin-top:6px;display:inline-block;border:1.5px solid #FCA5A5">⚠ לא הוזנה שעה — פני לאדמין</div>`;const _phoneRowHtml=(phone&&!hideContacts)?`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px"><span style="color:#666;font-weight:600">📞 ${esc(gObj.contactName||gObj.branchName||'איש קשר')}:</span><a href="tel:${esc(phone)}" style="color:#1B4332;background:#D8F3DC;padding:3px 10px;border-radius:6px;text-decoration:none;font-weight:700;border:1px solid #52B788">${esc(phone)}</a>${phoneClean?`<a href="https://wa.me/${phoneClean}" target="_blank" style="color:#075E54;background:#DCFCE7;padding:3px 10px;border-radius:6px;text-decoration:none;font-weight:700;border:1px solid #25D366">💬 WA</a>`:''}</div>`:'';return `<div style="background:${bg};border:2px solid ${border};border-radius:10px;padding:12px;margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;margin-bottom:6px"><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:15px;color:#2D6A4F">🌿 ${esc(e.garden||'(ללא גן)')}${biBadge}</div>${_timeHtml}${addrText}${_phoneRowHtml}${e.note?`<div style="font-size:11px;color:#7B5C00;background:#FFF8E1;padding:4px 8px;border-radius:5px;margin-top:4px">📝 ${esc(e.note)}</div>`:''}</div></div>${statusFooter}</div>`}).join(''):'<div style="text-align:center;padding:30px;color:var(--mut);font-size:13px;background:white;border:1.5px dashed var(--brd);border-radius:10px">🌴 אין שיבוצים ליום זה</div>';const activeDayLabel=_mySchedDayNames[_mySchedActiveDay];const activeDayDate=`${activeDate.getDate()}/${activeDate.getMonth()+1}/${activeDate.getFullYear()}`;const _hasAnyBiweekly=Object.values(sched||{}).some(arr=>(arr||[]).some(x=>_readEntry(x)&&_readEntry(x).biweekly));const _wkBadge=_hasAnyBiweekly?`<div style="font-size:11px;font-weight:700;margin-top:4px;background:#EDE9FE;color:#5B21B6;padding:3px 10px;border-radius:10px;display:inline-block">🔄 שבוע ${_BIWEEKLY_LABEL[_activeParity]}</div>`:'';const dayHeader=`<div style="background:#2D6A4F;color:white;border-radius:10px;padding:12px;margin-bottom:12px;text-align:center"><div style="font-size:11px;opacity:0.8">${activeDateStr===todayStr?'🎯 היום':(activeDateStr<todayStr?'📜 עבר':'📅 עתידי')}</div><div style="font-size:16px;font-weight:800;margin-top:2px">יום ${esc(activeDayLabel)} · ${esc(activeDayDate)}</div><div style="font-size:11px;opacity:0.9;margin-top:2px">${activeEntries.length} שיבוצים</div>${_wkBadge}</div>`;const _nowD=new Date();_nowD.setHours(0,0,0,0);const _rhStart=new Date(_MYSCHED_EFFECTIVE_START+'T00:00:00');/* Note for anyone whose weekly schedule includes afterschool sessions.
    Uses conditional wording ("if you have צהרונים") so it's fine to show to
    all instructors — the message self-selects for who it applies to. */
 const _asrStart=new Date('2026-09-08T00:00:00');
-const _asrNoteHtml=(_nowD<_asrStart)?`<div style="margin-top:10px;padding:8px 10px;background:#FFF7ED;border:1.5px solid #FB923C;border-radius:8px;font-size:12px;color:#9A3412;font-weight:700">🎒 <b>אבל שימי לב</b> — אם משובצים לך צהרונים אז מתחילים כבר ב־<b style="background:white;padding:2px 8px;border-radius:6px">שלישי, 8.9.26</b> — לפני שאר הגנים!</div>`:'';
-const rhBanner=_nowD<_rhStart?`<div style="background:linear-gradient(135deg,#FEF3C7,#FED7AA);border:2px solid #F59E0B;border-radius:12px;padding:16px;margin-bottom:14px;text-align:center;box-shadow:0 2px 8px rgba(245,158,11,0.15)"><div style="font-size:32px;margin-bottom:6px">🍎🍯🍎</div><div style="font-size:16px;font-weight:800;color:#7B1D1D;margin-bottom:6px">שנה טובה ומתוקה!</div><div style="font-size:13px;color:#7B5C00;line-height:1.7">המערכת השבועית שלך מוכנה, אבל <b>מתחילים לעבוד אחרי ראש השנה</b> 🎉<br>מועד תחילת השנה: <b style="background:white;padding:2px 10px;border-radius:8px;color:#7B1D1D">${_MYSCHED_EFFECTIVE_START_LABEL}</b><br><span style="font-size:11px;color:#9A3412">בינתיים אפשר לעבור על השיבוצים ולוודא שהכל תקין ✨</span>${_asrNoteHtml}</div></div>`:'';el.innerHTML=rhBanner+weekNav+dayTabs+dayHeader+entriesHtml}
+const _asrNoteHtml=(_nowD<_asrStart)?`<div style="margin-top:10px;padding:8px 10px;background:#FFF7ED;border:1.5px solid #FB923C;border-radius:8px;font-size:12px;color:#9A3412;font-weight:700">🎒 <b>שימי לב</b> — אם משובצים לך צהרונים אז הצהרונים מתחילים ב־<b style="background:white;padding:2px 8px;border-radius:6px">שלישי, 8.9.26</b></div>`:'';
+const rhBanner=_nowD<_rhStart?`<div style="background:linear-gradient(135deg,#FEF3C7,#FED7AA);border:2px solid #F59E0B;border-radius:12px;padding:16px;margin-bottom:14px;text-align:center;box-shadow:0 2px 8px rgba(245,158,11,0.15)"><div style="font-size:32px;margin-bottom:6px">🍎🍯🍎</div><div style="font-size:16px;font-weight:800;color:#7B1D1D;margin-bottom:6px">שנה טובה ומתוקה!</div><div style="font-size:13px;color:#7B5C00;line-height:1.7">המערכת השבועית שלך מוכנה 🎉<br>פתיחת שנת הפעילות: <b style="background:white;padding:2px 10px;border-radius:8px;color:#7B1D1D">${_MYSCHED_EFFECTIVE_START_LABEL}</b><br><span style="font-size:11px;color:#9A3412">בינתיים אפשר לעבור על השיבוצים ולוודא שהכל תקין ✨</span>${_asrNoteHtml}</div></div>`:'';el.innerHTML=rhBanner+weekNav+dayTabs+dayHeader+entriesHtml}
 function _mySchedSelectDay(i){_mySchedActiveDay=i;renderMySchedule()}
 function _mySchedNav(dir){_mySchedWeekOffset+=dir;_mySchedActiveDay=null;renderMySchedule()}
 function _mySchedGoToday(){_mySchedWeekOffset=0;_mySchedActiveDay=null;renderMySchedule()}
@@ -3058,7 +3058,7 @@ async function submitVirtualInstructor(id){const name=document.getElementById('a
 // - Score-based selection for free-agent instructors (individual rotation)
 // - Per-garden no-repeat rule tracked via plan state
 // - 2-week freeze from today (current week + next stay untouched when applying)
-const SCHOOL_YEAR = { start: '2026-09-13', end: '2027-08-06' }; // Sept 13 2026 (Sun) → end of Jul 2027
+const SCHOOL_YEAR = { start: '2026-09-06', end: '2027-08-06' }; // Sept 6 2026 (Sun) → end of Jul 2027
 const HOLIDAYS_5787 = {
   rosh_hashana: '2026-09-12',
   purim: '2027-03-02',
@@ -3082,9 +3082,9 @@ function _isWinter(monthIdx){return monthIdx===11||monthIdx===0||monthIdx===1}
 // Match by seasonality tag (matchSeasons) OR by keyword in material name (matchKeywords). Either one is enough.
 // Duplicates are allowed — all instructors in a region can share the same holiday material so all gardens get it.
 const HOLIDAY_ONLY_WEEKS = {
-  '2026-09-13': {name:'ראש השנה',     matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
-  '2026-09-20': {name:'יום כיפור',    matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
-  '2026-09-27': {name:'סוכות',        matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2026-09-06': {name:'שבוע פתיחה — ראש השנה', matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2026-09-13': {name:'ראש השנה',              matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2026-09-20': {name:'יום כיפור',             matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2027-03-14': {name:'מתחפשים פורים', matchSeasons:['near_purim','before_purim'],                    matchKeywords:['פורים','טווס']},
   '2027-03-21': {name:'פורים',        matchSeasons:['near_purim','before_purim'],                    matchKeywords:['פורים','טווס']},
   '2027-05-09': {name:'יום העצמאות',   matchSeasons:['before_independence_day'],                       matchKeywords:['עצמאות','דואר']},
@@ -3121,7 +3121,8 @@ function _matIsEndOfYear(mat){
 }
 function _matSeasonFits(mat, weekISO, holidayDates){
   // Rule: during a holiday week WITH enough holiday materials, allow only holiday-specific materials.
-  // If the region doesn't have ≥2 matching materials, we don't lock (avoid year-repeats + empty cells).
+  // With FEWER matching materials than region pairs, we DON'T lock — a non-holiday "filler" material
+  // is allowed so pairs can rotate without seeing the same material twice.
   // window._activeHolidayLockdown is populated by the algorithm at the start of each run.
   if(HOLIDAY_ONLY_WEEKS[weekISO] && (window._activeHolidayLockdown||new Set()).has(weekISO) && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
   // REVERSE rule: holiday-only material blocked from non-holiday weeks. If this
@@ -3227,6 +3228,11 @@ function _scoreMaterial(mat, ctx){
   if(ctx.lastCategory && mat.category===ctx.lastCategory) score -= 20;
   // Criterion 3: seasonal/holiday materials get a boost when their window is active
   if(mat.seasonality && mat.seasonality!=='any') score += 8;
+  // Strong holiday-week bonus: when the week is one of the HOLIDAY_ONLY_WEEKS and this
+  // material matches (e.g. דבורה / דגים-ראש-השנה during the 3 RH weeks), give it a big
+  // boost so RH materials dominate but non-RH "filler" can still fill remaining slots
+  // when pair rotation demands it (with only 2 RH materials across 3 weeks).
+  if(ctx.weekISO && HOLIDAY_ONLY_WEEKS[ctx.weekISO] && _matIsHolidayOnlyFor(mat, ctx.weekISO)) score += 300;
   // Freshness: strong preference for materials that haven't been used anywhere yet in the plan.
   // Bumped from 15 → 120 so unused materials compete effectively with the per-garden bonus (100/garden).
   if(ctx.globallyUsed && !ctx.globallyUsed.has(mat.id)) score += 120;
@@ -3263,10 +3269,12 @@ async function computeAnnualRotation(region, opts){
   const holidayDates=opts.holidayDates||HOLIDAYS_5787;
   const materials=getMaterials().filter(m=>!m.excludeFromAuto);
   if(!materials.length) return { region, error:'אין מערכים זמינים באלגוריתם. ודאי שיש מערכים ושלא מסומנים "אל-אוטומטי".' };
-  // Precompute which holiday weeks have ENOUGH matching materials to justify a lockdown (≥2).
-  // Weeks below this threshold fall through to normal Latin Square — the material still gets priority via seasonality scoring.
+  // Precompute which holiday weeks have ≥1 matching material and should route through the
+  // holiday branch (below). That branch pools holiday materials + top-scored fillers to avoid
+  // per-instructor repetition across consecutive holiday weeks, and blocks the pipeline from
+  // shifting RH materials into non-RH weeks (e.g. 27.9 onwards).
   window._activeHolidayLockdown=new Set();
-  Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{const cnt=materials.filter(m=>_matIsHolidayOnlyFor(m,wISO)).length;if(cnt>=2)window._activeHolidayLockdown.add(wISO)});
+  Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{const cnt=materials.filter(m=>_matIsHolidayOnlyFor(m,wISO)).length;if(cnt>=1)window._activeHolidayLockdown.add(wISO)});
   // Gather instructors in region (real active + virtual pending)
   const realUsers=(DB.get('users')||[]).filter(u=>u.role!=='admin'&&_hasSpec(u,'animals')&&!u.offboarded);
   const virtUsers=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]).filter(v=>_hasSpec(v,'animals'));
@@ -3330,25 +3338,51 @@ async function computeAnnualRotation(region, opts){
     // Rule: min 2 distinct holiday materials required for lockdown (so per-instructor no-repeat can be satisfied across the holiday weeks).
     if(HOLIDAY_ONLY_WEEKS[weekISO] && (window._activeHolidayLockdown||new Set()).has(weekISO)){
       const holidayMats=materials.filter(m=>_matIsHolidayOnlyFor(m,weekISO));
-      if(holidayMats.length>=2){
+      if(holidayMats.length>=1){
+        /* Pool = holiday materials + top-scored NON-holiday fillers, so per-instructor no-repeat
+           is satisfied even when there are fewer holiday materials than holiday weeks
+           (e.g. 2 RH materials × 3 RH weeks → need at least 1 filler so nobody sees the same
+           material twice). Cluster size = how many active holiday weeks share overlapping seasons
+           with this week — drives the min pool size. */
+        const _myWeekSeasons=HOLIDAY_ONLY_WEEKS[weekISO].matchSeasons||[];
+        const _clusterSize=Object.keys(HOLIDAY_ONLY_WEEKS).filter(w=>{
+          if(!(window._activeHolidayLockdown||new Set()).has(w))return false;
+          const s=HOLIDAY_ONLY_WEEKS[w].matchSeasons||[];
+          return s.some(x=>_myWeekSeasons.includes(x));
+        }).length||1;
+        const _minPool=Math.max(_clusterSize, holidayMats.length);
+        let _pool=holidayMats.slice();
+        if(_pool.length<_minPool){
+          // Pick fillers: NOT holiday-only-materials, fit this week's season, not globally used,
+          // scored by _scoreMaterial. Take enough to reach _minPool.
+          const _fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFits(m,weekISO,holidayDates)&&!globallyUsed.has(m.id));
+          const _fscored=_fillerCandidates.map(m=>({m,score:_scoreMaterial(m,{gardens:[],gardensSeen,lastCategory:null,globallyUsed,weekISO,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
+          _fscored.sort((a,b)=>b.score-a.score);
+          for(const f of _fscored){if(_pool.length>=_minPool)break;_pool.push(f.m)}
+        }
         const weekAssignmentsH={};
         const _allUids=[];
         superGroups.forEach(cluster=>cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>_allUids.push(String(u)))));
         freeAgents.forEach(u=>_allUids.push(String(uidOf(u))));
         // Rotate assignment each holiday week: offset by weekIdx so an instructor doesn't get the same material twice.
-        // Also track per-instructor which holiday mats they've already had, and skip them if another is available.
+        // Also track per-instructor which pool mats they've already had, and skip them if another is available.
         _allUids.forEach((uid,idx)=>{
           const seenH=instructorSeenMats[uid]||new Set();
           // Try to pick a material this instructor hasn't had yet.
           let mat=null;
-          for(let off=0;off<holidayMats.length;off++){
-            const cand=holidayMats[(idx+weekIdx+off)%holidayMats.length];
+          for(let off=0;off<_pool.length;off++){
+            const cand=_pool[(idx+weekIdx+off)%_pool.length];
             if(!seenH.has(cand.id)){mat=cand;break}
           }
-          // Fallback: if all have been seen (more holiday weeks than materials), use the rotating pick.
-          if(!mat)mat=holidayMats[(idx+weekIdx)%holidayMats.length];
+          // Fallback: if all have been seen (more holiday weeks than pool), use the rotating pick.
+          if(!mat)mat=_pool[(idx+weekIdx)%_pool.length];
           weekAssignmentsH[uid]=mat.id;
           instructorSeenMats[uid]=seenH;seenH.add(mat.id);
+          /* Intentionally NOT calling globallyUsed.add here — we WANT the same filler
+             to remain pickable across the 3 RH weeks so all instructors see the same
+             3-material pool without week-to-week filler substitution. */
+          const _matAnimal=(mat.animalName||mat.name||'').trim();
+          if(_matAnimal){(gardensByUid[uid]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();gardensSeen[gn].add(_matAnimal)})}
           catLastWeekByUid[uid]=catLastWeekByUid[uid]||{};
           if(mat.category)catLastWeekByUid[uid][mat.category]=weekIdx;
           familyLastWeekByUid[uid]=familyLastWeekByUid[uid]||{};
@@ -3358,6 +3392,8 @@ async function computeAnnualRotation(region, opts){
         });
         // Reset group pipelines so the next batch starts fresh after the holiday window.
         superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id]){groupPipelines[id].batchStartWeekIdx=null;groupPipelines[id].batch=[];groupPipelines[id].prevSlotCategories={}}});
+        // Also reset the triple-pair pipeline state so it starts fresh POST-RH (from 27.9 onwards).
+        superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id+'::triple']){groupPipelines[id+'::triple']={pairs:[null,null,null],lastShiftIdx:-1,runCount:0}}});
         proposal.push({weekISO,assignments:weekAssignmentsH,holidayOnly:true});
         continue;
       }
@@ -3423,7 +3459,7 @@ async function computeAnnualRotation(region, opts){
             }
             /* zero-concurrent = 0 → keep all candidates, let scoring pick least-shared */
           }
-          const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens:allSuperGardens,gardensSeen,lastCategory:null,globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
+          const scored=candidates.map(m=>({m,score:_scoreMaterial(m,{gardens:allSuperGardens,gardensSeen,lastCategory:null,globallyUsed,weekISO,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
           scored.sort((a,b)=>b.score-a.score);
           const chosen=[scored[0].m.id,scored[1].m.id];
           chosen.forEach(id=>globallyUsed.add(id));
@@ -3555,7 +3591,7 @@ async function computeAnnualRotation(region, opts){
           const prevCat=(state.prevSlotCategories||{})[batchIdx];
           const _prefPool_ps=_preferZeroConcurrent(pool,(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||null);
           const scored=_prefPool_ps.map(m=>{
-            let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()});
+            let score=_scoreMaterial(m,{gardens:contextGardens,gardensSeen,lastCategory:lastCategoryByUid[contextUid],globallyUsed,weekISO,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()});
             // BIG bonus if this material's category matches the same slot in previous batch —
             // ensures every instructor sees the same category at the same offset each batch,
             // which respects the 4-week cooldown perfectly.
@@ -3658,7 +3694,7 @@ async function computeAnnualRotation(region, opts){
           }
           if(_relaxG>0)warnings.push({weekISO,groupId:g.id,groupName:g.name||'קבוצה',type:'relaxed_cooldown',msg:`שבוע ${weekISO} קבוצה "${g.name||'?'}": הותרה חריגה מ${_relaxG===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ`});
           const _prefPool_sg=_preferZeroConcurrent(pool,(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||null);
-          const scored=_prefPool_sg.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
+          const scored=_prefPool_sg.map(m=>({m,score:_scoreMaterial(m,{gardens:gardensByUid[uids[slot]]||[],gardensSeen,lastCategory:lastCategoryByUid[uids[slot]],globallyUsed,weekISO,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
           scored.sort((a,b)=>b.score-a.score);
           newBatch.push(scored[0].m.id);
           usedInBatch.add(scored[0].m.id);
@@ -3709,7 +3745,7 @@ async function computeAnnualRotation(region, opts){
       }
       if(_relaxA>0)warnings.push({weekISO,uid,name:u.name,type:'relaxed_cooldown',msg:`שבוע ${weekISO} ${u.name}: הותרה חריגה מ${_relaxA===1?'קירור משפחתי':'קירור קטגוריה+משפחה'} כדי לשבץ מערך זמין`});
       const _prefCand_fa=_preferZeroConcurrent(candidates,(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||null);
-      const scored=_prefCand_fa.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
+      const scored=_prefCand_fa.map(m=>({m,score:_scoreMaterial(m,{gardens,gardensSeen,lastCategory:lastCategoryByUid[uid],globallyUsed,weekISO,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
       scored.sort((a,b)=>b.score-a.score);
       const chosen=scored[0].m;
       weekAssignments[uid]=chosen.id;
