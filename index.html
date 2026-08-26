@@ -3318,8 +3318,26 @@ async function computeAnnualRotation(region, opts){
     let pool=holMats.slice();
     if(pool.length<minPool){
       const fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFitsIgnoreLockdown(m,anchorWISO,opts.holidayDates||HOLIDAYS_5787));
-      // Score based on anchor week — no sharedThisWeek variance across weeks
-      const fscored=fillerCandidates.map(m=>({m,score:_scoreMaterial(m,{gardens:[],gardensSeen:{},lastCategory:null,globallyUsed:new Set(),weekISO:anchorWISO,weekMonthIdx:_monthOfISO(anchorWISO),sharedThisWeek:new Set()})}));
+      /* CONCENTRATE fillers across regions: PREFER materials another region already picked as
+         RH filler. This means ONE filler serves all regions in the cluster → fewer unique
+         materials in circulation. (Total copies is similar either way, but fewer distinct
+         animals to duplicate/manage physically.) */
+      const _sharedMaxAcrossCluster=(m)=>{
+         let max=0;
+         clusterWeeks.forEach(w=>{
+           const wk=opts.sharedWeekUsage&&opts.sharedWeekUsage[w];
+           if(!wk)return;
+           const cnt=(typeof wk.get==='function')?(wk.get(m.id)||0):(wk.has&&wk.has(m.id)?1:0);
+           if(cnt>max)max=cnt;
+         });
+         return max;
+      };
+      const fscored=fillerCandidates.map(m=>{
+        const baseScore=_scoreMaterial(m,{gardens:[],gardensSeen:{},lastCategory:null,globallyUsed:new Set(),weekISO:anchorWISO,weekMonthIdx:_monthOfISO(anchorWISO),sharedThisWeek:new Set()});
+        const sharedMax=_sharedMaxAcrossCluster(m);
+        // BONUS: +200 per prior region already using this filler → concentrate on one filler across all regions
+        return {m,score:baseScore+(sharedMax*200)};
+      });
       fscored.sort((a,b)=>b.score-a.score);
       for(const f of fscored){if(pool.length>=minPool)break;pool.push(f.m)}
     }
