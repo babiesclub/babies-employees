@@ -3119,6 +3119,29 @@ function _matIsEndOfYear(mat){
   if(n.includes('ראש השנה')) return false; // Rosh Hashana fish are separate
   return END_OF_YEAR_MATERIAL_KEYWORDS.some(k => n === k || n.startsWith(k+' ') || n.startsWith(k+'-') || n.startsWith(k+'–') || n.startsWith(k+'—'));
 }
+/* Same as _matSeasonFits but WITHOUT the hard holiday-week lockdown filter.
+   Used when explicitly picking non-holiday "fillers" for a holiday week — we WANT them
+   to pass even though the lockdown normally blocks non-holiday materials. Still applies
+   reverse rule, end-of-year rule, winter rule, and standard seasonality windows. */
+function _matSeasonFitsIgnoreLockdown(mat, weekISO, holidayDates){
+  if(_matIsHolidayOnlyMaterial(mat) && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
+  if(_matIsEndOfYear(mat) && !END_OF_YEAR_MONTHS.includes(_monthOfISO(weekISO))) return false;
+  const monthIdx=_monthOfISO(weekISO);
+  const catInfo=MAT_CATEGORIES[mat.category]||{};
+  if(catInfo.winterRisky && _isWinter(monthIdx)) return false;
+  const seas=mat.seasonality||'any';
+  if(seas==='any') return true;
+  if(SEASON_HOLIDAY_WINDOWS[seas]){
+    const w=SEASON_HOLIDAY_WINDOWS[seas];
+    const hDate=holidayDates[w.holidayKey];
+    if(!hDate) return true;
+    const daysUntil=_isoDiffDays(weekISO, hDate);
+    return daysUntil>=0 && daysUntil<=w.daysBefore;
+  }
+  const seasDef=MAT_SEASONALITY[seas];
+  if(seasDef && seasDef.months && !seasDef.months.includes(monthIdx)) return false;
+  return true;
+}
 function _matSeasonFits(mat, weekISO, holidayDates){
   // Rule: during a holiday week WITH enough holiday materials, allow only holiday-specific materials.
   // With FEWER matching materials than region pairs, we DON'T lock — a non-holiday "filler" material
@@ -3355,7 +3378,7 @@ async function computeAnnualRotation(region, opts){
         if(_pool.length<_minPool){
           // Pick fillers: NOT holiday-only-materials, fit this week's season, not globally used,
           // scored by _scoreMaterial. Take enough to reach _minPool.
-          const _fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFits(m,weekISO,holidayDates)&&!globallyUsed.has(m.id));
+          const _fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFitsIgnoreLockdown(m,weekISO,holidayDates)&&!globallyUsed.has(m.id));
           const _fscored=_fillerCandidates.map(m=>({m,score:_scoreMaterial(m,{gardens:[],gardensSeen,lastCategory:null,globallyUsed,weekISO,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
           _fscored.sort((a,b)=>b.score-a.score);
           for(const f of _fscored){if(_pool.length>=_minPool)break;_pool.push(f.m)}
