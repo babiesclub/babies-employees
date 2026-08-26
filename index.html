@@ -3808,10 +3808,22 @@ async function computeAnnualRotation(region, opts){
     }
     proposal.push({weekISO,assignments:weekAssignments});
   }
+  /* Algorithm version — visible in results panel so a stale browser cache is caught early.
+     Bump this whenever the RH-cluster pool logic changes. */
+  const _algoVersion='2026-08-26/RH-pool-v3';
+  /* Snapshot which pool actually got used for each holiday cluster — surfaces in the UI so
+     the admin can verify "yes, the 3-material pool for RH ran". */
+  const _holidayPoolSnapshot={};
+  Object.entries(_holidayPoolByCluster).forEach(([w,p])=>{
+    if(_holidayPoolSnapshot[w])return;
+    _holidayPoolSnapshot[w]=(p||[]).map(m=>({id:m.id,name:m.name,isHoliday:_matIsHolidayOnlyMaterial(m)}));
+  });
   return {
     region,startISO,endISO,
     weeksCount:weeks.length,
     proposal,warnings,
+    algoVersion:_algoVersion,
+    holidayPoolSnapshot:_holidayPoolSnapshot,
     stats:{
       instructorsTotal:allInRegion.length,
       inGroups:allInRegion.length-freeAgents.length,
@@ -3892,7 +3904,14 @@ async function _smartRotRun(){
     const totalAssignments=r.proposal.reduce((s,w)=>s+Object.keys(w.assignments||{}).length,0);
     const regionsLine=r.allRegions?`<div style="grid-column:span 2;padding:6px 8px;background:white;border-radius:6px;font-weight:700">🌍 <b>${r.stats.regionsCovered}</b> אזורים חושבו${r.stats.regionsSkipped>0?` · ${r.stats.regionsSkipped} דולגו (ראי למטה)`:''}</div>`:'';
     const skippedHtml=(r.allRegions&&r.skippedRegions&&r.skippedRegions.length)?`<details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:11px;color:#78350F;font-weight:700;padding:6px 10px;background:#FEF3C7;border-radius:6px">⚠ אזורים שדולגו (${r.skippedRegions.length})</summary><div style="padding:8px 12px;font-size:11px;color:#78350F;background:#FFFBEB;border-radius:0 0 6px 6px">${r.skippedRegions.map(s=>`• <b>${esc(s.region)}</b>: ${esc(s.error)}`).join('<br>')}</div></details>`:'';
-    const statsHtml=`<div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-weight:700;color:#0C4A6E;font-size:13px;margin-bottom:8px">📊 סיכום ההצעה</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px;color:#075985">${regionsLine}<div>📅 שבועות: <b>${r.weeksCount}</b></div><div>🧑 מדריכות: <b>${r.stats.instructorsTotal}</b> (${r.stats.freeAgents} חופשיות, ${r.stats.inGroups} בקבוצות)</div><div>🔄 קבוצות רוטציה: <b>${r.stats.groupsCount}</b></div><div>📦 מערכים בשימוש: <b>${r.stats.materialsUsed}</b>/${r.stats.materialsAvailable}</div><div style="grid-column:span 2">✍ סה"כ שיבוצים: <b>${totalAssignments}</b></div></div></div>${skippedHtml}`;
+    /* Show which materials landed in the RH cluster pool — visible confirmation that the
+       3-material pool logic ran. If missing, admin can tell the cache is stale. */
+    const _snap=(r.perRegion&&r.perRegion[0]&&r.perRegion[0].holidayPoolSnapshot)||r.holidayPoolSnapshot||{};
+    const _rhWeek=Object.keys(_snap).find(w=>w>='2026-09-06'&&w<='2026-09-20');
+    const _rhPool=_rhWeek?_snap[_rhWeek]:null;
+    const _ver=(r.perRegion&&r.perRegion[0]&&r.perRegion[0].algoVersion)||r.algoVersion||'?';
+    const rhPoolHtml=_rhPool?`<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:8px;padding:8px 10px;margin-bottom:12px;font-size:12px;color:#78350F"><b>🧩 Pool ר״ה (משותף ל-3 שבועות):</b> ${_rhPool.map(m=>`<span style="background:${m.isHoliday?'#DBEAFE':'#DCFCE7'};color:${m.isHoliday?'#1E40AF':'#166534'};padding:2px 8px;border-radius:6px;font-weight:600;margin:0 2px">${m.isHoliday?'🍎':'🧩'} ${esc(m.name)}</span>`).join('')} <span style="opacity:0.7;font-size:10px">· אלגוריתם ${esc(_ver)}</span></div>`:'';
+    const statsHtml=rhPoolHtml+`<div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-weight:700;color:#0C4A6E;font-size:13px;margin-bottom:8px">📊 סיכום ההצעה</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px;color:#075985">${regionsLine}<div>📅 שבועות: <b>${r.weeksCount}</b></div><div>🧑 מדריכות: <b>${r.stats.instructorsTotal}</b> (${r.stats.freeAgents} חופשיות, ${r.stats.inGroups} בקבוצות)</div><div>🔄 קבוצות רוטציה: <b>${r.stats.groupsCount}</b></div><div>📦 מערכים בשימוש: <b>${r.stats.materialsUsed}</b>/${r.stats.materialsAvailable}</div><div style="grid-column:span 2">✍ סה"כ שיבוצים: <b>${totalAssignments}</b></div></div></div>${skippedHtml}`;
     const warnCount=(r.warnings||[]).length;
     const warnHtml=warnCount?`<details style="margin-bottom:12px" open><summary style="cursor:pointer;font-weight:700;color:#B45309;font-size:12px;padding:8px 12px;background:#FEF3C7;border-radius:8px;border:1.5px solid #F59E0B">⚠ ${warnCount} התרעות שיבוץ (לחצי לפרטים)</summary><div style="max-height:200px;overflow-y:auto;background:#FFFBEB;border:1.5px solid #FDE68A;border-radius:0 0 8px 8px;padding:8px 12px;margin-top:-1px">${r.warnings.slice(0,50).map(w=>`<div style="font-size:11px;color:#78350F;padding:4px 0;border-bottom:1px solid #FDE68A">📅 <b>${esc(w.weekISO)}</b> — ${esc(w.msg)}</div>`).join('')}${warnCount>50?`<div style="font-size:11px;color:#78350F;padding:6px 0;text-align:center;font-style:italic">... ועוד ${warnCount-50} התרעות</div>`:''}</div></details>`:'<div style="background:#D1FAE5;border:1.5px solid #10B981;color:#065F46;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px">✓ אין התרעות שיבוץ — כל שבוע קיבל שיבוץ תקין</div>';
     // Inventory alerts (physical material shortages)
