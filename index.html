@@ -3331,12 +3331,11 @@ async function computeAnnualRotation(region, opts){
   const inGroupUids=new Set();
   groupsInRegion.forEach(g=>(g.instructorUids||[]).forEach(uid=>inGroupUids.add(String(uid))));
   const freeAgents=allInRegion.filter(u=>!inGroupUids.has(uidOf(u)));
-  /* Precompute a STABLE, SIZE-SCALED pool per holiday-cluster.
-     - Pool size = MAX(clusterSize, holMats, uidsInRegion) so each uid sees a UNIQUE mat per week
-       (peak concurrent per mat = 1 → only 1 physical copy needed per mat).
-     - All weeks in the same cluster share the same pool → rotation gives each uid each mat once.
-     - Fillers are SPREAD across regions (penalty for shared usage) to avoid one filler dominating. */
-  const _regionUidCount=allInRegion.length;
+  /* Precompute a STABLE pool per holiday-cluster.
+     Pool size = MAX(clusterSize=3, holMats=2) = 3. Same across all regions. All uids in the
+     region rotate through this 3-mat pool over the 3 RH weeks. Uids will see the same 3 mats
+     in rotating order; some mats appear at up to CEIL(regionSize/3) concurrent copies in a week.
+     Fillers are SPREAD across regions (penalty for shared usage) to distribute inventory load. */
   const _seenClusterKeys=new Set();
   const _clusterKeyFor=wISO=>((HOLIDAY_ONLY_WEEKS[wISO]||{}).matchSeasons||[]).slice().sort().join('|');
   Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{
@@ -3348,9 +3347,7 @@ async function computeAnnualRotation(region, opts){
     const clusterSize=clusterWeeks.length;
     const anchorWISO=clusterWeeks[0];
     const holMats=materials.filter(m=>_matIsHolidayOnlyFor(m,anchorWISO));
-    // Pool size = uidsInRegion (so peak=1 per mat) but at least clusterSize (for no-repeat rotation)
-    // and at least holMats.length (to include all RH mats).
-    const minPool=Math.max(clusterSize,holMats.length,_regionUidCount);
+    const minPool=Math.max(clusterSize,holMats.length);
     let pool=holMats.slice();
     if(pool.length<minPool){
       const fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFitsIgnoreLockdown(m,anchorWISO,opts.holidayDates||HOLIDAYS_5787));
@@ -3811,7 +3808,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v4-dynamic';
+  const _algoVersion='2026-08-26/RH-pool-v5-fixed3';
   /* Snapshot which pool actually got used for each holiday cluster — surfaces in the UI so
      the admin can verify "yes, the 3-material pool for RH ran". */
   const _holidayPoolSnapshot={};
