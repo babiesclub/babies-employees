@@ -678,7 +678,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <div id="wsch-title" style="flex:1;text-align:center;font-weight:700;font-size:16px;color:var(--p)"></div>
             <button class="btn-sec" id="wsch-next-btn" onclick="wschNextMonth()">חודש הבא ►</button>
             <button class="btn-sec" id="wsch-view-toggle" style="background:#F3E5F5;border-color:#7C3AED;color:#5B21B6;font-weight:700" onclick="toggleWschViewMode()">📆 כל השנה</button>
-            <button class="btn-sec" style="background:#DCFCE7;border-color:#16A34A;color:#14532D;font-weight:700" onclick="exportWschToXls()" title="ייצוא הטבלה כפי שהיא מוצגת (עם צבעים ועיצוב) לקובץ Excel">📊 ייצא לאקסל</button>
+            <button class="btn-sec" style="background:#DCFCE7;border-color:#16A34A;color:#14532D;font-weight:700" onclick="exportWschToCsv()" title="ייצוא הטבלה כפי שהיא מוצגת ל-CSV שנפתח באקסל">📊 ייצא לאקסל</button>
           </div>
           <div id="wsch-grid" style="overflow-x:auto"></div>
         </div>
@@ -4440,86 +4440,7 @@ function getWeeklySchedule(){try{return JSON.parse(localStorage.getItem('bz3_wee
 function wschPrevMonth(){_wschViewMonth.setMonth(_wschViewMonth.getMonth()-1);renderWschGrid()}
 function wschNextMonth(){_wschViewMonth.setMonth(_wschViewMonth.getMonth()+1);renderWschGrid()}
 function toggleWschViewMode(){_wschViewMode=(_wschViewMode==='month')?'year':'month';renderWschGrid()}
-/* Export the currently displayed schedule matrix to an HTML file with .xls extension.
-   Excel opens .xls-named HTML with the inline styles (colors, borders, RTL) preserved —
-   giving the user the same visual as the app. UTF-8 BOM ensures Hebrew loads correctly. */
-function exportWschToXls(){
-  try{
-    const users=DB.get('users')||[];
-    const _realA=users.filter(u=>u.role!=='admin'&&_hasSpec(u,'animals')&&!u.offboarded);
-    const _virtA=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]).filter(v=>_hasSpec(v,'animals'));
-    const animalInstructors=[..._realA,..._virtA];
-    const instructorsByRegion={};const unassigned=[];
-    REGIONS.forEach(r=>instructorsByRegion[r]=[]);
-    animalInstructors.forEach(u=>{const r=inferInstructorRegion(u);if(r&&instructorsByRegion[r])instructorsByRegion[r].push(u);else unassigned.push(u)});
-    const instrInRegion=(_wschRegion==='_unassigned')?unassigned:(instructorsByRegion[_wschRegion]||[]);
-    const groupsInR=(_rotGroups||[]).filter(g=>g.regionName===_wschRegion);
-    const groupedUids=new Set();groupsInR.forEach(g=>(g.instructorUids||[]).forEach(uid=>groupedUids.add(String(uid))));
-    const freeInstr=instrInRegion.filter(u=>!groupedUids.has(String(u.uid||u.id))).sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
-    const subTabs=[];const _seen=new Set();
-    groupsInR.forEach(g=>{if(_seen.has(g.id))return;const cluster=[];const _q=[g.id];const _in=new Set();while(_q.length){const cur=_q.shift();if(_in.has(cur))continue;_in.add(cur);_seen.add(cur);const grp=groupsInR.find(gg=>gg.id===cur);if(!grp)continue;cluster.push(grp);(grp.linkedGroupIds||[]).forEach(o=>{if(!_in.has(o))_q.push(o)})}const merged=[];cluster.forEach(gg=>{(gg.instructorUids||[]).forEach(uid=>{const u=instrInRegion.find(uu=>String(uu.uid||uu.id)===String(uid));if(u&&!merged.find(x=>String(x.uid||x.id)===String(u.uid||u.id)))merged.push(u)})});if(!merged.length)return;subTabs.push({key:'g:'+cluster.map(gg=>gg.id).sort().join('|'),instructors:merged,isGroup:true})});
-    if(freeInstr.length||!subTabs.length)subTabs.push({key:'free',instructors:freeInstr,isGroup:false});
-    const _hasAny=subTabs.some(t=>t.isGroup);
-    if(_hasAny&&(subTabs.filter(t=>t.isGroup).length>1||freeInstr.length)){const _all=instrInRegion.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));subTabs.unshift({key:'all',instructors:_all,isGroup:false,isAll:true})}
-    const activeSub=subTabs.find(t=>t.key===_wschSubTab)||subTabs[0];
-    const instructors=_wschApplyColOrder(activeSub?activeSub.instructors.slice():[]);
-    const materials=getMaterials();const matById={};materials.forEach(m=>matById[m.id]=m);
-    const schedule=getWeeklySchedule();
-    const weeks=[];
-    if(_wschViewMode==='year'){const[ys,ms,ds]=SCHOOL_YEAR.start.split('-').map(n=>parseInt(n,10));const[ye,me,de]=SCHOOL_YEAR.end.split('-').map(n=>parseInt(n,10));const startDt=getSunday(new Date(ys,ms-1,ds));const endDt=new Date(ye,me-1,de);let curr=new Date(startDt);while(curr<=endDt){weeks.push(new Date(curr));curr.setDate(curr.getDate()+7)}}
-    else {const firstDay=new Date(_wschViewMonth.getFullYear(),_wschViewMonth.getMonth(),1);const lastDay=new Date(_wschViewMonth.getFullYear(),_wschViewMonth.getMonth()+1,0);let curr=getSunday(firstDay);while(curr<=lastDay){weeks.push(new Date(curr));curr.setDate(curr.getDate()+7)}}
-    const esc2=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    let html='<html dir="rtl"><head><meta charset="UTF-8"><style>'
-      +'body{font-family:Arial,sans-serif}'
-      +'table{border-collapse:collapse;direction:rtl}'
-      +'th,td{border:1px solid #999;padding:8px 10px;text-align:center;font-size:12px}'
-      +'thead th{background:#1565C0;color:white;font-weight:bold}'
-      +'.date-cell{background:#FFF8E1;color:#7B5C00;font-weight:bold}'
-      +'.holiday-cell{background:#FFF3E0;color:#7C2D12;font-weight:bold}'
-      +'.fullweek-row{background:#FEE2E2;color:#991B1B;font-weight:bold;text-align:center}'
-      +'</style></head><body>';
-    html+='<h2>שיבוצים — '+esc2(_wschRegion==='_unassigned'?'ללא אזור':_wschRegion)+'</h2>';
-    html+='<table><thead><tr>';
-    html+='<th>תאריך</th>';
-    instructors.forEach(u=>{html+='<th>'+esc2(u.name||'?')+'</th>'});
-    html+='</tr></thead><tbody>';
-    weeks.forEach(ws=>{
-      const weekId=formatDateISO(ws);
-      const weekEnd=new Date(ws);weekEnd.setDate(weekEnd.getDate()+6);
-      const dateLabel=formatDateDisplay(ws)+' - '+formatDateDisplay(weekEnd);
-      const holiday=getHolidayForWeek(weekId);
-      const weekData=schedule[weekId]||{assignments:{}};
-      html+='<tr>';
-      const dateCls=holiday?'holiday-cell':'date-cell';
-      const holidayLabel=holiday?'<br><span style="font-size:10px;font-weight:normal">'+esc2(holiday.fullWeek?'🎉 '+holiday.name:'⚠ '+holiday.name)+'</span>':'';
-      html+='<td class="'+dateCls+'">'+esc2(dateLabel)+holidayLabel+'</td>';
-      if(holiday&&holiday.fullWeek){
-        html+='<td colspan="'+instructors.length+'" class="fullweek-row">🎉 '+esc2(holiday.name)+' — אין פעילות השבוע</td>';
-      } else {
-        instructors.forEach(u=>{
-          const uid=u.uid||u.id;
-          const matId=weekData.assignments[uid]||'';
-          const mat=matById[matId];
-          const bg=matId?(typeof matColorFor==='function'?matColorFor(matId):'#F5F5F5'):'#F5F5F5';
-          const text=mat?mat.name:'';
-          const fg=matId?'#000':'#888';
-          html+='<td style="background:'+bg+';color:'+fg+';font-weight:600">'+esc2(text)+'</td>';
-        });
-      }
-      html+='</tr>';
-    });
-    html+='</tbody></table></body></html>';
-    const blob=new Blob(['﻿'+html],{type:'application/vnd.ms-excel;charset=utf-8'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    const monthLabel=(_wschViewMode==='year')?'שנה-מלאה':((_wschViewMonth.getMonth()+1)+'-'+_wschViewMonth.getFullYear());
-    const fname='שיבוצים - '+(_wschRegion==='_unassigned'?'ללא אזור':_wschRegion)+' - '+monthLabel+'.xls';
-    a.href=url;a.download=fname;
-    document.body.appendChild(a);a.click();
-    setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url)},100);
-  }catch(e){alert('שגיאה בייצוא: '+(e.message||e))}
-}
-/* Legacy CSV export (kept for potential future use) */
+/* Export the currently displayed schedule matrix to a CSV file with UTF-8 BOM so Excel opens Hebrew correctly. */
 function exportWschToCsv(){
   try{
     const users=DB.get('users')||[];
