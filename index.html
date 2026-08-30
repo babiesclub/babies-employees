@@ -3298,8 +3298,7 @@ async function computeAnnualRotation(region, opts){
   // shifting RH materials into non-RH weeks (e.g. 27.9 onwards).
   window._activeHolidayLockdown=new Set();
   Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{const cnt=materials.filter(m=>_matIsHolidayOnlyFor(m,wISO)).length;if(cnt>=1)window._activeHolidayLockdown.add(wISO)});
-  // Holiday pool computed AFTER freeAgents is known (below) — pool size scales with region uid count.
-  const _holidayPoolByCluster={};
+  // Holiday pools are computed AFTER freeAgents is known (below) — one pool PER rotation group + one for free agents.
   // Gather instructors in region (real active + virtual pending)
   const realUsers=(DB.get('users')||[]).filter(u=>u.role!=='admin'&&_hasSpec(u,'animals')&&!u.offboarded);
   const virtUsers=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]).filter(v=>_hasSpec(v,'animals'));
@@ -3331,12 +3330,14 @@ async function computeAnnualRotation(region, opts){
   const inGroupUids=new Set();
   groupsInRegion.forEach(g=>(g.instructorUids||[]).forEach(uid=>inGroupUids.add(String(uid))));
   const freeAgents=allInRegion.filter(u=>!inGroupUids.has(uidOf(u)));
-  /* Precompute a STABLE, SIZE-SCALED pool per holiday-cluster.
-     Pool size = MAX(clusterSize=3, holMats=2, regionUidCount).
-     For a region of N instructors, pool holds N mats (2 RH + N-2 fillers).
-     Result: each instructor sees a UNIQUE mat per week → peak concurrent = 1 → only 1 physical copy per mat.
-     Fillers are SPREAD across regions (penalty for shared usage) to distribute inventory load. */
-  const _regionUidCount=allInRegion.length;
+  /* Precompute per-GROUP pools for each holiday cluster (RH, Purim, etc).
+     Each rotation group in the region gets its OWN pool of MAX(3, groupSize) mats
+     (2 RH + fillers to reach groupSize). All members of the group rotate through
+     their group's pool → Latin Square within the group.
+     Free agents share a separate pool sized to their count.
+     Fillers are SPREAD across groups (used-set) so groups don't share fillers within a region.
+     _holidayGroupPools[clusterKey] = { [groupId or '_free']: pool_array } */
+  const _holidayGroupPools={};
   const _seenClusterKeys=new Set();
   const _clusterKeyFor=wISO=>((HOLIDAY_ONLY_WEEKS[wISO]||{}).matchSeasons||[]).slice().sort().join('|');
   Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{
@@ -3348,30 +3349,42 @@ async function computeAnnualRotation(region, opts){
     const clusterSize=clusterWeeks.length;
     const anchorWISO=clusterWeeks[0];
     const holMats=materials.filter(m=>_matIsHolidayOnlyFor(m,anchorWISO));
-    const minPool=Math.max(clusterSize,holMats.length,_regionUidCount);
-    let pool=holMats.slice();
-    if(pool.length<minPool){
-      const fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFitsIgnoreLockdown(m,anchorWISO,opts.holidayDates||HOLIDAYS_5787));
-      const _sharedMaxAcrossCluster=(m)=>{
-         let max=0;
-         clusterWeeks.forEach(w=>{
-           const wk=opts.sharedWeekUsage&&opts.sharedWeekUsage[w];
-           if(!wk)return;
-           const cnt=(typeof wk.get==='function')?(wk.get(m.id)||0):(wk.has&&wk.has(m.id)?1:0);
-           if(cnt>max)max=cnt;
-         });
-         return max;
-      };
-      const fscored=fillerCandidates.map(m=>{
-        const baseScore=_scoreMaterial(m,{gardens:[],gardensSeen:{},lastCategory:null,globallyUsed:new Set(),weekISO:anchorWISO,weekMonthIdx:_monthOfISO(anchorWISO),sharedThisWeek:new Set()});
-        const sharedMax=_sharedMaxAcrossCluster(m);
-        return {m,score:baseScore-(sharedMax*500)};
-      });
-      fscored.sort((a,b)=>b.score-a.score);
-      for(const f of fscored){if(pool.length>=minPool)break;pool.push(f.m)}
+    _holidayGroupPools[key]={};
+    const usedFillersInRegion=new Set(); // Spread fillers across groups within this region
+    const _sharedMaxAcrossCluster=(m)=>{
+       let max=0;
+       clusterWeeks.forEach(w=>{
+         const wk=opts.sharedWeekUsage&&opts.sharedWeekUsage[w];
+         if(!wk)return;
+         const cnt=(typeof wk.get==='function')?(wk.get(m.id)||0):(wk.has&&wk.has(m.id)?1:0);
+         if(cnt>max)max=cnt;
+       });
+       return max;
+    };
+    const buildPool=(bucketSize)=>{
+      const minPool=Math.max(clusterSize,holMats.length,bucketSize);
+      const pool=holMats.slice();
+      if(pool.length<minPool){
+        const fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFitsIgnoreLockdown(m,anchorWISO,opts.holidayDates||HOLIDAYS_5787)&&!usedFillersInRegion.has(m.id));
+        const fscored=fillerCandidates.map(m=>{
+          const baseScore=_scoreMaterial(m,{gardens:[],gardensSeen:{},lastCategory:null,globallyUsed:new Set(),weekISO:anchorWISO,weekMonthIdx:_monthOfISO(anchorWISO),sharedThisWeek:new Set()});
+          const sharedMax=_sharedMaxAcrossCluster(m);
+          return {m,score:baseScore-(sharedMax*500)};
+        });
+        fscored.sort((a,b)=>b.score-a.score);
+        for(const f of fscored){if(pool.length>=minPool)break;pool.push(f.m);usedFillersInRegion.add(f.m.id)}
+      }
+      return pool;
+    };
+    // Per rotation group in region
+    superGroups.forEach(cluster=>cluster.forEach(g=>{
+      const size=(g.instructorUids||[]).length;
+      _holidayGroupPools[key][g.id]=buildPool(size);
+    }));
+    // Free agents get a shared pool
+    if(freeAgents.length){
+      _holidayGroupPools[key]['_free']=buildPool(freeAgents.length);
     }
-    const _poolCached=pool;
-    clusterWeeks.forEach(w=>{_holidayPoolByCluster[w]=_poolCached});
   });
   // State (accumulates across weeks)
   const gardensSeen={};
@@ -3404,45 +3417,46 @@ async function computeAnnualRotation(region, opts){
     // which will still prefer the holiday material via seasonality scoring but won't force it 4× per week.
     // Rule: min 2 distinct holiday materials required for lockdown (so per-instructor no-repeat can be satisfied across the holiday weeks).
     if(HOLIDAY_ONLY_WEEKS[weekISO] && (window._activeHolidayLockdown||new Set()).has(weekISO)){
-      const _pool=_holidayPoolByCluster[weekISO]||[];
-      if(_pool.length>=1){
-        const weekAssignmentsH={};
-        const _allUids=[];
-        superGroups.forEach(cluster=>cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>_allUids.push(String(u)))));
-        freeAgents.forEach(u=>_allUids.push(String(uidOf(u))));
-        // Rotate assignment each holiday week: offset by weekIdx so an instructor doesn't get the same material twice.
-        // Also track per-instructor which pool mats they've already had, and skip them if another is available.
-        _allUids.forEach((uid,idx)=>{
-          const seenH=instructorSeenMats[uid]||new Set();
-          // Try to pick a material this instructor hasn't had yet.
+      const _clusterKey=_clusterKeyFor(weekISO);
+      const _groupPools=_holidayGroupPools[_clusterKey]||{};
+      const weekAssignmentsH={};
+      // Helper: assign a bucket of uids to rotate through their pool
+      const _assignBucket=(uids,pool)=>{
+        if(!pool||!pool.length||!uids.length)return;
+        uids.forEach((uid,idx)=>{
+          const uidStr=String(uid);
+          const seenH=instructorSeenMats[uidStr]||new Set();
           let mat=null;
-          for(let off=0;off<_pool.length;off++){
-            const cand=_pool[(idx+weekIdx+off)%_pool.length];
+          for(let off=0;off<pool.length;off++){
+            const cand=pool[(idx+weekIdx+off)%pool.length];
             if(!seenH.has(cand.id)){mat=cand;break}
           }
-          // Fallback: if all have been seen (more holiday weeks than pool), use the rotating pick.
-          if(!mat)mat=_pool[(idx+weekIdx)%_pool.length];
-          weekAssignmentsH[uid]=mat.id;
-          instructorSeenMats[uid]=seenH;seenH.add(mat.id);
-          /* Intentionally NOT calling globallyUsed.add here — we WANT the same filler
-             to remain pickable across the 3 RH weeks so all instructors see the same
-             3-material pool without week-to-week filler substitution. */
+          if(!mat)mat=pool[(idx+weekIdx)%pool.length];
+          weekAssignmentsH[uidStr]=mat.id;
+          instructorSeenMats[uidStr]=seenH;seenH.add(mat.id);
           const _matAnimal=(mat.animalName||mat.name||'').trim();
-          if(_matAnimal){(gardensByUid[uid]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();gardensSeen[gn].add(_matAnimal)})}
-          catLastWeekByUid[uid]=catLastWeekByUid[uid]||{};
-          if(mat.category)catLastWeekByUid[uid][mat.category]=weekIdx;
-          familyLastWeekByUid[uid]=familyLastWeekByUid[uid]||{};
+          if(_matAnimal){(gardensByUid[uidStr]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();gardensSeen[gn].add(_matAnimal)})}
+          catLastWeekByUid[uidStr]=catLastWeekByUid[uidStr]||{};
+          if(mat.category)catLastWeekByUid[uidStr][mat.category]=weekIdx;
+          familyLastWeekByUid[uidStr]=familyLastWeekByUid[uidStr]||{};
           const fam=_familyOf(mat,materials);
-          if(fam)familyLastWeekByUid[uid][fam]=weekIdx;
-          lastCategoryByUid[uid]=mat.category||lastCategoryByUid[uid];
+          if(fam)familyLastWeekByUid[uidStr][fam]=weekIdx;
+          lastCategoryByUid[uidStr]=mat.category||lastCategoryByUid[uidStr];
         });
-        // Reset group pipelines so the next batch starts fresh after the holiday window.
-        superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id]){groupPipelines[id].batchStartWeekIdx=null;groupPipelines[id].batch=[];groupPipelines[id].prevSlotCategories={}}});
-        // Also reset the triple-pair pipeline state so it starts fresh POST-RH (from 27.9 onwards).
-        superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id+'::triple']){groupPipelines[id+'::triple']={pairs:[null,null,null],lastShiftIdx:-1,runCount:0}}});
-        proposal.push({weekISO,assignments:weekAssignmentsH,holidayOnly:true});
-        continue;
+      };
+      // Per rotation group: use group's own pool → Latin Square within group
+      superGroups.forEach(cluster=>cluster.forEach(g=>{
+        _assignBucket((g.instructorUids||[]).map(String),_groupPools[g.id]);
+      }));
+      // Free agents share a pool
+      if(freeAgents.length){
+        _assignBucket(freeAgents.map(u=>String(uidOf(u))),_groupPools['_free']);
       }
+      // Reset pipelines so post-holiday work starts fresh
+      superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id]){groupPipelines[id].batchStartWeekIdx=null;groupPipelines[id].batch=[];groupPipelines[id].prevSlotCategories={}}});
+      superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id+'::triple']){groupPipelines[id+'::triple']={pairs:[null,null,null],lastShiftIdx:-1,runCount:0}}});
+      proposal.push({weekISO,assignments:weekAssignmentsH,holidayOnly:true});
+      continue;
     }
     const weekAssignments={};
     // Rotation groups — Latin Square (single) or pair-swap (linked super-group)
@@ -3809,13 +3823,24 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v6-dynamic';
-  /* Snapshot which pool actually got used for each holiday cluster — surfaces in the UI so
-     the admin can verify "yes, the 3-material pool for RH ran". */
+  const _algoVersion='2026-08-26/RH-pool-v7-per-group';
+  /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
+     Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
-  Object.entries(_holidayPoolByCluster).forEach(([w,p])=>{
-    if(_holidayPoolSnapshot[w])return;
-    _holidayPoolSnapshot[w]=(p||[]).map(m=>({id:m.id,name:m.name,isHoliday:_matIsHolidayOnlyMaterial(m)}));
+  const _matSnap=(mArr)=>(mArr||[]).map(m=>({id:m.id,name:m.name,isHoliday:_matIsHolidayOnlyMaterial(m)}));
+  Object.entries(_holidayGroupPools).forEach(([clusterKey,perGroup])=>{
+    const anchorW=Object.keys(HOLIDAY_ONLY_WEEKS).find(w=>((HOLIDAY_ONLY_WEEKS[w]||{}).matchSeasons||[]).slice().sort().join('|')===clusterKey);
+    if(!anchorW)return;
+    const perGroupSnap={};
+    Object.entries(perGroup||{}).forEach(([gid,pool])=>{
+      let groupLabel='חופשיות';
+      if(gid!=='_free'){
+        const grp=(_rotGroups||[]).find(x=>x.id===gid);
+        if(grp)groupLabel=grp.name||gid;
+      }
+      perGroupSnap[groupLabel]=_matSnap(pool);
+    });
+    _holidayPoolSnapshot[anchorW]=perGroupSnap;
   });
   return {
     region,startISO,endISO,
@@ -3903,13 +3928,19 @@ async function _smartRotRun(){
     const totalAssignments=r.proposal.reduce((s,w)=>s+Object.keys(w.assignments||{}).length,0);
     const regionsLine=r.allRegions?`<div style="grid-column:span 2;padding:6px 8px;background:white;border-radius:6px;font-weight:700">🌍 <b>${r.stats.regionsCovered}</b> אזורים חושבו${r.stats.regionsSkipped>0?` · ${r.stats.regionsSkipped} דולגו (ראי למטה)`:''}</div>`:'';
     const skippedHtml=(r.allRegions&&r.skippedRegions&&r.skippedRegions.length)?`<details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:11px;color:#78350F;font-weight:700;padding:6px 10px;background:#FEF3C7;border-radius:6px">⚠ אזורים שדולגו (${r.skippedRegions.length})</summary><div style="padding:8px 12px;font-size:11px;color:#78350F;background:#FFFBEB;border-radius:0 0 6px 6px">${r.skippedRegions.map(s=>`• <b>${esc(s.region)}</b>: ${esc(s.error)}`).join('<br>')}</div></details>`:'';
-    /* Show which materials landed in the RH cluster pool — visible confirmation that the
-       3-material pool logic ran. If missing, admin can tell the cache is stale. */
-    const _snap=(r.perRegion&&r.perRegion[0]&&r.perRegion[0].holidayPoolSnapshot)||r.holidayPoolSnapshot||{};
-    const _rhWeek=Object.keys(_snap).find(w=>w>='2026-09-06'&&w<='2026-09-20');
-    const _rhPool=_rhWeek?_snap[_rhWeek]:null;
-    const _ver=(r.perRegion&&r.perRegion[0]&&r.perRegion[0].algoVersion)||r.algoVersion||'?';
-    const rhPoolHtml=_rhPool?`<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:8px;padding:8px 10px;margin-bottom:12px;font-size:12px;color:#78350F"><b>🧩 Pool ר״ה (משותף ל-3 שבועות):</b> ${_rhPool.map(m=>`<span style="background:${m.isHoliday?'#DBEAFE':'#DCFCE7'};color:${m.isHoliday?'#1E40AF':'#166534'};padding:2px 8px;border-radius:6px;font-weight:600;margin:0 2px">${m.isHoliday?'🍎':'🧩'} ${esc(m.name)}</span>`).join('')} <span style="opacity:0.7;font-size:10px">· אלגוריתם ${esc(_ver)}</span></div>`:'';
+    /* Show which materials landed in each rotation group's RH pool. Confirms per-group Latin Square is running. */
+    const _perRegionData=r.perRegion||[{holidayPoolSnapshot:r.holidayPoolSnapshot,algoVersion:r.algoVersion,region:r.region}];
+    const _ver=(_perRegionData[0]&&_perRegionData[0].algoVersion)||'?';
+    const rhPoolHtml=_perRegionData.filter(rr=>rr&&rr.holidayPoolSnapshot).map(rr=>{
+      const _snap=rr.holidayPoolSnapshot||{};
+      const _rhWeek=Object.keys(_snap).find(w=>w>='2026-09-06'&&w<='2026-09-20');
+      if(!_rhWeek)return '';
+      const perGroupPools=_snap[_rhWeek];
+      const rows=Object.entries(perGroupPools).map(([grpLabel,pool])=>{
+        return `<div style="margin-top:4px"><b>${esc(grpLabel)}:</b> ${(pool||[]).map(m=>`<span style="background:${m.isHoliday?'#DBEAFE':'#DCFCE7'};color:${m.isHoliday?'#1E40AF':'#166534'};padding:1px 6px;border-radius:5px;font-weight:600;margin:0 2px;font-size:11px">${m.isHoliday?'🍎':'🧩'} ${esc(m.name)}</span>`).join('')}</div>`;
+      }).join('');
+      return `<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:12px;color:#78350F"><b>🧩 Pool ר״ה — ${esc(rr.region||'')}</b> ${rows}</div>`;
+    }).join('')+`<div style="font-size:10px;color:var(--mut);margin-bottom:12px;text-align:left">אלגוריתם: ${esc(_ver)}</div>`;
     const statsHtml=rhPoolHtml+`<div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:10px;padding:12px;margin-bottom:12px"><div style="font-weight:700;color:#0C4A6E;font-size:13px;margin-bottom:8px">📊 סיכום ההצעה</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:12px;color:#075985">${regionsLine}<div>📅 שבועות: <b>${r.weeksCount}</b></div><div>🧑 מדריכות: <b>${r.stats.instructorsTotal}</b> (${r.stats.freeAgents} חופשיות, ${r.stats.inGroups} בקבוצות)</div><div>🔄 קבוצות רוטציה: <b>${r.stats.groupsCount}</b></div><div>📦 מערכים בשימוש: <b>${r.stats.materialsUsed}</b>/${r.stats.materialsAvailable}</div><div style="grid-column:span 2">✍ סה"כ שיבוצים: <b>${totalAssignments}</b></div></div></div>${skippedHtml}`;
     const warnCount=(r.warnings||[]).length;
     const warnHtml=warnCount?`<details style="margin-bottom:12px" open><summary style="cursor:pointer;font-weight:700;color:#B45309;font-size:12px;padding:8px 12px;background:#FEF3C7;border-radius:8px;border:1.5px solid #F59E0B">⚠ ${warnCount} התרעות שיבוץ (לחצי לפרטים)</summary><div style="max-height:200px;overflow-y:auto;background:#FFFBEB;border:1.5px solid #FDE68A;border-radius:0 0 8px 8px;padding:8px 12px;margin-top:-1px">${r.warnings.slice(0,50).map(w=>`<div style="font-size:11px;color:#78350F;padding:4px 0;border-bottom:1px solid #FDE68A">📅 <b>${esc(w.weekISO)}</b> — ${esc(w.msg)}</div>`).join('')}${warnCount>50?`<div style="font-size:11px;color:#78350F;padding:6px 0;text-align:center;font-style:italic">... ועוד ${warnCount-50} התרעות</div>`:''}</div></details>`:'<div style="background:#D1FAE5;border:1.5px solid #10B981;color:#065F46;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px">✓ אין התרעות שיבוץ — כל שבוע קיבל שיבוץ תקין</div>';
