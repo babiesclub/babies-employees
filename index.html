@@ -3377,7 +3377,7 @@ async function computeAnnualRotation(region, opts){
   const instructorSeenMats={}; // {uid: Set(matId)} — safety net when instructor has no gardens
   const lastCategoryByUid={};
   const catLastWeekByUid={}; // {uid: {category: weekIdx}} — enforces "same category can't repeat to instructor for at least 4 weeks"
-  const familyLastWeekByUid={}; // {uid: {family: weekIdx}} — enforces "related animals (same family) shouldn't cluster — min 8 weeks apart per instructor"
+  const familyLastWeekByUid={}; // {uid: {family: weekIdx}} — enforces "related animals (same family) shouldn't cluster — min 4 weeks apart per instructor"
   const globallyUsed=new Set();
   const groupPipelines={};
   // State per group: {batch:[matId,...], batchStartWeekIdx:N|null}
@@ -3479,7 +3479,7 @@ async function computeAnnualRotation(region, opts){
            category cooldown + 8-week family cooldown. */
         const pickTwoFresh=()=>{
           const _catOK=(m,uid)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
-          const _famOK=(m,uid)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=8};
+          const _famOK=(m,uid)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=4};
           let candidates=materials.filter(m=>
             !globallyUsed.has(m.id) &&
             _matSeasonFits(m,weekISO,holidayDates) &&
@@ -3618,7 +3618,7 @@ async function computeAnnualRotation(region, opts){
           // Score context: use the sub-group at position sg=0 with pos=i (arbitrary but consistent)
           const contextUid=allSuperUids[batchIdx]||allSuperUids[0];
           const contextGardens=gardensByUid[contextUid]||[];
-          const _famCooldownOKSuper=(m,batchIdx)=>{const fam=_familyOf(m,materials);if(!fam)return true;const p=Math.floor(batchIdx/K);const i=batchIdx%K;for(let sg=0;sg<N_sub;sg++){const grp=cluster[sg];const uids=(grp.instructorUids||[]).map(String);for(let pos=0;pos<uids.length;pos++){const uidP=uids[pos];const lastW=(familyLastWeekByUid[uidP]||{})[fam];if(lastW===undefined)continue;const seen=seenWeekFor(sg,pos,p,i,weekIdx);if((seen-lastW)<8)return false}}return true};
+          const _famCooldownOKSuper=(m,batchIdx)=>{const fam=_familyOf(m,materials);if(!fam)return true;const p=Math.floor(batchIdx/K);const i=batchIdx%K;for(let sg=0;sg<N_sub;sg++){const grp=cluster[sg];const uids=(grp.instructorUids||[]).map(String);for(let pos=0;pos<uids.length;pos++){const uidP=uids[pos];const lastW=(familyLastWeekByUid[uidP]||{})[fam];if(lastW===undefined)continue;const seen=seenWeekFor(sg,pos,p,i,weekIdx);if((seen-lastW)<4)return false}}return true};
           // Progressive relaxation: try strict first, then drop family cooldown, then category cooldown. Prevents empty slots when strict rules over-block.
           let candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOKSuper(m,batchIdx)&&_famCooldownOKSuper(m,batchIdx));
           let _relax=0;
@@ -3724,7 +3724,7 @@ async function computeAnnualRotation(region, opts){
           return true;
         };
         for(let slot=0;slot<N;slot++){
-          const _famCooldownOK_G=(m,slot)=>{const fam=_familyOf(m,materials);if(!fam)return true;for(let p=0;p<N;p++){const uidP=String(uids[p]);const lastW=(familyLastWeekByUid[uidP]||{})[fam];if(lastW===undefined)continue;const seenWeek=weekIdx+((p-slot+N)%N);if((seenWeek-lastW)<8)return false}return true};
+          const _famCooldownOK_G=(m,slot)=>{const fam=_familyOf(m,materials);if(!fam)return true;for(let p=0;p<N;p++){const uidP=String(uids[p]);const lastW=(familyLastWeekByUid[uidP]||{})[fam];if(lastW===undefined)continue;const seenWeek=weekIdx+((p-slot+N)%N);if((seenWeek-lastW)<4)return false}return true};
           // Progressive relaxation: strict → drop family cooldown → drop category cooldown too.
           let candidates=materials.filter(m=>!usedInBatch.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allGroupGardens,gardensSeen)&&uids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&_cooldownOK(m,slot)&&_famCooldownOK_G(m,slot));
           let _relaxG=0;
@@ -3777,7 +3777,7 @@ async function computeAnnualRotation(region, opts){
       const uid=uidOf(u);
       const gardens=gardensByUid[uid]||[];
       const catCooldownOK=(m)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
-      const famCooldownOK=(m)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=8};
+      const famCooldownOK=(m)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=4};
       // Progressive relaxation for free-agent: strict → drop family cooldown → drop category cooldown too.
       let candidates=materials.filter(m=>_matSeasonFits(m,weekISO,holidayDates) && _matAllowedForGardens(m,gardens,gardensSeen) && _matInstructorConstraintOK(m.id,uid,gardens,instructorSeenMats) && catCooldownOK(m) && famCooldownOK(m));
       let _relaxA=0;
