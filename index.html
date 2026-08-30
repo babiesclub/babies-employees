@@ -3298,51 +3298,8 @@ async function computeAnnualRotation(region, opts){
   // shifting RH materials into non-RH weeks (e.g. 27.9 onwards).
   window._activeHolidayLockdown=new Set();
   Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{const cnt=materials.filter(m=>_matIsHolidayOnlyFor(m,wISO)).length;if(cnt>=1)window._activeHolidayLockdown.add(wISO)});
-  /* Precompute a STABLE pool per holiday-cluster (identified by sorted matchSeasons).
-     All weeks in the same cluster share the same pool (RH mats + top-scored fillers)
-     so that every instructor sees each pool member exactly once across the cluster,
-     without week-to-week filler substitution driven by per-week scoring variance. */
+  // Holiday pool computed AFTER freeAgents is known (below) — pool size scales with region uid count.
   const _holidayPoolByCluster={};
-  const _seenClusterKeys=new Set();
-  const _clusterKeyFor=wISO=>((HOLIDAY_ONLY_WEEKS[wISO]||{}).matchSeasons||[]).slice().sort().join('|');
-  Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{
-    if(!window._activeHolidayLockdown.has(wISO))return;
-    const key=_clusterKeyFor(wISO);
-    if(_seenClusterKeys.has(key))return; // Already computed for this cluster
-    _seenClusterKeys.add(key);
-    const clusterWeeks=Object.keys(HOLIDAY_ONLY_WEEKS).filter(w=>window._activeHolidayLockdown.has(w)&&_clusterKeyFor(w)===key);
-    const clusterSize=clusterWeeks.length;
-    const anchorWISO=clusterWeeks[0];
-    const holMats=materials.filter(m=>_matIsHolidayOnlyFor(m,anchorWISO));
-    const minPool=Math.max(clusterSize,holMats.length);
-    let pool=holMats.slice();
-    if(pool.length<minPool){
-      const fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFitsIgnoreLockdown(m,anchorWISO,opts.holidayDates||HOLIDAYS_5787));
-      /* SPREAD fillers across regions: AVOID materials another region already picked as RH filler.
-         This prevents any one filler from being needed at 10+ concurrent copies across regions.
-         User's preference: rather have 5 fillers × 2 copies each than 1 filler × 10 copies. */
-      const _sharedMaxAcrossCluster=(m)=>{
-         let max=0;
-         clusterWeeks.forEach(w=>{
-           const wk=opts.sharedWeekUsage&&opts.sharedWeekUsage[w];
-           if(!wk)return;
-           const cnt=(typeof wk.get==='function')?(wk.get(m.id)||0):(wk.has&&wk.has(m.id)?1:0);
-           if(cnt>max)max=cnt;
-         });
-         return max;
-      };
-      const fscored=fillerCandidates.map(m=>{
-        const baseScore=_scoreMaterial(m,{gardens:[],gardensSeen:{},lastCategory:null,globallyUsed:new Set(),weekISO:anchorWISO,weekMonthIdx:_monthOfISO(anchorWISO),sharedThisWeek:new Set()});
-        const sharedMax=_sharedMaxAcrossCluster(m);
-        // PENALTY: strong hit per prior region's copy of this filler → spread across regions
-        return {m,score:baseScore-(sharedMax*500)};
-      });
-      fscored.sort((a,b)=>b.score-a.score);
-      for(const f of fscored){if(pool.length>=minPool)break;pool.push(f.m)}
-    }
-    const _poolCached=pool;
-    clusterWeeks.forEach(w=>{_holidayPoolByCluster[w]=_poolCached});
-  });
   // Gather instructors in region (real active + virtual pending)
   const realUsers=(DB.get('users')||[]).filter(u=>u.role!=='admin'&&_hasSpec(u,'animals')&&!u.offboarded);
   const virtUsers=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]).filter(v=>_hasSpec(v,'animals'));
@@ -3374,6 +3331,50 @@ async function computeAnnualRotation(region, opts){
   const inGroupUids=new Set();
   groupsInRegion.forEach(g=>(g.instructorUids||[]).forEach(uid=>inGroupUids.add(String(uid))));
   const freeAgents=allInRegion.filter(u=>!inGroupUids.has(uidOf(u)));
+  /* Precompute a STABLE, SIZE-SCALED pool per holiday-cluster.
+     - Pool size = MAX(clusterSize, holMats, uidsInRegion) so each uid sees a UNIQUE mat per week
+       (peak concurrent per mat = 1 → only 1 physical copy needed per mat).
+     - All weeks in the same cluster share the same pool → rotation gives each uid each mat once.
+     - Fillers are SPREAD across regions (penalty for shared usage) to avoid one filler dominating. */
+  const _regionUidCount=allInRegion.length;
+  const _seenClusterKeys=new Set();
+  const _clusterKeyFor=wISO=>((HOLIDAY_ONLY_WEEKS[wISO]||{}).matchSeasons||[]).slice().sort().join('|');
+  Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{
+    if(!window._activeHolidayLockdown.has(wISO))return;
+    const key=_clusterKeyFor(wISO);
+    if(_seenClusterKeys.has(key))return;
+    _seenClusterKeys.add(key);
+    const clusterWeeks=Object.keys(HOLIDAY_ONLY_WEEKS).filter(w=>window._activeHolidayLockdown.has(w)&&_clusterKeyFor(w)===key);
+    const clusterSize=clusterWeeks.length;
+    const anchorWISO=clusterWeeks[0];
+    const holMats=materials.filter(m=>_matIsHolidayOnlyFor(m,anchorWISO));
+    // Pool size = uidsInRegion (so peak=1 per mat) but at least clusterSize (for no-repeat rotation)
+    // and at least holMats.length (to include all RH mats).
+    const minPool=Math.max(clusterSize,holMats.length,_regionUidCount);
+    let pool=holMats.slice();
+    if(pool.length<minPool){
+      const fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFitsIgnoreLockdown(m,anchorWISO,opts.holidayDates||HOLIDAYS_5787));
+      const _sharedMaxAcrossCluster=(m)=>{
+         let max=0;
+         clusterWeeks.forEach(w=>{
+           const wk=opts.sharedWeekUsage&&opts.sharedWeekUsage[w];
+           if(!wk)return;
+           const cnt=(typeof wk.get==='function')?(wk.get(m.id)||0):(wk.has&&wk.has(m.id)?1:0);
+           if(cnt>max)max=cnt;
+         });
+         return max;
+      };
+      const fscored=fillerCandidates.map(m=>{
+        const baseScore=_scoreMaterial(m,{gardens:[],gardensSeen:{},lastCategory:null,globallyUsed:new Set(),weekISO:anchorWISO,weekMonthIdx:_monthOfISO(anchorWISO),sharedThisWeek:new Set()});
+        const sharedMax=_sharedMaxAcrossCluster(m);
+        return {m,score:baseScore-(sharedMax*500)};
+      });
+      fscored.sort((a,b)=>b.score-a.score);
+      for(const f of fscored){if(pool.length>=minPool)break;pool.push(f.m)}
+    }
+    const _poolCached=pool;
+    clusterWeeks.forEach(w=>{_holidayPoolByCluster[w]=_poolCached});
+  });
   // State (accumulates across weeks)
   const gardensSeen={};
   const instructorSeenMats={}; // {uid: Set(matId)} — safety net when instructor has no gardens
@@ -3810,7 +3811,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v3';
+  const _algoVersion='2026-08-26/RH-pool-v4-dynamic';
   /* Snapshot which pool actually got used for each holiday cluster — surfaces in the UI so
      the admin can verify "yes, the 3-material pool for RH ran". */
   const _holidayPoolSnapshot={};
