@@ -3608,17 +3608,12 @@ async function computeAnnualRotation(region, opts){
       const K=subGroupSizes[0];
       const equalSize=subGroupSizes.every(s=>s===K);
       if(!equalSize){
-        /* Fallback: unequal sub-groups (e.g. 3 + 2 = 5) — flatten into a single virtual
-           group and let the Latin Square path below handle it. Cycle length = total
-           instructors. This is pedagogically identical to a single group of N. */
-        const mergedName=cluster.map(g=>g.name||'?').join(' + ');
-        const allMergedUids=cluster.flatMap(g=>(g.instructorUids||[]).map(String));
-        const _mergedId=superIdOf(cluster);
-        _actCluster=[{id:_mergedId,name:mergedName,instructorUids:allMergedUids}];
-        if(!groupPipelines[_mergedId])groupPipelines[_mergedId]={batch:[],batchStartWeekIdx:null,prevSlotCategories:{}};
-        // Warn ONCE per super-cluster (on the first pass — before the first batch is created).
-        if(groupPipelines[_mergedId].batchStartWeekIdx===null){warnings.push({weekISO,superGroup:mergedName,type:'merged_unequal',msg:`סופר-קלסטר "${mergedName}" בגדלים לא-שווים (${cluster.map(g=>(g.instructorUids||[]).length).join('+')}) — שובץ כ-Latin Square יחיד של ${allMergedUids.length} מדריכות. מחזור: ${allMergedUids.length} שבועות.`})}
-        // Fall through to single-group block below (using _actCluster).
+        /* Unequal sub-groups (e.g. 2+2+3 in South): process each sub-group INDEPENDENTLY as its own
+           single-group Latin Square. Pair (2) → 2-mat batch renewed every 2 weeks with in-batch swap.
+           Triple (3) → 3-mat batch renewed every 3 weeks with Latin Square rotation.
+           Each sub-group keeps its materials inside itself → driver moves mats only within the group. */
+        _actCluster=cluster.slice();
+        cluster.forEach(g=>{if(!groupPipelines[g.id])groupPipelines[g.id]={batch:[],batchStartWeekIdx:null,prevSlotCategories:{}}});
       } else {
       const T=N_sub*K;
       const superId=superIdOf(cluster);
@@ -3737,8 +3732,8 @@ async function computeAnnualRotation(region, opts){
       continue;
       } // end else (equalSize) — for unequal, we fall through to single-group below
     }
-    // ===== SINGLE GROUP (unlinked or unequal-super flattened) — Latin Square logic =====
-    { const g=_actCluster[0];
+    // ===== SINGLE GROUP (unlinked, or each sub-group of unequal super-cluster) — Latin Square logic =====
+    for(const g of _actCluster){
       const uids=(g.instructorUids||[]).map(String);
       const N=uids.length;
       if(!N) continue;
@@ -3883,7 +3878,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v9-post-sukkot-continuity';
+  const _algoVersion='2026-08-26/RH-pool-v10-per-subgroup';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
