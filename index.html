@@ -3633,102 +3633,10 @@ async function computeAnnualRotation(region, opts){
       const K=subGroupSizes[0];
       const equalSize=subGroupSizes.every(s=>s===K);
       if(!equalSize){
-        /* 2-pair + triple PIPELINE (Shir's spec for South 2+2+3):
-             Pair0 (entry) → Pair1 (exit) → retire queue → Triple inherits + 1 fresh mat.
-             Pair pipeline: 2 fresh mats to Pair0 every 2 weeks; shift Pair0→Pair1 on same schedule.
-             Triple: 3-mat Latin Square, batch every 3 weeks — pulls 2 recently-retired pair mats + 1 fresh.
-             Timing mismatch (2 vs 3 weeks) means some retired pair batches accumulate in queue. */
-        const _pairSubs=cluster.filter(g=>(g.instructorUids||[]).length===2);
-        const _tripleSubs=cluster.filter(g=>(g.instructorUids||[]).length===3);
-        const _otherSubs=cluster.filter(g=>{const s=(g.instructorUids||[]).length;return s!==2&&s!==3});
-        if(_pairSubs.length===2&&_tripleSubs.length===1&&_otherSubs.length===0){
-          const superId=superIdOf(cluster);
-          const stateKey=superId+'::pairpipe';
-          if(!groupPipelines[stateKey])groupPipelines[stateKey]={pairSlots:[null,null],tripleMats:null,pairRunCount:0,tripleRunCount:0,lastPairShiftIdx:-1,lastTripleShiftIdx:-1,retiredQueue:[]};
-          const state=groupPipelines[stateKey];
-          const allSuperGardens=[];const allSuperUids=[];
-          cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>{allSuperUids.push(String(u));(gardensByUid[String(u)]||[]).forEach(gn=>{if(!allSuperGardens.includes(gn))allSuperGardens.push(gn)})}));
-          const _catOK=(m,uid)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
-          const _famOK=(m,uid)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=4};
-          const _pickFresh=(count)=>{
-            let candidates=materials.filter(m=>!globallyUsed.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&allSuperUids.every(uu=>_catOK(m,uu))&&allSuperUids.every(uu=>_famOK(m,uu)));
-            if(candidates.length<count){candidates=materials.filter(m=>!globallyUsed.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats))&&allSuperUids.every(uu=>_catOK(m,uu)))}
-            if(candidates.length<count){candidates=materials.filter(m=>!globallyUsed.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)))}
-            if(candidates.length<count){warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'pipe_no_fresh',msg:`אין מספיק מערכים פנויים לפייפליין (נדרשים ${count}, זמינים ${candidates.length})`});return null}
-            const _sw=(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||null;
-            const _pool=_sw?_preferZeroConcurrent(candidates,_sw):candidates;
-            const scored=_pool.map(m=>({m,score:_scoreMaterial(m,{gardens:allSuperGardens,gardensSeen,lastCategory:null,globallyUsed,weekISO,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
-            scored.sort((a,b)=>b.score-a.score);
-            const chosen=scored.slice(0,count).map(x=>x.m.id);
-            chosen.forEach(id=>globallyUsed.add(id));
-            return chosen;
-          };
-          const _recordPipe=(uid,matId)=>{
-            weekAssignments[uid]=matId;
-            const mat=materials.find(m=>m.id===matId);
-            if(!mat)return;
-            const animal=(mat.animalName||mat.name||'').trim();
-            (gardensByUid[uid]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();if(animal)gardensSeen[gn].add(animal)});
-            if(!instructorSeenMats[uid])instructorSeenMats[uid]=new Set();
-            instructorSeenMats[uid].add(matId);
-            lastCategoryByUid[uid]=mat.category;
-            if(mat.category){if(!catLastWeekByUid[uid])catLastWeekByUid[uid]={};catLastWeekByUid[uid][mat.category]=weekIdx}
-            const _fam=_familyOf(mat,materials);
-            if(_fam){if(!familyLastWeekByUid[uid])familyLastWeekByUid[uid]={};familyLastWeekByUid[uid][_fam]=weekIdx}
-          };
-          // Advance pair pipeline
-          const pairRunIdx=state.pairRunCount;
-          const pairShiftIdx=Math.floor(pairRunIdx/2);
-          const pairWeekInShift=pairRunIdx%2;
-          state.pairRunCount++;
-          if(pairShiftIdx>state.lastPairShiftIdx){
-            if(state.lastPairShiftIdx<0){
-              state.pairSlots[1]=_pickFresh(2);
-              state.pairSlots[0]=_pickFresh(2);
-            } else {
-              if(state.pairSlots[1])state.retiredQueue.push(state.pairSlots[1]);
-              state.pairSlots[1]=state.pairSlots[0];
-              state.pairSlots[0]=_pickFresh(2);
-            }
-            state.lastPairShiftIdx=pairShiftIdx;
-          }
-          [_pairSubs[0],_pairSubs[1]].forEach((pairG,slotIdx)=>{
-            const mats=state.pairSlots[slotIdx];
-            if(!mats)return;
-            const uids=(pairG.instructorUids||[]).map(String);
-            uids.forEach((uid,pos)=>{
-              const matIdx=(pos+pairWeekInShift)%2;
-              const matId=mats[matIdx];
-              if(matId)_recordPipe(uid,matId);
-            });
-          });
-          // Advance triple pipeline (3-week Latin Square, inherits from retired queue)
-          const tripleRunIdx=state.tripleRunCount;
-          const tripleShiftIdx=Math.floor(tripleRunIdx/3);
-          const tripleWeekInBatch=tripleRunIdx%3;
-          state.tripleRunCount++;
-          if(tripleShiftIdx>state.lastTripleShiftIdx){
-            const inherited=state.retiredQueue.length>0?state.retiredQueue.shift():null;
-            const freshOne=_pickFresh(1);
-            if(inherited&&freshOne&&freshOne.length){
-              state.tripleMats=[inherited[0],inherited[1],freshOne[0]];
-            } else {
-              const three=_pickFresh(3);
-              state.tripleMats=three||[null,null,null];
-            }
-            state.lastTripleShiftIdx=tripleShiftIdx;
-          }
-          const tripleG=_tripleSubs[0];
-          const tripleUids=(tripleG.instructorUids||[]).map(String);
-          tripleUids.forEach((uid,pos)=>{
-            const matIdx=((pos-tripleWeekInBatch)%3+3)%3;
-            const matId=state.tripleMats&&state.tripleMats[matIdx];
-            if(matId)_recordPipe(uid,matId);
-          });
-          continue; // handled
-        }
-        /* Fallback: unequal super-cluster that doesn't match "2 pairs + 1 triple" —
-           process each sub-group as an INDEPENDENT single-group Latin Square. */
+        /* Unequal sub-groups (e.g. 2+2+3 in South): process each sub-group INDEPENDENTLY as its own
+           single-group Latin Square. Pair (2) → 2-mat batch renewed every 2 weeks with in-batch swap.
+           Triple (3) → 3-mat batch renewed every 3 weeks with Latin Square rotation.
+           Each sub-group keeps its materials inside itself → driver moves mats only within the group. */
         _actCluster=cluster.slice();
         cluster.forEach(g=>{if(!groupPipelines[g.id])groupPipelines[g.id]={batch:[],batchStartWeekIdx:null,prevSlotCategories:{}}});
       } else {
@@ -3976,7 +3884,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v12-pipeline-2pair+triple';
+  const _algoVersion='2026-08-26/RH-pool-v11-continuity-fix';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
