@@ -3497,6 +3497,31 @@ async function computeAnnualRotation(region, opts){
       continue;
     }
     const weekAssignments={};
+    /* Apply pending post-cluster pair swaps FIRST (before pipelines) so their uids are
+       already assigned. Pipelines check `_preAssignedUids` and skip groups whose members
+       are already assigned — leaves the group's pipeline state UNTOUCHED, so on the
+       following week the group enters as fresh (weekInBatch=0 → picks new 2-mat batch). */
+    const _preAssignedUids=new Set();
+    if(_postClusterPairSwaps.length){
+      _postClusterPairSwaps.forEach(swap=>{
+        [{uid:swap.uidA,mat:swap.matB},{uid:swap.uidB,mat:swap.matA}].forEach(({uid,mat})=>{
+          weekAssignments[uid]=mat.id;
+          _preAssignedUids.add(uid);
+          const seenH=instructorSeenMats[uid]||new Set();
+          instructorSeenMats[uid]=seenH;seenH.add(mat.id);
+          const _matAnimal=(mat.animalName||mat.name||'').trim();
+          if(_matAnimal){(gardensByUid[uid]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();gardensSeen[gn].add(_matAnimal)})}
+          catLastWeekByUid[uid]=catLastWeekByUid[uid]||{};
+          if(mat.category)catLastWeekByUid[uid][mat.category]=weekIdx;
+          familyLastWeekByUid[uid]=familyLastWeekByUid[uid]||{};
+          const fam=_familyOf(mat,materials);
+          if(fam)familyLastWeekByUid[uid][fam]=weekIdx;
+          lastCategoryByUid[uid]=mat.category||lastCategoryByUid[uid];
+          globallyUsed.add(mat.id);
+        });
+      });
+      _postClusterPairSwaps.length=0;
+    }
     // Rotation groups — Latin Square (single) or pair-swap (linked super-group)
     for(const cluster of superGroups){
     /* Effective cluster after normalization — unequal-size super-groups get flattened
@@ -3735,6 +3760,9 @@ async function computeAnnualRotation(region, opts){
     // ===== SINGLE GROUP (unlinked, or each sub-group of unequal super-cluster) — Latin Square logic =====
     for(const g of _actCluster){
       const uids=(g.instructorUids||[]).map(String);
+      // Skip if ALL uids in this group were pre-assigned by post-cluster pair-swap continuity.
+      // Leaves state.batchStartWeekIdx untouched → next week the group starts a fresh 2-mat batch.
+      if(uids.length && uids.every(u=>_preAssignedUids.has(u))) continue;
       const N=uids.length;
       if(!N) continue;
       const state=groupPipelines[g.id];
@@ -3852,33 +3880,11 @@ async function computeAnnualRotation(region, opts){
       const _famFA=_familyOf(chosen,materials);
       if(_famFA){if(!familyLastWeekByUid[uid])familyLastWeekByUid[uid]={};familyLastWeekByUid[uid][_famFA]=weekIdx}
     }
-    /* Apply pending post-cluster pair swaps (only on this — the first non-full-week after the RH cluster).
-       Override whatever the pipeline chose for these uids, so pair (c,d) from week 20.9 becomes (d,c) here. */
-    if(_postClusterPairSwaps.length){
-      _postClusterPairSwaps.forEach(swap=>{
-        // Swap: uidA gets matB, uidB gets matA
-        [{uid:swap.uidA,mat:swap.matB},{uid:swap.uidB,mat:swap.matA}].forEach(({uid,mat})=>{
-          weekAssignments[uid]=mat.id;
-          const seenH=instructorSeenMats[uid]||new Set();
-          instructorSeenMats[uid]=seenH;seenH.add(mat.id);
-          const _matAnimal=(mat.animalName||mat.name||'').trim();
-          if(_matAnimal){(gardensByUid[uid]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();gardensSeen[gn].add(_matAnimal)})}
-          catLastWeekByUid[uid]=catLastWeekByUid[uid]||{};
-          if(mat.category)catLastWeekByUid[uid][mat.category]=weekIdx;
-          familyLastWeekByUid[uid]=familyLastWeekByUid[uid]||{};
-          const fam=_familyOf(mat,materials);
-          if(fam)familyLastWeekByUid[uid][fam]=weekIdx;
-          lastCategoryByUid[uid]=mat.category||lastCategoryByUid[uid];
-          globallyUsed.add(mat.id);
-        });
-      });
-      _postClusterPairSwaps.length=0; // consumed
-    }
     proposal.push({weekISO,assignments:weekAssignments});
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v10-per-subgroup';
+  const _algoVersion='2026-08-26/RH-pool-v11-continuity-fix';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
