@@ -3398,6 +3398,10 @@ async function computeAnnualRotation(region, opts){
   const catLastWeekByUid={}; // {uid: {category: weekIdx}} — enforces "same category can't repeat to instructor for at least 4 weeks"
   const familyLastWeekByUid={}; // {uid: {family: weekIdx}} — enforces "related animals (same family) shouldn't cluster — min 4 weeks apart per instructor"
   const globallyUsed=new Set();
+  /* Pending pair-swap continuations: after the RH cluster ends at week 20.9 with pair getting (c,d),
+     the next non-full working week (4.10) should get (d,c) — as if Sukkot didn't happen.
+     Each entry: {uidA, uidB, matA, matB}. Consumed on first non-full-week after RH. */
+  const _postClusterPairSwaps=[];
   const groupPipelines={};
   // State per group: {batch:[matId,...], batchStartWeekIdx:N|null}
   // Latin Square rotation: batch of N materials, cycled N weeks (each instructor sees each material once).
@@ -3456,6 +3460,13 @@ async function computeAnnualRotation(region, opts){
           const matB=weekInBatch===0?pool[idx1]:pool[idx0];
           _record(String(uids[0]),matA);
           _record(String(uids[1]),matB);
+          /* If this is the LAST week of the cluster AND we introduced a new batch (weekInBatch=0),
+             the swap of this batch didn't happen inside the cluster. Continue it into the next
+             non-full working week (post-Sukkot 4.10) so it feels like Sukkot didn't skip a beat. */
+          const isLastClusterWeek=(_posInCluster===_clusterWeeksSorted.length-1);
+          if(isLastClusterWeek && weekInBatch===0){
+            _postClusterPairSwaps.push({uidA:String(uids[0]),uidB:String(uids[1]),matA,matB});
+          }
           return;
         }
         // LATIN SQUARE (3+ uids or fallback): each uid gets a unique mat rotating each week
@@ -3846,11 +3857,33 @@ async function computeAnnualRotation(region, opts){
       const _famFA=_familyOf(chosen,materials);
       if(_famFA){if(!familyLastWeekByUid[uid])familyLastWeekByUid[uid]={};familyLastWeekByUid[uid][_famFA]=weekIdx}
     }
+    /* Apply pending post-cluster pair swaps (only on this — the first non-full-week after the RH cluster).
+       Override whatever the pipeline chose for these uids, so pair (c,d) from week 20.9 becomes (d,c) here. */
+    if(_postClusterPairSwaps.length){
+      _postClusterPairSwaps.forEach(swap=>{
+        // Swap: uidA gets matB, uidB gets matA
+        [{uid:swap.uidA,mat:swap.matB},{uid:swap.uidB,mat:swap.matA}].forEach(({uid,mat})=>{
+          weekAssignments[uid]=mat.id;
+          const seenH=instructorSeenMats[uid]||new Set();
+          instructorSeenMats[uid]=seenH;seenH.add(mat.id);
+          const _matAnimal=(mat.animalName||mat.name||'').trim();
+          if(_matAnimal){(gardensByUid[uid]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();gardensSeen[gn].add(_matAnimal)})}
+          catLastWeekByUid[uid]=catLastWeekByUid[uid]||{};
+          if(mat.category)catLastWeekByUid[uid][mat.category]=weekIdx;
+          familyLastWeekByUid[uid]=familyLastWeekByUid[uid]||{};
+          const fam=_familyOf(mat,materials);
+          if(fam)familyLastWeekByUid[uid][fam]=weekIdx;
+          lastCategoryByUid[uid]=mat.category||lastCategoryByUid[uid];
+          globallyUsed.add(mat.id);
+        });
+      });
+      _postClusterPairSwaps.length=0; // consumed
+    }
     proposal.push({weekISO,assignments:weekAssignments});
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v8-pair-swap';
+  const _algoVersion='2026-08-26/RH-pool-v9-post-sukkot-continuity';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
