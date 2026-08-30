@@ -3361,8 +3361,13 @@ async function computeAnnualRotation(region, opts){
        });
        return max;
     };
+    /* Pool sizing:
+       - Pair (2 uids): pair-swap+new pattern needs ceil(clusterSize/2)*2 mats (2 per week-pair).
+         For 3 RH weeks → pool of 4 (2 for weeks 1-2 swap, 2 for week 3).
+       - Group of 3+ or free agents: Latin Square needs max(bucketSize, clusterSize). */
     const buildPool=(bucketSize)=>{
-      const minPool=Math.max(clusterSize,holMats.length,bucketSize);
+      const target=bucketSize===2?Math.ceil(clusterSize/2)*2:Math.max(bucketSize,clusterSize);
+      const minPool=Math.max(target,holMats.length);
       const pool=holMats.slice();
       if(pool.length<minPool){
         const fillerCandidates=materials.filter(m=>!_matIsHolidayOnlyMaterial(m)&&_matSeasonFitsIgnoreLockdown(m,anchorWISO,opts.holidayDates||HOLIDAYS_5787)&&!usedFillersInRegion.has(m.id));
@@ -3420,9 +3425,40 @@ async function computeAnnualRotation(region, opts){
       const _clusterKey=_clusterKeyFor(weekISO);
       const _groupPools=_holidayGroupPools[_clusterKey]||{};
       const weekAssignmentsH={};
+      // Position within this holiday cluster (0, 1, 2 for RH weeks 6.9/13.9/20.9)
+      const _clusterWeeksSorted=Object.keys(HOLIDAY_ONLY_WEEKS).filter(w=>window._activeHolidayLockdown.has(w)&&_clusterKeyFor(w)===_clusterKey).sort();
+      const _posInCluster=_clusterWeeksSorted.indexOf(weekISO);
+      // Record helper — updates all tracking state for one uid+mat
+      const _record=(uidStr,mat)=>{
+        if(!mat)return;
+        weekAssignmentsH[uidStr]=mat.id;
+        const seenH=instructorSeenMats[uidStr]||new Set();
+        instructorSeenMats[uidStr]=seenH;seenH.add(mat.id);
+        const _matAnimal=(mat.animalName||mat.name||'').trim();
+        if(_matAnimal){(gardensByUid[uidStr]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();gardensSeen[gn].add(_matAnimal)})}
+        catLastWeekByUid[uidStr]=catLastWeekByUid[uidStr]||{};
+        if(mat.category)catLastWeekByUid[uidStr][mat.category]=weekIdx;
+        familyLastWeekByUid[uidStr]=familyLastWeekByUid[uidStr]||{};
+        const fam=_familyOf(mat,materials);
+        if(fam)familyLastWeekByUid[uidStr][fam]=weekIdx;
+        lastCategoryByUid[uidStr]=mat.category||lastCategoryByUid[uidStr];
+      };
       // Helper: assign a bucket of uids to rotate through their pool
       const _assignBucket=(uids,pool)=>{
         if(!pool||!pool.length||!uids.length)return;
+        // PAIR pattern (2 uids): (a,b) → (b,a) → (c,d) — swap for 2 weeks then 2 new mats
+        if(uids.length===2 && pool.length>=4){
+          const batchIdx=Math.floor(_posInCluster/2);
+          const weekInBatch=_posInCluster%2;
+          const idx0=(batchIdx*2)%pool.length;
+          const idx1=(batchIdx*2+1)%pool.length;
+          const matA=weekInBatch===0?pool[idx0]:pool[idx1];
+          const matB=weekInBatch===0?pool[idx1]:pool[idx0];
+          _record(String(uids[0]),matA);
+          _record(String(uids[1]),matB);
+          return;
+        }
+        // LATIN SQUARE (3+ uids or fallback): each uid gets a unique mat rotating each week
         uids.forEach((uid,idx)=>{
           const uidStr=String(uid);
           const seenH=instructorSeenMats[uidStr]||new Set();
@@ -3432,16 +3468,7 @@ async function computeAnnualRotation(region, opts){
             if(!seenH.has(cand.id)){mat=cand;break}
           }
           if(!mat)mat=pool[(idx+weekIdx)%pool.length];
-          weekAssignmentsH[uidStr]=mat.id;
-          instructorSeenMats[uidStr]=seenH;seenH.add(mat.id);
-          const _matAnimal=(mat.animalName||mat.name||'').trim();
-          if(_matAnimal){(gardensByUid[uidStr]||[]).forEach(gn=>{if(!gardensSeen[gn])gardensSeen[gn]=new Set();gardensSeen[gn].add(_matAnimal)})}
-          catLastWeekByUid[uidStr]=catLastWeekByUid[uidStr]||{};
-          if(mat.category)catLastWeekByUid[uidStr][mat.category]=weekIdx;
-          familyLastWeekByUid[uidStr]=familyLastWeekByUid[uidStr]||{};
-          const fam=_familyOf(mat,materials);
-          if(fam)familyLastWeekByUid[uidStr][fam]=weekIdx;
-          lastCategoryByUid[uidStr]=mat.category||lastCategoryByUid[uidStr];
+          _record(uidStr,mat);
         });
       };
       // Per rotation group: use group's own pool → Latin Square within group
@@ -3823,7 +3850,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v7-per-group';
+  const _algoVersion='2026-08-26/RH-pool-v8-pair-swap';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
