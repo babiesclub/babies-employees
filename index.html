@@ -2227,13 +2227,18 @@ function _renderImpSchedPreview(){
 async function _saveImpSchedGrid(){
   if(!_impSchedParsedRows||!_impSchedParsedRows.length)return;
   const users=DB.get('users')||[];const i=users.findIndex(u=>String(u.uid||u.id)===String(_impSchedTargetUid));if(i===-1)return;
+  /* MERGE with existing schedule instead of replacing — otherwise adding a schedule
+     for an instructor who already has one would WIPE the existing sessions. */
+  const existing=(users[i].weeklySchedule&&typeof users[i].weeklySchedule==='object')?users[i].weeklySchedule:{};
   const schedule={0:[],1:[],2:[],3:[],4:[]};
+  for(let d=0;d<=4;d++){if(Array.isArray(existing[d]))schedule[d]=existing[d].map(e=>({...e}))}
   _impSchedParsedRows.forEach(r=>{if(!r.garden)return;schedule[r.dayIdx].push({start:r.start||'',end:r.end||'',garden:r.garden,note:(r.biweekly?'[דו-שבועי] ':'')+(r.note||'').trim()})});
   users[i].weeklySchedule=schedule;
   localStorage.setItem('bz3_users',JSON.stringify(users));
   if(users[i].uid&&window.fbDb){try{await fbDb.collection('users').doc(users[i].uid).update({weeklySchedule:schedule})}catch(e){alert('שגיאה בשמירה בענן: '+(e.message||e));return}}
   document.getElementById('imp-sched-mo').style.display='none';
-  alert(`✓ נשמרו ${_impSchedParsedRows.length} שיבוצים למערכת השבועית של ${users[i].name}`);
+  const _existingCount=[0,1,2,3,4].reduce((s,d)=>s+(Array.isArray(existing[d])?existing[d].length:0),0);
+  alert(`✓ נוספו ${_impSchedParsedRows.length} שיבוצים חדשים${_existingCount?` (מיזוג עם ${_existingCount} שיבוצים קיימים)`:''} למערכת השבועית של ${users[i].name}`);
   // If admin was editing the same user, refresh the schedule draft
   if(String(editId)===String(_impSchedTargetUid)){_eiScheduleDraft={0:schedule[0].map(e=>({...e})),1:schedule[1].map(e=>({...e})),2:schedule[2].map(e=>({...e})),3:schedule[3].map(e=>({...e})),4:schedule[4].map(e=>({...e}))};if(typeof renderEiSchedule==='function')renderEiSchedule()}
   renderAdm();
