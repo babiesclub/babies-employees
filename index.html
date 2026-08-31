@@ -3355,9 +3355,10 @@ async function computeAnnualRotation(region, opts){
   const gardensByUid={};
   allInRegion.forEach(u=>{gardensByUid[uidOf(u)]=(u.gardens||[]).slice()});
   // Rotation groups in this region — merged into super-groups via linkedGroupIds (connected components)
-  const groupsInRegion=(_rotGroups||[]).filter(g=>g.regionName===region);
+  const groupsInRegion=(_rotGroups||[]).filter(g=>g.regionName===region).slice().sort((a,b)=>((a.orderIndex||0)-(b.orderIndex||0))||(a.id||'').localeCompare(b.id||''));
   const groupById={};groupsInRegion.forEach(g=>groupById[g.id]=g);
-  // Union-find over linked groups → super-groups (each = array of sub-groups in original order)
+  // Union-find over linked groups → super-groups. Cluster order = admin-chosen orderIndex,
+  // so admin controls "which group is Pair 0 (entry) → Pair 1 → Triple (exit)".
   const seenGroupIds=new Set();
   const superGroups=[];
   groupsInRegion.forEach(g=>{
@@ -3372,6 +3373,8 @@ async function computeAnnualRotation(region, opts){
       cluster.push(grp);
       (grp.linkedGroupIds||[]).forEach(otherId=>{if(!inCluster.has(otherId)&&groupById[otherId])queue.push(otherId)});
     }
+    // Sort cluster's sub-groups by orderIndex so admin controls entry → middle → exit order
+    cluster.sort((a,b)=>((a.orderIndex||0)-(b.orderIndex||0))||(a.id||'').localeCompare(b.id||''));
     superGroups.push(cluster);
   });
   const inGroupUids=new Set();
@@ -3513,6 +3516,7 @@ async function computeAnnualRotation(region, opts){
           const isLastClusterWeek=(_posInCluster===_clusterWeeksSorted.length-1);
           if(isLastClusterWeek && weekInBatch===0){
             _postClusterPairSwaps.push({uidA:String(uids[0]),uidB:String(uids[1]),matA,matB});
+            warnings.push({weekISO,type:'pair_swap_stored',msg:`🔵 SWAP STORED — uid ${String(uids[0]).slice(0,8)}→${matA.name}, uid ${String(uids[1]).slice(0,8)}→${matB.name}. יופעל בשבוע הבא ללא-full.`});
           }
           return;
         }
@@ -3578,6 +3582,7 @@ async function computeAnnualRotation(region, opts){
        following week the group enters as fresh (weekInBatch=0 → picks new 2-mat batch). */
     const _preAssignedUids=new Set();
     if(_postClusterPairSwaps.length){
+      warnings.push({weekISO,type:'pair_swap_applied',msg:`🟢 SWAP APPLIED — ${_postClusterPairSwaps.length} זוגות מקבלים swap continuity השבוע (מ-20.9).`});
       _postClusterPairSwaps.forEach(swap=>{
         [{uid:swap.uidA,mat:swap.matB},{uid:swap.uidB,mat:swap.matA}].forEach(({uid,mat})=>{
           weekAssignments[uid]=mat.id;
