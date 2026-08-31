@@ -3522,6 +3522,7 @@ async function computeAnnualRotation(region, opts){
           return;
         }
         // LATIN SQUARE (3+ uids or fallback): each uid gets a unique mat rotating each week
+        const _matsAssigned={};
         uids.forEach((uid,idx)=>{
           const uidStr=String(uid);
           const seenH=instructorSeenMats[uidStr]||new Set();
@@ -3532,7 +3533,19 @@ async function computeAnnualRotation(region, opts){
           }
           if(!mat)mat=pool[(idx+weekIdx)%pool.length];
           _record(uidStr,mat);
+          _matsAssigned[uidStr]=mat;
         });
+        /* FALLBACK swap continuity: for a 2-uid pair on the LAST cluster week, even when
+           pair-swap pattern couldn't fire (pool<4), still store what was assigned so the
+           next non-full week gets the swap of these mats. Guarantees continuity always. */
+        if(uids.length===2 && _posInCluster===_clusterWeeksSorted.length-1){
+          const uidA=String(uids[0]),uidB=String(uids[1]);
+          const matA=_matsAssigned[uidA],matB=_matsAssigned[uidB];
+          if(matA&&matB&&matA.id!==matB.id){
+            _postClusterPairSwaps.push({uidA,uidB,matA,matB});
+            warnings.push({weekISO,type:'pair_swap_stored_fallback',msg:`🔵 SWAP STORED (fallback) — ${uidA.slice(0,8)}→${matA.name}, ${uidB.slice(0,8)}→${matB.name} (pool קטן מ-4)`});
+          }
+        }
       };
       // Per rotation group: use group's own pool → Latin Square within group
       superGroups.forEach(cluster=>cluster.forEach(g=>{
