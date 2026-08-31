@@ -3494,6 +3494,34 @@ async function computeAnnualRotation(region, opts){
       // Reset pipelines so post-holiday work starts fresh
       superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id]){groupPipelines[id].batchStartWeekIdx=null;groupPipelines[id].batch=[];groupPipelines[id].prevSlotCategories={}}});
       superGroups.forEach(cluster=>{const id=superIdOf(cluster);if(groupPipelines[id+'::triple']){groupPipelines[id+'::triple']={pairs:[null,null,null],lastShiftIdx:-1,runCount:0}}});
+      /* On the LAST cluster week (20.9 for RH): pre-populate 2-pair pipeline state with the pair
+         batches assigned by the RH cluster, so post-Sukkot the pipeline knows these are the
+         "batch 0" mats and shifts them properly on 11.10 (Pair 0's batch → Pair 1, new fresh for Pair 0). */
+      const _isLastClusterWeek=(_posInCluster===_clusterWeeksSorted.length-1);
+      if(_isLastClusterWeek){
+        superGroups.forEach(cluster=>{
+          if(cluster.length!==3)return;
+          const pairs=cluster.filter(g=>(g.instructorUids||[]).length===2);
+          const triples=cluster.filter(g=>(g.instructorUids||[]).length===3);
+          if(pairs.length!==2||triples.length!==1)return;
+          const superId=superIdOf(cluster);
+          const stateKey=superId+'::pairpipe';
+          if(!groupPipelines[stateKey])groupPipelines[stateKey]={pairSlots:[null,null],tripleMats:null,pairRunCount:0,tripleRunCount:0,lastPairShiftIdx:-1,lastTripleShiftIdx:-1,retiredQueue:[]};
+          const state=groupPipelines[stateKey];
+          const pair0Uids=(pairs[0].instructorUids||[]).map(String);
+          const pair1Uids=(pairs[1].instructorUids||[]).map(String);
+          const pair0Mats=pair0Uids.map(u=>weekAssignmentsH[u]);
+          const pair1Mats=pair1Uids.map(u=>weekAssignmentsH[u]);
+          if(pair0Mats[0]&&pair0Mats[1]&&pair1Mats[0]&&pair1Mats[1]){
+            state.pairSlots[0]=pair0Mats;
+            state.pairSlots[1]=pair1Mats;
+            state.lastPairShiftIdx=0;
+            state.pairRunCount=1;
+          }
+          // Note: triple state NOT pre-populated — RH triple mats include RH mats
+          //       (blocked post-RH by reverse rule). Triple starts fresh on 4.10.
+        });
+      }
       proposal.push({weekISO,assignments:weekAssignmentsH,holidayOnly:true});
       continue;
     }
@@ -3647,10 +3675,10 @@ async function computeAnnualRotation(region, opts){
           const stateKey=superId+'::pairpipe';
           if(!groupPipelines[stateKey])groupPipelines[stateKey]={pairSlots:[null,null],tripleMats:null,pairRunCount:0,tripleRunCount:0,lastPairShiftIdx:-1,lastTripleShiftIdx:-1,retiredQueue:[]};
           const state=groupPipelines[stateKey];
-          /* If ANY pair uid is already assigned (via post-cluster continuity swap), skip pipeline
-             advancement this week — the swap wins. Pipeline resumes next week naturally. */
-          const _anyPairPreAssigned=[..._pairSubs,..._tripleSubs].some(g=>(g.instructorUids||[]).some(u=>_preAssignedUids.has(String(u))));
-          if(_anyPairPreAssigned)continue;
+          /* Split skip logic: PAIR skip if pair uids are pre-assigned (continuity swap wins),
+             TRIPLE always runs (its uids never in _preAssignedUids). This ensures triple gets
+             its Latin Square assignment on the first post-Sukkot week (4.10). */
+          const _pairPreAssigned=_pairSubs.some(g=>(g.instructorUids||[]).some(u=>_preAssignedUids.has(String(u))));
           const allSuperGardens=[];const allSuperUids=[];
           cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>{allSuperUids.push(String(u));(gardensByUid[String(u)]||[]).forEach(gn=>{if(!allSuperGardens.includes(gn))allSuperGardens.push(gn)})}));
           const _catOK=(m,uid)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
@@ -3681,32 +3709,37 @@ async function computeAnnualRotation(region, opts){
             const _fam=_familyOf(mat,materials);
             if(_fam){if(!familyLastWeekByUid[uid])familyLastWeekByUid[uid]={};familyLastWeekByUid[uid][_fam]=weekIdx}
           };
-          // Advance pair pipeline
+          // Advance pair pipeline — ALWAYS advance counter (so shift on 11.10 fires correctly
+          // even when 4.10 was handled by continuity swap and pipeline was skipped).
           const pairRunIdx=state.pairRunCount;
           const pairShiftIdx=Math.floor(pairRunIdx/2);
           const pairWeekInShift=pairRunIdx%2;
           state.pairRunCount++;
-          if(pairShiftIdx>state.lastPairShiftIdx){
-            if(state.lastPairShiftIdx<0){
-              state.pairSlots[1]=_pickFresh(2);
-              state.pairSlots[0]=_pickFresh(2);
-            } else {
-              if(state.pairSlots[1])state.retiredQueue.push(state.pairSlots[1]);
-              state.pairSlots[1]=state.pairSlots[0];
-              state.pairSlots[0]=_pickFresh(2);
+          if(!_pairPreAssigned){
+            if(pairShiftIdx>state.lastPairShiftIdx){
+              if(state.lastPairShiftIdx<0){
+                state.pairSlots[1]=_pickFresh(2);
+                state.pairSlots[0]=_pickFresh(2);
+              } else {
+                if(state.pairSlots[1])state.retiredQueue.push(state.pairSlots[1]);
+                state.pairSlots[1]=state.pairSlots[0];
+                state.pairSlots[0]=_pickFresh(2);
+              }
+              state.lastPairShiftIdx=pairShiftIdx;
             }
-            state.lastPairShiftIdx=pairShiftIdx;
-          }
-          [_pairSubs[0],_pairSubs[1]].forEach((pairG,slotIdx)=>{
-            const mats=state.pairSlots[slotIdx];
-            if(!mats)return;
-            const uids=(pairG.instructorUids||[]).map(String);
-            uids.forEach((uid,pos)=>{
-              const matIdx=(pos+pairWeekInShift)%2;
-              const matId=mats[matIdx];
-              if(matId)_recordPipe(uid,matId);
+            [_pairSubs[0],_pairSubs[1]].forEach((pairG,slotIdx)=>{
+              const mats=state.pairSlots[slotIdx];
+              if(!mats)return;
+              const uids=(pairG.instructorUids||[]).map(String);
+              uids.forEach((uid,pos)=>{
+                const matIdx=(pos+pairWeekInShift)%2;
+                const matId=mats[matIdx];
+                if(matId)_recordPipe(uid,matId);
+              });
             });
-          });
+          }
+          // Note: when _pairPreAssigned, we don't shift or reassign — continuity swap already applied.
+          // But we DID advance pairRunCount, so next week's pairShiftIdx will trigger correctly.
           // Advance triple pipeline (3-week Latin Square, inherits from retired queue)
           const tripleRunIdx=state.tripleRunCount;
           const tripleShiftIdx=Math.floor(tripleRunIdx/3);
@@ -3981,7 +4014,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-26/RH-pool-v13-pipeline-with-continuity';
+  const _algoVersion='2026-08-26/RH-pool-v14-pipeline-flow-from-20.9';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
