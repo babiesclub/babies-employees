@@ -3132,12 +3132,8 @@ const HOLIDAY_ONLY_WEEKS = {
   '2026-09-06': {name:'שבוע פתיחה — ראש השנה', matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2026-09-13': {name:'ראש השנה',              matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2026-09-20': {name:'יום כיפור',             matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
-  '2027-01-31': {name:'התחלת פורים (7 שבועות)',matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
-  '2027-02-07': {name:'פורים (6 שבועות)',      matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
-  '2027-02-14': {name:'פורים (5 שבועות)',      matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
-  '2027-02-21': {name:'פורים (4 שבועות)',      matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
-  '2027-02-28': {name:'לפני פורים (3 שבועות)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
-  '2027-03-07': {name:'לפני פורים (2 שבועות)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
+  '2027-02-28': {name:'פורים (3 שבועות לפני)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
+  '2027-03-07': {name:'פורים (2 שבועות לפני)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-14': {name:'מתחפשים פורים',         matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-28': {name:'שליו (3 שבועות לפני פסח)',matchSeasons:[],                                      matchKeywords:['שליו']},
   '2027-04-04': {name:'שליו (2 שבועות לפני פסח)',matchSeasons:[],                                      matchKeywords:['שליו']},
@@ -3150,8 +3146,10 @@ function _matIsHolidayOnlyFor(mat, weekISO){
   if(!wk) return false;
   const seas = (mat && mat.seasonality) || 'any';
   if(wk.matchSeasons && wk.matchSeasons.includes(seas)) return true;
-  const n = String((mat && (mat.animalName || mat.name)) || '');
-  if(wk.matchKeywords && wk.matchKeywords.some(k => n.includes(k))) return true;
+  // Check keywords against BOTH animalName AND name — a mat with animalName='יונה' and
+  // name='יונת דואר' must still match 'דואר' keyword. Only-animalName check misses it.
+  const names = [mat && mat.animalName, mat && mat.name].filter(Boolean).map(String);
+  if(wk.matchKeywords && wk.matchKeywords.some(k => names.some(n => n.includes(k)))) return true;
   return false;
 }
 /* Reverse rule: a material that matches ANY holiday-only week is considered
@@ -4213,7 +4211,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-01/v25-purim-cluster-7-weeks-from-31.1';
+  const _algoVersion='2026-09-01/v26-purim-3-weeks-keyword-both-names';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
