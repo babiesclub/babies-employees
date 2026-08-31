@@ -3277,7 +3277,10 @@ function _matAllowedForInstructor(matId, uid, instructorSeenMats){
 }
 // Wrapper that applies the safety net ONLY when the instructor has no gardens. When she has gardens, per-garden rule already handles it and applying the per-instructor rule too becomes overly restrictive (blocks materials that could safely rotate through different instructor lineups).
 function _matInstructorConstraintOK(matId, uid, gardens, instructorSeenMats){
-  if(gardens && gardens.length > 0) return true;
+  // IRON RULE: an instructor never sees the same material twice per year.
+  // Applies regardless of whether she has gardens — gardens rule catches most cases via
+  // animalName, but same mat.id can still slip through when a mat has no animalName or
+  // when Latin Square rotation cycles a mat back to the same uid. This is the safety net.
   return _matAllowedForInstructor(matId, uid, instructorSeenMats);
 }
 // Score a candidate material for a given instructor's context.
@@ -3536,12 +3539,32 @@ async function computeAnnualRotation(region, opts){
         if(uids.length===2 && pool.length>=4){
           const batchIdx=Math.floor(_posInCluster/2);
           const weekInBatch=_posInCluster%2;
-          const idx0=(batchIdx*2)%pool.length;
-          const idx1=(batchIdx*2+1)%pool.length;
+          let idx0=(batchIdx*2)%pool.length;
+          let idx1=(batchIdx*2+1)%pool.length;
+          const uidAStr=String(uids[0]),uidBStr=String(uids[1]);
+          const seenA=instructorSeenMats[uidAStr]||new Set();
+          const seenB=instructorSeenMats[uidBStr]||new Set();
+          // Iron rule: NEVER give the same instructor the same mat twice this year.
+          // If the chosen pool positions were already seen, hunt for fresh pool positions.
+          const _findFreshPair=()=>{
+            for(let a=0;a<pool.length;a++){
+              for(let b=0;b<pool.length;b++){
+                if(a===b)continue;
+                const mA=weekInBatch===0?pool[a]:pool[b];
+                const mB=weekInBatch===0?pool[b]:pool[a];
+                if(!seenA.has(mA.id) && !seenB.has(mB.id) && mA.id!==mB.id) return [a,b];
+              }
+            }
+            return null;
+          };
+          if(seenA.has((weekInBatch===0?pool[idx0]:pool[idx1]).id) || seenB.has((weekInBatch===0?pool[idx1]:pool[idx0]).id)){
+            const fresh=_findFreshPair();
+            if(fresh){idx0=fresh[0];idx1=fresh[1];warnings.push({weekISO,type:'holiday_pair_reindex',msg:`🔄 pair-swap דילג לpool[${idx0}]/pool[${idx1}] כדי למנוע חזרה על מערך שכבר ראתה מדריכה`});}
+          }
           const matA=weekInBatch===0?pool[idx0]:pool[idx1];
           const matB=weekInBatch===0?pool[idx1]:pool[idx0];
-          _record(String(uids[0]),matA);
-          _record(String(uids[1]),matB);
+          _record(uidAStr,matA);
+          _record(uidBStr,matB);
           /* If this is the LAST week of the cluster AND we introduced a new batch (weekInBatch=0),
              the swap of this batch didn't happen inside the cluster. Continue it into the next
              non-full working week (post-Sukkot 4.10) so it feels like Sukkot didn't skip a beat. */
@@ -3565,7 +3588,18 @@ async function computeAnnualRotation(region, opts){
             const cand=pool[(idx+weekIdx+off)%pool.length];
             if(!seenH.has(cand.id)){mat=cand;break}
           }
-          if(!mat)mat=pool[(idx+weekIdx)%pool.length];
+          if(!mat){
+            // All pool mats already seen by this uid. Try to find ANY unseen mat outside the pool.
+            const outsideFresh=materials.filter(m=>!seenH.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,gardensByUid[uidStr]||[],gardensSeen));
+            if(outsideFresh.length){
+              mat=outsideFresh[weekIdx%outsideFresh.length];
+              warnings.push({weekISO,type:'holiday_fallback_outside_pool',msg:`⚠️ ${uidStr.slice(0,8)}: כל pool החג נראה, לקח מערך חלופי "${mat.name}"`});
+            } else {
+              // No unseen mat anywhere — leave empty rather than repeat.
+              warnings.push({weekISO,type:'holiday_no_mat',msg:`❌ ${uidStr.slice(0,8)}: אין מערך שטרם ראתה, משאיר ריק (חוק ברזל: לא לחזור)`});
+              return;
+            }
+          }
           _record(uidStr,mat);
           _matsAssigned[uidStr]=mat;
         });
@@ -4149,7 +4183,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-31/v19-purim-3-weeks-before';
+  const _algoVersion='2026-08-31/v20-iron-rule-no-repeat-per-instructor';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
