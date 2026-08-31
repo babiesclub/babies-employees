@@ -3430,7 +3430,35 @@ async function computeAnnualRotation(region, opts){
           return {m,score:baseScore-(sharedMax*500)};
         });
         fscored.sort((a,b)=>b.score-a.score);
-        for(const f of fscored){if(pool.length>=minPool)break;pool.push(f.m);usedFillersInRegion.add(f.m.id)}
+        /* Pair-swap uses (pool[0],pool[1]) then (pool[2],pool[3])… Adjacent slots in each
+           pair land on the SAME uid in consecutive weeks (swap pattern). If they share
+           family/category, that uid sees fam X week N and fam X week N+1 — violates the
+           4-week cooldown. Pick fillers greedily but PENALIZE same-fam/cat as any pool
+           slot the new one would be adjacent to in a pair. */
+        while(pool.length<minPool && fscored.length){
+          const nextPairSlot=pool.length%2; // 0 = starting a pair, 1 = closing it
+          const pairPartner=nextPairSlot===1?pool[pool.length-1]:null; // the slot we'll pair with
+          const partnerCat=pairPartner&&pairPartner.category;
+          const partnerFam=pairPartner&&_familyOf(pairPartner,materials);
+          // Also avoid matching the OTHER pair's slots (they still rotate through same uid).
+          const seenCats=new Set();const seenFams=new Set();
+          pool.forEach(m=>{if(m.category)seenCats.add(m.category);const f=_familyOf(m,materials);if(f)seenFams.add(f)});
+          let bestIdx=-1;let bestScore=-Infinity;
+          for(let i=0;i<fscored.length;i++){
+            const cand=fscored[i].m;
+            let s=fscored[i].score;
+            const cFam=_familyOf(cand,materials);
+            if(partnerFam && cFam===partnerFam) s-=10000;      // hard penalty — same fam as swap partner
+            else if(partnerCat && cand.category===partnerCat) s-=5000; // strong — same category as swap partner
+            if(seenFams.has(cFam)) s-=200;                     // soft — fam already in pool
+            else if(seenCats.has(cand.category)) s-=50;
+            if(s>bestScore){bestScore=s;bestIdx=i}
+          }
+          if(bestIdx<0)break;
+          const chosen=fscored.splice(bestIdx,1)[0].m;
+          pool.push(chosen);
+          usedFillersInRegion.add(chosen.id);
+        }
       }
       return pool;
     };
@@ -4120,7 +4148,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-31/v17-purim-before-quail-no-leak';
+  const _algoVersion='2026-08-31/v18-holiday-pool-family-diverse';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
