@@ -3355,7 +3355,8 @@ async function computeAnnualRotation(region, opts){
   const gardensByUid={};
   allInRegion.forEach(u=>{gardensByUid[uidOf(u)]=(u.gardens||[]).slice()});
   // Rotation groups in this region — merged into super-groups via linkedGroupIds (connected components)
-  const groupsInRegion=(_rotGroups||[]).filter(g=>g.regionName===region).slice().sort((a,b)=>((a.orderIndex||0)-(b.orderIndex||0))||(a.id||'').localeCompare(b.id||''));
+  const _po=g=>(typeof g.pipelineOrder==='number'?g.pipelineOrder:99);
+  const groupsInRegion=(_rotGroups||[]).filter(g=>g.regionName===region).slice().sort((a,b)=>(_po(a)-_po(b))||(a.id||'').localeCompare(b.id||''));
   const groupById={};groupsInRegion.forEach(g=>groupById[g.id]=g);
   // Union-find over linked groups → super-groups. Cluster order = admin-chosen orderIndex,
   // so admin controls "which group is Pair 0 (entry) → Pair 1 → Triple (exit)".
@@ -3373,8 +3374,8 @@ async function computeAnnualRotation(region, opts){
       cluster.push(grp);
       (grp.linkedGroupIds||[]).forEach(otherId=>{if(!inCluster.has(otherId)&&groupById[otherId])queue.push(otherId)});
     }
-    // Sort cluster's sub-groups by orderIndex so admin controls entry → middle → exit order
-    cluster.sort((a,b)=>((a.orderIndex||0)-(b.orderIndex||0))||(a.id||'').localeCompare(b.id||''));
+    // Sort cluster's sub-groups by pipelineOrder so admin controls entry → middle → exit order
+    cluster.sort((a,b)=>(_po(a)-_po(b))||(a.id||'').localeCompare(b.id||''));
     superGroups.push(cluster);
   });
   const inGroupUids=new Set();
