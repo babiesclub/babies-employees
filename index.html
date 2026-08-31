@@ -3564,17 +3564,32 @@ async function computeAnnualRotation(region, opts){
             const fresh=_findFreshPair();
             if(fresh){idx0=fresh[0];idx1=fresh[1];warnings.push({weekISO,type:'holiday_pair_reindex',msg:`🔄 pair-swap דילג לpool[${idx0}]/pool[${idx1}] כדי למנוע חזרה על מערך שכבר ראתה מדריכה`});}
           }
-          const matA=weekInBatch===0?pool[idx0]:pool[idx1];
-          const matB=weekInBatch===0?pool[idx1]:pool[idx0];
-          _record(uidAStr,matA);
-          _record(uidBStr,matB);
+          let matA=weekInBatch===0?pool[idx0]:pool[idx1];
+          let matB=weekInBatch===0?pool[idx1]:pool[idx0];
+          // FINAL SAFETY NET: even after _findFreshPair, if either mat was seen → hunt outsideFresh individually per uid.
+          const _hunt=(seenSet, uid)=>{
+            const outsideFresh=materials.filter(m=>!seenSet.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,gardensByUid[uid]||[],gardensSeen));
+            return outsideFresh.length?outsideFresh[weekIdx%outsideFresh.length]:null;
+          };
+          if(seenA.has(matA.id)){
+            const alt=_hunt(seenA,uidAStr);
+            if(alt){matA=alt;warnings.push({weekISO,type:'holiday_pair_replace',msg:`⚠️ ${uidAStr.slice(0,8)}: pair-swap החליף למערך "${matA.name}" (המקורי כבר נראה)`});}
+            else{warnings.push({weekISO,type:'holiday_pair_skip',msg:`❌ ${uidAStr.slice(0,8)}: אין מערך חדש, משאיר ריק`});matA=null}
+          }
+          if(matB && seenB.has(matB.id)){
+            const alt=_hunt(seenB,uidBStr);
+            if(alt){matB=alt;warnings.push({weekISO,type:'holiday_pair_replace',msg:`⚠️ ${uidBStr.slice(0,8)}: pair-swap החליף למערך "${matB.name}" (המקורי כבר נראה)`});}
+            else{warnings.push({weekISO,type:'holiday_pair_skip',msg:`❌ ${uidBStr.slice(0,8)}: אין מערך חדש, משאיר ריק`});matB=null}
+          }
+          if(matA)_record(uidAStr,matA);
+          if(matB)_record(uidBStr,matB);
           /* If this is the LAST week of the cluster AND we introduced a new batch (weekInBatch=0),
              the swap of this batch didn't happen inside the cluster. Continue it into the next
              non-full working week (post-Sukkot 4.10) so it feels like Sukkot didn't skip a beat. */
           const isLastClusterWeek=(_posInCluster===_clusterWeeksSorted.length-1);
           if(isLastClusterWeek && weekInBatch===0){
-            // Don't push holiday-only mats — they'd leak past their window (reverse rule).
-            if(!_matIsHolidayOnlyMaterial(matA) && !_matIsHolidayOnlyMaterial(matB)){
+            // Don't push holiday-only mats or nulls — they'd leak past their window (reverse rule).
+            if(matA && matB && !_matIsHolidayOnlyMaterial(matA) && !_matIsHolidayOnlyMaterial(matB)){
               _postClusterPairSwaps.push({uidA:String(uids[0]),uidB:String(uids[1]),matA,matB});
               warnings.push({weekISO,type:'pair_swap_stored',msg:`🔵 SWAP STORED — uid ${String(uids[0]).slice(0,8)}→${matA.name}, uid ${String(uids[1]).slice(0,8)}→${matB.name}. יופעל בשבוע הבא ללא-full.`});
             }
@@ -4186,7 +4201,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-01/v22-fillers-no-cross-cluster-repeat';
+  const _algoVersion='2026-09-01/v23-holiday-pair-final-safety-net';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
