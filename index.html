@@ -3132,6 +3132,10 @@ const HOLIDAY_ONLY_WEEKS = {
   '2026-09-06': {name:'שבוע פתיחה — ראש השנה', matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2026-09-13': {name:'ראש השנה',              matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2026-09-20': {name:'יום כיפור',             matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2027-01-31': {name:'התחלת פורים (7 שבועות)',matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
+  '2027-02-07': {name:'פורים (6 שבועות)',      matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
+  '2027-02-14': {name:'פורים (5 שבועות)',      matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
+  '2027-02-21': {name:'פורים (4 שבועות)',      matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-02-28': {name:'לפני פורים (3 שבועות)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-07': {name:'לפני פורים (2 שבועות)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-14': {name:'מתחפשים פורים',         matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
@@ -3397,7 +3401,15 @@ async function computeAnnualRotation(region, opts){
      _holidayGroupPools[clusterKey] = { [groupId or '_free']: pool_array } */
   const _holidayGroupPools={};
   const _seenClusterKeys=new Set();
-  const _clusterKeyFor=wISO=>((HOLIDAY_ONLY_WEEKS[wISO]||{}).matchSeasons||[]).slice().sort().join('|');
+  // Cluster key: seasons + keywords. Two windows with no seasons (like שליו and שבועות)
+  // must NOT collapse into one cluster — that would drag שליו mats into שבועות weeks
+  // and blow up the whole spring/summer schedule.
+  const _clusterKeyFor=wISO=>{
+    const wk=HOLIDAY_ONLY_WEEKS[wISO]||{};
+    const seas=(wk.matchSeasons||[]).slice().sort().join('|');
+    const kws=(wk.matchKeywords||[]).slice().sort().join('|');
+    return seas+'::'+kws;
+  };
   // Iron rule: a filler that was used in ANY holiday cluster in this region must not be
   // reused in a later cluster. Otherwise the same uid could see it twice — once per cluster.
   const usedFillersInRegion=new Set();
@@ -4201,7 +4213,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-01/v23-holiday-pair-final-safety-net';
+  const _algoVersion='2026-09-01/v25-purim-cluster-7-weeks-from-31.1';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
