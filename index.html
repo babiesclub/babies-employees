@@ -3398,6 +3398,9 @@ async function computeAnnualRotation(region, opts){
   const _holidayGroupPools={};
   const _seenClusterKeys=new Set();
   const _clusterKeyFor=wISO=>((HOLIDAY_ONLY_WEEKS[wISO]||{}).matchSeasons||[]).slice().sort().join('|');
+  // Iron rule: a filler that was used in ANY holiday cluster in this region must not be
+  // reused in a later cluster. Otherwise the same uid could see it twice — once per cluster.
+  const usedFillersInRegion=new Set();
   Object.keys(HOLIDAY_ONLY_WEEKS).forEach(wISO=>{
     if(!window._activeHolidayLockdown.has(wISO))return;
     const key=_clusterKeyFor(wISO);
@@ -3408,7 +3411,6 @@ async function computeAnnualRotation(region, opts){
     const anchorWISO=clusterWeeks[0];
     const holMats=materials.filter(m=>_matIsHolidayOnlyFor(m,anchorWISO));
     _holidayGroupPools[key]={};
-    const usedFillersInRegion=new Set(); // Spread fillers across groups within this region
     const _sharedMaxAcrossCluster=(m)=>{
        let max=0;
        clusterWeeks.forEach(w=>{
@@ -4184,7 +4186,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-01/v21-quail-3-weeks-before-pesach';
+  const _algoVersion='2026-09-01/v22-fillers-no-cross-cluster-repeat';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
