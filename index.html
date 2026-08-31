@@ -3132,6 +3132,7 @@ const HOLIDAY_ONLY_WEEKS = {
   '2026-09-06': {name:'שבוע פתיחה — ראש השנה', matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2026-09-13': {name:'ראש השנה',              matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2026-09-20': {name:'יום כיפור',             matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2027-02-28': {name:'לפני פורים (3 שבועות)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-07': {name:'לפני פורים (2 שבועות)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-14': {name:'מתחפשים פורים',         matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-28': {name:'שליו (בין פורים לפסח)',  matchSeasons:[],                                      matchKeywords:['שליו']},
@@ -4148,7 +4149,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-31/v18-holiday-pool-family-diverse';
+  const _algoVersion='2026-08-31/v19-purim-3-weeks-before';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
