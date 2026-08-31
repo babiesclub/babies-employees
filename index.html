@@ -4685,7 +4685,17 @@ function exportWschToXls(){
     groupsInR.forEach(g=>{if(_seen.has(g.id))return;const cluster=[];const _q=[g.id];const _in=new Set();while(_q.length){const cur=_q.shift();if(_in.has(cur))continue;_in.add(cur);_seen.add(cur);const grp=groupsInR.find(gg=>gg.id===cur);if(!grp)continue;cluster.push(grp);(grp.linkedGroupIds||[]).forEach(o=>{if(!_in.has(o))_q.push(o)})}const merged=[];cluster.forEach(gg=>{(gg.instructorUids||[]).forEach(uid=>{const u=instrInRegion.find(uu=>String(uu.uid||uu.id)===String(uid));if(u&&!merged.find(x=>String(x.uid||x.id)===String(u.uid||u.id)))merged.push(u)})});if(!merged.length)return;subTabs.push({key:'g:'+cluster.map(gg=>gg.id).sort().join('|'),instructors:merged,isGroup:true})});
     if(freeInstr.length||!subTabs.length)subTabs.push({key:'free',instructors:freeInstr,isGroup:false});
     const _hasAny=subTabs.some(t=>t.isGroup);
-    if(_hasAny&&(subTabs.filter(t=>t.isGroup).length>1||freeInstr.length)){const _all=instrInRegion.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));subTabs.unshift({key:'all',instructors:_all,isGroup:false,isAll:true})}
+    if(_hasAny&&(subTabs.filter(t=>t.isGroup).length>1||freeInstr.length)){
+      // "All region" order in export mirrors the display: free agents right, pipeline entry → exit
+      const _poX=g=>(typeof g.pipelineOrder==='number'?g.pipelineOrder:99);
+      const _grpX=(_rotGroups||[]).filter(g=>g.regionName===_wschRegion).slice().sort((a,b)=>(_poX(a)-_poX(b))||(a.id||'').localeCompare(b.id||''));
+      const _byUidX={};instrInRegion.forEach(u=>{_byUidX[String(u.uid||u.id)]=u});
+      const _seenX=new Set();const _all=[];
+      freeInstr.forEach(u=>{const k=String(u.uid||u.id);if(!_seenX.has(k)){_seenX.add(k);_all.push(u)}});
+      _grpX.forEach(g=>(g.instructorUids||[]).forEach(uid=>{const k=String(uid);if(_seenX.has(k))return;const u=_byUidX[k];if(u){_seenX.add(k);_all.push(u)}}));
+      instrInRegion.forEach(u=>{const k=String(u.uid||u.id);if(!_seenX.has(k)){_seenX.add(k);_all.push(u)}});
+      subTabs.unshift({key:'all',instructors:_all,isGroup:false,isAll:true});
+    }
     const activeSub=subTabs.find(t=>t.key===_wschSubTab)||subTabs[0];
     const instructors=_wschApplyColOrder(activeSub?activeSub.instructors.slice():[]);
     const materials=getMaterials();const matById={};materials.forEach(m=>matById[m.id]=m);
@@ -4762,7 +4772,19 @@ function exportWschToCsv(){
     groupsInR.forEach(g=>{if(_seen.has(g.id))return;const cluster=[];const _q=[g.id];const _in=new Set();while(_q.length){const cur=_q.shift();if(_in.has(cur))continue;_in.add(cur);_seen.add(cur);const grp=groupsInR.find(gg=>gg.id===cur);if(!grp)continue;cluster.push(grp);(grp.linkedGroupIds||[]).forEach(o=>{if(!_in.has(o))_q.push(o)})}const merged=[];cluster.forEach(gg=>{(gg.instructorUids||[]).forEach(uid=>{const u=instrInRegion.find(uu=>String(uu.uid||uu.id)===String(uid));if(u&&!merged.find(x=>String(x.uid||x.id)===String(u.uid||u.id)))merged.push(u)})});if(!merged.length)return;const isSuper=cluster.length>1;const label=isSuper?'🔗 '+cluster.map(gg=>gg.name||'קבוצה').join(' + '):'🔄 '+(cluster[0].name||'קבוצה');subTabs.push({key:'g:'+cluster.map(gg=>gg.id).sort().join('|'),label,instructors:merged,isGroup:true})});
     if(freeInstr.length||!subTabs.length)subTabs.push({key:'free',label:subTabs.length?'👤 חופשיות':'👤 כל המדריכות',instructors:freeInstr,isGroup:false});
     const _hasAny=subTabs.some(t=>t.isGroup);
-    if(_hasAny&&(subTabs.filter(t=>t.isGroup).length>1||freeInstr.length)){const _all=instrInRegion.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));subTabs.unshift({key:'all',label:'🌐 כל האזור',instructors:_all,isGroup:false,isAll:true})}
+    if(_hasAny&&(subTabs.filter(t=>t.isGroup).length>1||freeInstr.length)){
+      /* "כל האזור" order: free agents FIRST (rightmost in RTL), then rotation groups by
+         pipelineOrder ascending (entry → exit, right → left). Within a group: instructorUids order. */
+      const _po=g=>(typeof g.pipelineOrder==='number'?g.pipelineOrder:99);
+      const groupsInRegionSorted=(_rotGroups||[]).filter(g=>g.regionName===_wschRegion).slice().sort((a,b)=>(_po(a)-_po(b))||(a.id||'').localeCompare(b.id||''));
+      const _byUid={};instrInRegion.forEach(u=>{_byUid[String(u.uid||u.id)]=u});
+      const _seenUids=new Set();
+      const _ordered=[];
+      freeInstr.forEach(u=>{const k=String(u.uid||u.id);if(!_seenUids.has(k)){_seenUids.add(k);_ordered.push(u)}});
+      groupsInRegionSorted.forEach(g=>{(g.instructorUids||[]).forEach(uid=>{const k=String(uid);if(_seenUids.has(k))return;const u=_byUid[k];if(u){_seenUids.add(k);_ordered.push(u)}})});
+      instrInRegion.forEach(u=>{const k=String(u.uid||u.id);if(!_seenUids.has(k)){_seenUids.add(k);_ordered.push(u)}});
+      subTabs.unshift({key:'all',label:'🌐 כל האזור',instructors:_ordered,isGroup:false,isAll:true});
+    }
     const activeSub=subTabs.find(t=>t.key===_wschSubTab)||subTabs[0];
     const instructors=_wschApplyColOrder(activeSub?activeSub.instructors.slice():[]);
     const materials=getMaterials();const matById={};materials.forEach(m=>matById[m.id]=m);
