@@ -3641,6 +3641,11 @@ async function computeAnnualRotation(region, opts){
         const shiftIdx=Math.floor(runIdx/2);
         const weekInShift=runIdx%2;
         state.runCount++;
+        /* If ALL super-cluster uids are pre-assigned this week via post-Sukkot swap continuity,
+           skip pipeline advancement — the continuity wins. runCount still advanced so pipeline
+           stays aligned with real week count on subsequent weeks. */
+        const _allSuperUidsPreAssigned=_actCluster.every(g=>(g.instructorUids||[]).every(u=>_preAssignedUids.has(String(u))));
+        if(_allSuperUidsPreAssigned){continue}
         // Union of all gardens in the super-cluster (for constraint filtering)
         const allSuperGardens=[];_actCluster.forEach(g=>(g.instructorUids||[]).forEach(u=>{(gardensByUid[String(u)]||[]).forEach(gn=>{if(!allSuperGardens.includes(gn))allSuperGardens.push(gn)})}));
         const allSuperUids=_actCluster.flatMap(g=>(g.instructorUids||[]).map(String));
