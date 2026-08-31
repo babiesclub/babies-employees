@@ -3132,8 +3132,10 @@ const HOLIDAY_ONLY_WEEKS = {
   '2026-09-06': {name:'שבוע פתיחה — ראש השנה', matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2026-09-13': {name:'ראש השנה',              matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2026-09-20': {name:'יום כיפור',             matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
-  '2027-03-14': {name:'מתחפשים פורים', matchSeasons:['near_purim','before_purim'],                    matchKeywords:['פורים','טווס']},
-  '2027-03-21': {name:'פורים',        matchSeasons:['near_purim','before_purim'],                    matchKeywords:['פורים','טווס']},
+  '2027-03-07': {name:'לפני פורים (2 שבועות)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
+  '2027-03-14': {name:'מתחפשים פורים',         matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
+  '2027-03-28': {name:'שליו (בין פורים לפסח)',  matchSeasons:[],                                      matchKeywords:['שליו']},
+  '2027-04-04': {name:'שליו (בין פורים לפסח)',  matchSeasons:[],                                      matchKeywords:['שליו']},
   '2027-05-09': {name:'יום העצמאות',   matchSeasons:['before_independence_day'],                       matchKeywords:['עצמאות','דואר']},
   '2027-06-06': {name:'שבועות',       matchSeasons:[],                                                matchKeywords:['שבועות']},
 };
@@ -3516,8 +3518,11 @@ async function computeAnnualRotation(region, opts){
              non-full working week (post-Sukkot 4.10) so it feels like Sukkot didn't skip a beat. */
           const isLastClusterWeek=(_posInCluster===_clusterWeeksSorted.length-1);
           if(isLastClusterWeek && weekInBatch===0){
-            _postClusterPairSwaps.push({uidA:String(uids[0]),uidB:String(uids[1]),matA,matB});
-            warnings.push({weekISO,type:'pair_swap_stored',msg:`🔵 SWAP STORED — uid ${String(uids[0]).slice(0,8)}→${matA.name}, uid ${String(uids[1]).slice(0,8)}→${matB.name}. יופעל בשבוע הבא ללא-full.`});
+            // Don't push holiday-only mats — they'd leak past their window (reverse rule).
+            if(!_matIsHolidayOnlyMaterial(matA) && !_matIsHolidayOnlyMaterial(matB)){
+              _postClusterPairSwaps.push({uidA:String(uids[0]),uidB:String(uids[1]),matA,matB});
+              warnings.push({weekISO,type:'pair_swap_stored',msg:`🔵 SWAP STORED — uid ${String(uids[0]).slice(0,8)}→${matA.name}, uid ${String(uids[1]).slice(0,8)}→${matB.name}. יופעל בשבוע הבא ללא-full.`});
+            }
           }
           return;
         }
@@ -3541,7 +3546,8 @@ async function computeAnnualRotation(region, opts){
         if(uids.length===2 && _posInCluster===_clusterWeeksSorted.length-1){
           const uidA=String(uids[0]),uidB=String(uids[1]);
           const matA=_matsAssigned[uidA],matB=_matsAssigned[uidB];
-          if(matA&&matB&&matA.id!==matB.id){
+          // Don't push holiday-only mats — they'd leak past their window (reverse rule).
+          if(matA&&matB&&matA.id!==matB.id&&!_matIsHolidayOnlyMaterial(matA)&&!_matIsHolidayOnlyMaterial(matB)){
             _postClusterPairSwaps.push({uidA,uidB,matA,matB});
             warnings.push({weekISO,type:'pair_swap_stored_fallback',msg:`🔵 SWAP STORED (fallback) — ${uidA.slice(0,8)}→${matA.name}, ${uidB.slice(0,8)}→${matB.name} (pool קטן מ-4)`});
           }
@@ -3577,7 +3583,9 @@ async function computeAnnualRotation(region, opts){
             const pair1Uids=(pairs[1].instructorUids||[]).map(String);
             const pair0Mats=pair0Uids.map(u=>weekAssignmentsH[u]);
             const pair1Mats=pair1Uids.map(u=>weekAssignmentsH[u]);
-            if(pair0Mats[0]&&pair0Mats[1]&&pair1Mats[0]&&pair1Mats[1]){
+            // Don't seed with holiday-only mats — they'd leak past their window when pipeline shifts.
+            const _noHoli=arr=>arr.every(m=>m && !_matIsHolidayOnlyMaterial(m));
+            if(pair0Mats[0]&&pair0Mats[1]&&pair1Mats[0]&&pair1Mats[1]&&_noHoli(pair0Mats)&&_noHoli(pair1Mats)){
               state.pairSlots[0]=pair0Mats;
               state.pairSlots[1]=pair1Mats;
               state.lastPairShiftIdx=0;
@@ -3594,7 +3602,9 @@ async function computeAnnualRotation(region, opts){
             const mats0=(cluster[0].instructorUids||[]).map(u=>weekAssignmentsH[String(u)]);
             const mats1=(cluster[1].instructorUids||[]).map(u=>weekAssignmentsH[String(u)]);
             const mats2=(cluster[2].instructorUids||[]).map(u=>weekAssignmentsH[String(u)]);
-            if(mats0.every(Boolean)&&mats1.every(Boolean)&&mats2.every(Boolean)){
+            // Don't seed with holiday-only mats — they'd leak past their window.
+            const _noHoli3=arr=>arr.every(m=>m && !_matIsHolidayOnlyMaterial(m));
+            if(mats0.every(Boolean)&&mats1.every(Boolean)&&mats2.every(Boolean)&&_noHoli3(mats0)&&_noHoli3(mats1)&&_noHoli3(mats2)){
               state.pairs[0]=mats0;
               state.pairs[1]=mats1;
               state.pairs[2]=mats2;
@@ -4110,7 +4120,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-31/v16-LOCKED-continuity-all-branches';
+  const _algoVersion='2026-08-31/v17-purim-before-quail-no-leak';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
