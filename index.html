@@ -3868,6 +3868,10 @@ async function computeAnnualRotation(region, opts){
       // Union of all gardens across the super-group
       const allSuperGardens=[];const allSuperUids=[];
       cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>{allSuperUids.push(String(u));(gardensByUid[String(u)]||[]).forEach(gn=>{if(!allSuperGardens.includes(gn))allSuperGardens.push(gn)})}));
+      /* If ALL super-cluster uids are pre-assigned this week via swap continuity, skip
+         the super-cluster's Latin Square — continuity wins. State stays untouched so
+         next week the natural rhythm continues from where the pipeline left off. */
+      if(allSuperUids.length && allSuperUids.every(u=>_preAssignedUids.has(String(u)))){continue}
       // Compute seenWeek for (sub-group sg, position pos) seeing material at (pool p, slot i):
       // seenWeek = batchStart + ((sg - p + N_sub) % N_sub) * K + ((pos - i + K) % K)
       const seenWeekFor=(sg,pos,p,i,batchStart)=>batchStart+(((sg-p+N_sub)%N_sub)*K)+(((pos-i+K)%K));
@@ -4106,7 +4110,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-08-31/v15-LOCKED-pipeline-seeded-all-structures';
+  const _algoVersion='2026-08-31/v16-LOCKED-continuity-all-branches';
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
   const _holidayPoolSnapshot={};
