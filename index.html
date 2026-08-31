@@ -3567,23 +3567,42 @@ async function computeAnnualRotation(region, opts){
           if(cluster.length!==3)return;
           const pairs=cluster.filter(g=>(g.instructorUids||[]).length===2);
           const triples=cluster.filter(g=>(g.instructorUids||[]).length===3);
-          if(pairs.length!==2||triples.length!==1)return;
-          const superId=superIdOf(cluster);
-          const stateKey=superId+'::pairpipe';
-          if(!groupPipelines[stateKey])groupPipelines[stateKey]={pairSlots:[null,null],tripleMats:null,pairRunCount:0,tripleRunCount:0,lastPairShiftIdx:-1,lastTripleShiftIdx:-1,retiredQueue:[]};
-          const state=groupPipelines[stateKey];
-          const pair0Uids=(pairs[0].instructorUids||[]).map(String);
-          const pair1Uids=(pairs[1].instructorUids||[]).map(String);
-          const pair0Mats=pair0Uids.map(u=>weekAssignmentsH[u]);
-          const pair1Mats=pair1Uids.map(u=>weekAssignmentsH[u]);
-          if(pair0Mats[0]&&pair0Mats[1]&&pair1Mats[0]&&pair1Mats[1]){
-            state.pairSlots[0]=pair0Mats;
-            state.pairSlots[1]=pair1Mats;
-            state.lastPairShiftIdx=0;
-            state.pairRunCount=1;
+          // Case A: 2 pairs + 1 triple → custom "pairpipe" state
+          if(pairs.length===2&&triples.length===1){
+            const superId=superIdOf(cluster);
+            const stateKey=superId+'::pairpipe';
+            if(!groupPipelines[stateKey])groupPipelines[stateKey]={pairSlots:[null,null],tripleMats:null,pairRunCount:0,tripleRunCount:0,lastPairShiftIdx:-1,lastTripleShiftIdx:-1,retiredQueue:[]};
+            const state=groupPipelines[stateKey];
+            const pair0Uids=(pairs[0].instructorUids||[]).map(String);
+            const pair1Uids=(pairs[1].instructorUids||[]).map(String);
+            const pair0Mats=pair0Uids.map(u=>weekAssignmentsH[u]);
+            const pair1Mats=pair1Uids.map(u=>weekAssignmentsH[u]);
+            if(pair0Mats[0]&&pair0Mats[1]&&pair1Mats[0]&&pair1Mats[1]){
+              state.pairSlots[0]=pair0Mats;
+              state.pairSlots[1]=pair1Mats;
+              state.lastPairShiftIdx=0;
+              state.pairRunCount=1;
+            }
+            return;
           }
-          // Note: triple state NOT pre-populated — RH triple mats include RH mats
-          //       (blocked post-RH by reverse rule). Triple starts fresh on 4.10.
+          // Case B: 3 pairs of 2 (2+2+2) → seed the triple-pair pipeline state
+          if(pairs.length===3&&cluster.every(g=>(g.instructorUids||[]).length===2)){
+            const superId=superIdOf(cluster);
+            const stateKey=superId+'::triple';
+            if(!groupPipelines[stateKey])groupPipelines[stateKey]={pairs:[null,null,null],lastShiftIdx:-1,runCount:0};
+            const state=groupPipelines[stateKey];
+            const mats0=(cluster[0].instructorUids||[]).map(u=>weekAssignmentsH[String(u)]);
+            const mats1=(cluster[1].instructorUids||[]).map(u=>weekAssignmentsH[String(u)]);
+            const mats2=(cluster[2].instructorUids||[]).map(u=>weekAssignmentsH[String(u)]);
+            if(mats0.every(Boolean)&&mats1.every(Boolean)&&mats2.every(Boolean)){
+              state.pairs[0]=mats0;
+              state.pairs[1]=mats1;
+              state.pairs[2]=mats2;
+              state.lastShiftIdx=0;
+              state.runCount=1;
+              warnings.push({weekISO,type:'triple_pipe_seeded',msg:`🔵 TRIPLE-PIPE SEEDED — 3 זוגות בסופר-קלסטר עם batches מ-20.9 (יעברו shift ב-11.10)`});
+            }
+          }
         });
       }
       proposal.push({weekISO,assignments:weekAssignmentsH,holidayOnly:true});
