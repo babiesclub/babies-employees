@@ -681,6 +681,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <button class="btn-sec" style="background:#DCFCE7;border-color:#16A34A;color:#14532D;font-weight:700" onclick="exportWschToXls()" title="ייצוא הטבלה כפי שהיא מוצגת (עם צבעים ועיצוב) לקובץ Excel">📊 ייצא לאקסל</button>
             <button class="btn-sec" style="background:#EDE9FE;border-color:#7C3AED;color:#5B21B6;font-weight:700" onclick="lockAllCurrentAssignments()" title="נועל את כל השיבוצים הקיימים — 'חשב מחדש + החל דריסה' לא ידרוס אותם">🔒 נעלי הכל</button>
             <button class="btn-sec" style="background:#FEF3C7;border-color:#F59E0B;color:#78350F;font-weight:700" onclick="unlockAllAssignments()" title="פותח נעילה של כל השיבוצים">🔓 בטלי הכל</button>
+            <button class="btn-sec" style="background:#DBEAFE;border-color:#3B82F6;color:#1E40AF;font-weight:700" onclick="promptInstructorStartDate()" title="קבעי מתי מדריכה מתחילה/מסיימת (למשל רוני ללוש מתחילה ב-2026-10-25)">📅 תאריכי פעילות של מדריכה</button>
           </div>
           <div style="background:linear-gradient(90deg,#EDE9FE,#DBEAFE);border:1px dashed #7C3AED;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:#5B21B6;line-height:1.5">💡 <b>נעילת שיבוצים ידנית</b>: כל שיבוץ שאת בוחרת ידנית נעול אוטומטית 🔒 — "חשב מחדש + החל דריסה" לא ידרוס אותו. לחצי על 🔓 בתא כדי לנעול/לבטל נעילה. הסרת מערך (בחירת "🗑 הסר שיבוץ") גם מסירה את הנעילה.</div>
           <div id="wsch-grid" style="overflow-x:auto"></div>
@@ -3366,6 +3367,12 @@ async function computeAnnualRotation(region, opts){
   const uidOf=u=>String(u.uid||u.id);
   const gardensByUid={};
   allInRegion.forEach(u=>{gardensByUid[uidOf(u)]=(u.gardens||[]).slice()});
+  // Per-instructor start/end date. A uid outside its active window gets NO assignments —
+  // e.g. an instructor who only joins mid-year (startDate='2026-10-25') gets zero mats
+  // in the first weeks of the school year, so all pool positions stay clear for others.
+  const uidActiveWindow={};
+  allInRegion.forEach(u=>{uidActiveWindow[uidOf(u)]={start:u.startDate||null,end:u.endDate||null}});
+  const _uidActiveInWeek=(uid,weekISO)=>{const w=uidActiveWindow[String(uid)]||{};if(w.start && weekISO<w.start)return false;if(w.end && weekISO>w.end)return false;return true};
   // Rotation groups in this region — merged into super-groups via linkedGroupIds (connected components)
   const _po=g=>(typeof g.pipelineOrder==='number'?g.pipelineOrder:99);
   const groupsInRegion=(_rotGroups||[]).filter(g=>g.regionName===region).slice().sort((a,b)=>(_po(a)-_po(b))||(a.id||'').localeCompare(b.id||''));
@@ -3536,6 +3543,7 @@ async function computeAnnualRotation(region, opts){
       // Record helper — updates all tracking state for one uid+mat
       const _record=(uidStr,mat)=>{
         if(!mat)return;
+        if(!_uidActiveInWeek(uidStr,weekISO))return; // Skip pre-start / post-end uids
         weekAssignmentsH[uidStr]=mat.id;
         const seenH=instructorSeenMats[uidStr]||new Set();
         instructorSeenMats[uidStr]=seenH;seenH.add(mat.id);
@@ -3833,6 +3841,7 @@ async function computeAnnualRotation(region, opts){
             const matIdx=(pos+weekInShift)%2;
             const matId=mats[matIdx];
             if(!matId)return;
+            if(!_uidActiveInWeek(uid,weekISO))return;
             weekAssignments[uid]=matId;
             const mat=materials.find(m=>m.id===matId);
             if(mat){
@@ -3893,6 +3902,7 @@ async function computeAnnualRotation(region, opts){
             return chosen;
           };
           const _recordPipe=(uid,matId)=>{
+            if(!_uidActiveInWeek(uid,weekISO))return;
             weekAssignments[uid]=matId;
             const mat=materials.find(m=>m.id===matId);
             if(!mat)return;
@@ -4070,6 +4080,7 @@ async function computeAnnualRotation(region, opts){
           const slot=((pos-innerPos)%K+K)%K;
           const matId=state.batch[poolIdx*K+slot];
           if(!matId)return;
+          if(!_uidActiveInWeek(uid,weekISO))return;
           weekAssignments[uid]=matId;
           const mat=materials.find(m=>m.id===matId);
           if(mat){
@@ -4160,6 +4171,7 @@ async function computeAnnualRotation(region, opts){
       uids.forEach((uid,idx)=>{
         const matIdx=((idx-curWeekInBatch)%N+N)%N;
         const matId=state.batch[matIdx]; if(!matId) return;
+        if(!_uidActiveInWeek(uid,weekISO))return;
         weekAssignments[uid]=matId;
         const mat=materials.find(m=>m.id===matId);
         if(mat){
@@ -4181,6 +4193,7 @@ async function computeAnnualRotation(region, opts){
     // Free-agent instructors — individual scoring
     for(const u of freeAgents){
       const uid=uidOf(u);
+      if(!_uidActiveInWeek(uid,weekISO))continue; // Skip pre-start / post-end free agents
       const gardens=gardensByUid[uid]||[];
       const catCooldownOK=(m)=>{if(!m.category)return true;const lastW=(catLastWeekByUid[uid]||{})[m.category];return lastW===undefined||(weekIdx-lastW)>=4};
       const famCooldownOK=(m)=>{const fam=_familyOf(m,materials);if(!fam)return true;const lastW=(familyLastWeekByUid[uid]||{})[fam];return lastW===undefined||(weekIdx-lastW)>=4};
@@ -4214,7 +4227,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-01/v26-purim-3-weeks-keyword-both-names';
+  const _algoVersion='2026-09-01/v27-instructor-active-window';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -5019,6 +5032,47 @@ async function lockAllCurrentAssignments(){
   localStorage.setItem('bz3_weeklySchedule',JSON.stringify(schedule));
   alert(`✓ ננעלו ${count} שיבוצים ב-${weekCount} שבועות.\n\nעכשיו "חשב מחדש + החל דריסה" ישמור עליהם.${failures.length?'\n\n⚠ '+failures.length+' שבועות לא נשמרו לענן — יסתנכרנו אוטו':''}`);
   renderWschGrid();
+}
+// Set/clear per-instructor start/end dates. weekISO format: YYYY-MM-DD (Sunday).
+// Empty string clears the field.
+async function setInstructorActiveWindow(nameOrUid, startDateISO, endDateISO){
+  const users=DB.get('users')||[];
+  const u=users.find(x=>x.name===nameOrUid||String(x.uid||x.id)===String(nameOrUid));
+  if(!u){alert('לא נמצאה מדריכה בשם/uid: '+nameOrUid);return}
+  if(startDateISO!==undefined)u.startDate=startDateISO||null;
+  if(endDateISO!==undefined)u.endDate=endDateISO||null;
+  DB.set('users',users);
+  if(window.fbDb){try{await fbDb.collection('users').doc(u.uid||u.id).update({startDate:u.startDate||null,endDate:u.endDate||null})}catch(e){console.warn('cloud update:',e.message)}}
+  // Immediately clean existing assignments outside the new window.
+  const uidStr=String(u.uid||u.id);
+  const schedule=getWeeklySchedule();
+  let cleaned=0;const cleanedWeeks=new Set();
+  for(const weekId of Object.keys(schedule)){
+    const wk=schedule[weekId];if(!wk||!wk.assignments||!wk.assignments[uidStr])continue;
+    const outOfWindow=(u.startDate && weekId<u.startDate)||(u.endDate && weekId>u.endDate);
+    if(!outOfWindow)continue;
+    delete wk.assignments[uidStr];
+    if(Array.isArray(wk.lockedUids))wk.lockedUids=wk.lockedUids.filter(x=>String(x)!==uidStr);
+    wk.lastUpdated=Date.now();cleaned++;cleanedWeeks.add(weekId);
+  }
+  if(cleaned){
+    localStorage.setItem('bz3_weeklySchedule',JSON.stringify(schedule));
+    for(const weekId of cleanedWeeks){try{await fbDb.collection('weeklySchedule').doc(weekId).set(schedule[weekId])}catch(e){}}
+  }
+  const s=u.startDate?'התחלה: '+u.startDate:'';
+  const e=u.endDate?' | סיום: '+u.endDate:'';
+  alert(`✓ ${u.name}\n${s}${e}\n\n🧹 נוקו ${cleaned} שיבוצים ישנים מחוץ לחלון.\n\nמעכשיו חישוב מחדש לא ישבץ אותה בשבועות האלה.`);
+  if(typeof renderWschGrid==='function')renderWschGrid();
+}
+// UI: prompt for start date for named instructor
+async function promptInstructorStartDate(){
+  const name=prompt('שם המדריכה (למשל: רוני ללוש):');
+  if(!name)return;
+  const start=prompt(`תאריך התחלה של ${name} (YYYY-MM-DD, למשל 2026-10-25). ריק = בלי הגבלה:`);
+  if(start===null)return;
+  const end=prompt(`תאריך סיום של ${name} (YYYY-MM-DD). ריק = בלי הגבלה:`);
+  if(end===null)return;
+  await setInstructorActiveWindow(name,start.trim(),end.trim());
 }
 async function unlockAllAssignments(){
   if(!confirm('🔓 לפתוח את הנעילה של כל השיבוצים?\n\nזה מאפשר ל"חשב מחדש" לשנות את כל התאים לפי האלגוריתם.'))return;
