@@ -4887,8 +4887,8 @@ function _drsBuildData(){
       const candidates=(nxtInvByMat[curId]||[]).filter(oid=>oid!==uid&&regionUidSet.has(oid));
       if(candidates.length)pipelineTo=candidates.map(c=>uidToName[c]||'?').join(' / ');
     }
-    const gardens=(u.gardens||[]).map(gn=>({name:gn,address:_drsGardenAddr(gn)}));
-    return{uid,name:u.name||'?',phone:u.phone||'',gardens,curMat,nxtMat,pipelineTo,hasCur:!!curId};
+    const instructorAddr=(u.address||'').trim();
+    return{uid,name:u.name||'?',phone:u.phone||'',address:instructorAddr,curMat,nxtMat,pipelineTo,hasCur:!!curId};
   });
   return{region,dateStr,driver,currentWeekISO,nextWeekISO,stops};
 }
@@ -4900,11 +4900,11 @@ function generateDriverRouteSheet(){
   if(!d.stops.length){wrap.innerHTML=`<div style="padding:14px;background:#FEF3C7;border:1px solid #F59E0B;color:#78350F;border-radius:8px;text-align:center">אין מדריכות באזור "${esc(d.region)}"</div>`;if(actions)actions.style.display='none';return}
   const header=`<div class="drs-header" style="background:#B4C7E7;color:#0C4A6E;padding:14px 18px;font-size:18px;font-weight:800;border:1px solid #666;border-radius:8px 8px 0 0;text-align:center">קו ${esc(d.region)} · ${esc(_drsFormatDateHe(d.dateStr))}${d.driver?` · נהג: ${esc(d.driver)}`:''}</div>`;
   const cards=d.stops.map((s,i)=>{
-    const gardenHtml=s.gardens.length?s.gardens.map(g=>`<div style="font-size:13px;padding:2px 0;line-height:1.5">• <b>${esc(g.name)}</b>${g.address?` — ${esc(g.address)}`:''}</div>`).join(''):'<div style="font-size:12px;color:#888;font-style:italic">— אין גנים משויכים —</div>';
+    const addrHtml=s.address?`<div style="font-size:15px;padding:2px 0;line-height:1.5;font-weight:600">📍 ${esc(s.address)}</div>`:'<div style="font-size:12px;color:#888;font-style:italic">— אין כתובת מוגדרת למדריכה —</div>';
     const cur=s.curMat?esc(s.curMat.name):'—';
     const nxt=s.nxtMat?esc(s.nxtMat.name):'—';
     const phoneHtml=s.phone?esc(s.phone):'<span style="color:#888;font-style:italic;font-weight:400">— אין טלפון —</span>';
-    return `<div class="drs-stop" style="border:1px solid #666;border-top:0;background:white"><div style="display:flex;background:#FBD4B4;border-bottom:1px solid #666"><div style="flex:1;padding:10px 14px;font-size:16px;font-weight:800;color:#0C4A6E">${i+1}. ${esc(s.name)}</div><div style="padding:10px 14px;font-size:14px;font-weight:700;color:#0C4A6E;border-right:1px solid #666;min-width:140px;text-align:center;direction:ltr">${phoneHtml}</div></div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:12px;font-weight:700;color:#555;margin-bottom:4px">כתובות:</div>${gardenHtml}</div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:14px"><b>מחזירה:</b> ${cur}</div>${s.hasCur?`<div style="font-size:12px;color:#1565C0;margin-top:3px;font-weight:600">→ ${esc(s.pipelineTo)}</div>`:''}</div><div style="padding:10px 14px"><div style="font-size:14px"><b>מקבלת:</b> ${nxt}</div></div></div>`;
+    return `<div class="drs-stop" style="border:1px solid #666;border-top:0;background:white"><div style="display:flex;background:#FBD4B4;border-bottom:1px solid #666"><div style="flex:1;padding:10px 14px;font-size:16px;font-weight:800;color:#0C4A6E">${i+1}. ${esc(s.name)}</div><div style="padding:10px 14px;font-size:14px;font-weight:700;color:#0C4A6E;border-right:1px solid #666;min-width:140px;text-align:center;direction:ltr">${phoneHtml}</div></div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:12px;font-weight:700;color:#555;margin-bottom:4px">כתובת המדריכה:</div>${addrHtml}</div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:14px"><b>מחזירה:</b> ${cur}</div>${s.hasCur?`<div style="font-size:12px;color:#1565C0;margin-top:3px;font-weight:600">→ ${esc(s.pipelineTo)}</div>`:''}</div><div style="padding:10px 14px"><div style="font-size:14px"><b>מקבלת:</b> ${nxt}</div></div></div>`;
   }).join('');
   const html=`<div id="drs-printable" style="font-family:inherit;direction:rtl;font-size:14px">${header}${cards}<div class="drs-no-print" style="margin-top:10px;font-size:11px;color:#666;text-align:center">שבוע נוכחי: ${esc(d.currentWeekISO)} · שבוע הבא: ${esc(d.nextWeekISO)} · ${d.stops.length} תחנות</div></div>`;
   wrap.innerHTML=html;if(actions)actions.style.display='block';
