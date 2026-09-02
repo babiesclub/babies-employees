@@ -5033,14 +5033,47 @@ async function lockAllCurrentAssignments(){
   alert(`✓ ננעלו ${count} שיבוצים ב-${weekCount} שבועות.\n\nעכשיו "חשב מחדש + החל דריסה" ישמור עליהם.${failures.length?'\n\n⚠ '+failures.length+' שבועות לא נשמרו לענן — יסתנכרנו אוטו':''}`);
   renderWschGrid();
 }
-// Set/clear per-instructor start/end dates. weekISO format: YYYY-MM-DD (Sunday).
+// Parse various date formats into ISO YYYY-MM-DD.
+// Accepts: 2026-10-25 (ISO), 25.10.2026 (Hebrew DD.MM.YYYY), 25/10/2026, 25-10-2026,
+//          25.10.26 (2-digit year → 20xx), 25.10 (needs school-year context).
+// Returns null if unparseable, '' for empty input.
+function _parseFlexibleDate(s, schoolYearHint){
+  if(!s || !String(s).trim())return '';
+  const str=String(s).trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(str))return str;
+  const m=str.match(/^(\d{1,2})[.\-\/](\d{1,2})(?:[.\-\/](\d{2,4}))?$/);
+  if(!m)return null;
+  const d=parseInt(m[1],10),mo=parseInt(m[2],10);let y=m[3]?parseInt(m[3],10):null;
+  if(y===null){
+    // No year — infer from school year (Sep..Aug spans 2 years).
+    if(schoolYearHint){
+      const startY=parseInt(schoolYearHint.start.slice(0,4),10);
+      const endY=parseInt(schoolYearHint.end.slice(0,4),10);
+      const candStart=`${startY}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      y=(candStart>=schoolYearHint.start)?startY:endY;
+    } else y=new Date().getFullYear();
+  }
+  if(y<100)y+=2000;
+  if(mo<1||mo>12||d<1||d>31)return null;
+  return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+// Set/clear per-instructor start/end dates. Accepts flexible formats — converts to ISO.
 // Empty string clears the field.
-async function setInstructorActiveWindow(nameOrUid, startDateISO, endDateISO){
+async function setInstructorActiveWindow(nameOrUid, startDateInput, endDateInput){
   const users=DB.get('users')||[];
   const u=users.find(x=>x.name===nameOrUid||String(x.uid||x.id)===String(nameOrUid));
   if(!u){alert('לא נמצאה מדריכה בשם/uid: '+nameOrUid);return}
-  if(startDateISO!==undefined)u.startDate=startDateISO||null;
-  if(endDateISO!==undefined)u.endDate=endDateISO||null;
+  // Normalize dates to ISO (accepts 25.10, 25.10.26, 25/10/2026, 2026-10-25).
+  if(startDateInput!==undefined){
+    const parsed=_parseFlexibleDate(startDateInput,SCHOOL_YEAR);
+    if(parsed===null){alert(`❌ תאריך התחלה לא תקין: "${startDateInput}"\n\nפורמטים מותרים: 25.10.2026, 25/10/2026, 2026-10-25, 25.10 (עם ניחוש שנה)`);return}
+    u.startDate=parsed||null;
+  }
+  if(endDateInput!==undefined){
+    const parsed=_parseFlexibleDate(endDateInput,SCHOOL_YEAR);
+    if(parsed===null){alert(`❌ תאריך סיום לא תקין: "${endDateInput}"\n\nפורמטים מותרים: 25.10.2026, 25/10/2026, 2026-10-25, 25.10 (עם ניחוש שנה)`);return}
+    u.endDate=parsed||null;
+  }
   DB.set('users',users);
   if(window.fbDb){try{await fbDb.collection('users').doc(u.uid||u.id).update({startDate:u.startDate||null,endDate:u.endDate||null})}catch(e){console.warn('cloud update:',e.message)}}
   // Immediately clean existing assignments outside the new window.
@@ -5068,9 +5101,9 @@ async function setInstructorActiveWindow(nameOrUid, startDateISO, endDateISO){
 async function promptInstructorStartDate(){
   const name=prompt('שם המדריכה (למשל: רוני ללוש):');
   if(!name)return;
-  const start=prompt(`תאריך התחלה של ${name} (YYYY-MM-DD, למשל 2026-10-25). ריק = בלי הגבלה:`);
+  const start=prompt(`תאריך התחלה של ${name}\n\nפורמטים: 25.10.2026 · 25/10/2026 · 2026-10-25 · 25.10 (השנה תנוחש)\nריק = בלי הגבלה`);
   if(start===null)return;
-  const end=prompt(`תאריך סיום של ${name} (YYYY-MM-DD). ריק = בלי הגבלה:`);
+  const end=prompt(`תאריך סיום של ${name}\n\nאותם פורמטים.\nריק = בלי הגבלה (תישאר פעילה עד סוף השנה)`);
   if(end===null)return;
   await setInstructorActiveWindow(name,start.trim(),end.trim());
 }
