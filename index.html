@@ -3316,14 +3316,18 @@ function _matInstructorConstraintOK(matId, uid, gardens, instructorSeenMats){
   return _matAllowedForInstructor(matId, uid, instructorSeenMats);
 }
 // Score a candidate material for a given instructor's context.
-/* Prefer materials with 0 concurrent usage this week. If any exist, drop the shared
-   ones from the pool. This is a HARD filter, harder than the -50/-150/-300 scoring
-   penalty which can be overwhelmed by large per-garden bonuses. */
-function _preferZeroConcurrent(candidates, sharedMap){
+/* Prefer materials with 0 concurrent usage this week. If we have at least `requiredCount`
+   non-shared candidates, DROP the shared ones from the pool entirely — a HARD filter.
+   Only when non-shared < requiredCount do we fall back to the full pool (letting the score
+   penalty in _scoreMaterial rank the least-bad option).
+   Default requiredCount=1 preserves prior behavior for slot-by-slot pickers; batch pickers
+   should pass how many mats they need in this call (e.g. _pickFresh(count) passes count). */
+function _preferZeroConcurrent(candidates, sharedMap, requiredCount){
   if(!sharedMap || typeof sharedMap.get !== 'function') return candidates;
   if(!candidates || candidates.length<2) return candidates;
+  const need = Math.max(1, requiredCount|0);
   const zero = candidates.filter(m => !(sharedMap.get(m.id) > 0));
-  return zero.length >= 1 ? zero : candidates;
+  return zero.length >= need ? zero : candidates;
 }
 function _scoreMaterial(mat, ctx){
   let score=0;
@@ -3344,16 +3348,19 @@ function _scoreMaterial(mat, ctx){
   // Freshness: strong preference for materials that haven't been used anywhere yet in the plan.
   // Bumped from 15 → 120 so unused materials compete effectively with the per-garden bonus (100/garden).
   if(ctx.globallyUsed && !ctx.globallyUsed.has(mat.id)) score += 120;
-  // Cross-region physical inventory: scaled penalty by existing concurrent copies.
-  // sharedThisWeek is Map<matId, count>: 1 copy already elsewhere = -50, 2 copies = -150, 3+ = -300.
-  // Non-linear so 3rd copy is discouraged much more than 2nd — spreads usage across weeks.
-  // Set fallback supports legacy call sites still passing a Set.
+  // Cross-region physical inventory (v28 — heavy penalty).
+  // sharedThisWeek is Map<matId, count>: 1 copy already elsewhere = -2000, 2 copies = -4000, 3+ = -6000.
+  // Bumped from -50/-150/-300 because those were easily outweighed by +500 category-alignment,
+  // +120 fresh, and +100/garden bonuses — leading to ~169 unnecessary physical duplicates per year.
+  // At -2000 per share, even a mat with +120 fresh +400 (4 gardens) +8 seasonality (=528) ends at -1472,
+  // which is worse than ANY non-shared alternative. When ALL candidates are shared, ranking by count still
+  // prefers the least-shared. Set fallback supports legacy call sites still passing a Set.
   if(ctx.sharedThisWeek){
     const st=ctx.sharedThisWeek;
     const cnt = (typeof st.get==='function') ? (st.get(mat.id)||0) : (st.has(mat.id)?1:0);
-    if(cnt===1) score -= 50;
-    else if(cnt===2) score -= 150;
-    else if(cnt>=3) score -= 300;
+    if(cnt===1) score -= 2000;
+    else if(cnt===2) score -= 4000;
+    else if(cnt>=3) score -= 6000;
   }
   // NEW: Save scarce winter-safe categories (insect, generic) for winter batches.
   // In non-winter, prefer chick+reptile (winter-blocked) over insect+generic (winter-safe).
@@ -3919,7 +3926,8 @@ async function computeAnnualRotation(region, opts){
             if(candidates.length<count){candidates=materials.filter(m=>!globallyUsed.has(m.id)&&_matSeasonFits(m,weekISO,holidayDates)&&_matAllowedForGardens(m,allSuperGardens,gardensSeen)&&allSuperUids.every(uu=>_matInstructorConstraintOK(m.id,uu,gardensByUid[uu],instructorSeenMats)))}
             if(candidates.length<count){warnings.push({weekISO,superGroup:cluster.map(g=>g.name||'?').join('+'),type:'pipe_no_fresh',msg:`אין מספיק מערכים פנויים לפייפליין (נדרשים ${count}, זמינים ${candidates.length})`});return null}
             const _sw=(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||null;
-            const _pool=_sw?_preferZeroConcurrent(candidates,_sw):candidates;
+            // v28: pass `count` so we only fall back to shared when we truly need more than we have non-shared.
+            const _pool=_sw?_preferZeroConcurrent(candidates,_sw,count):candidates;
             const scored=_pool.map(m=>({m,score:_scoreMaterial(m,{gardens:allSuperGardens,gardensSeen,lastCategory:null,globallyUsed,weekISO,weekMonthIdx:_monthOfISO(weekISO),sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()})}));
             scored.sort((a,b)=>b.score-a.score);
             const chosen=scored.slice(0,count).map(x=>x.m.id);
@@ -4252,7 +4260,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-01/v27-instructor-active-window';
+  const _algoVersion='2026-09-03/v28-cross-region-dedup';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -4311,22 +4319,46 @@ async function _smartRotRun(){
       // This minimizes duplicate physical copies needed while keeping per-region rules independent.
       const perRegion=[];const skippedRegions=[];
       const sharedWeekUsage={}; // {weekISO: Map<matId, count>} — count = physical copies needed this week
-      for(const region of REGIONS){
+      // Deterministic region order — sorted alphabetically so each region sees a stable predecessor set.
+      const _orderedRegions=REGIONS.slice().sort((a,b)=>a.localeCompare(b,'he'));
+      for(const region of _orderedRegions){
         const rr=await computeAnnualRotation(region,{sharedWeekUsage});
         if(rr.error){skippedRegions.push({region,error:rr.error});continue}
         perRegion.push(rr);
-        // After this region's assignments are computed — increment counters so next regions penalize accordingly.
+        // After this region's assignments are computed — merge into sharedWeekUsage so NEXT regions penalize accordingly.
+        // v28: also count DISTINCT usage per (week × matId) — if same mat is used by K instructors within THIS region
+        // during ONE week (only possible via Latin Square rotation on same day), that's already K physical copies.
         rr.proposal.forEach(w=>{
           if(!sharedWeekUsage[w.weekISO])sharedWeekUsage[w.weekISO]=new Map();
           const wk=sharedWeekUsage[w.weekISO];
           Object.values(w.assignments||{}).forEach(matId=>{if(matId){wk.set(matId,(wk.get(matId)||0)+1)}});
         });
+        // v28 verification log — sample two weeks to prove sharedWeekUsage grows across regions.
+        try{
+          const _sampleWeeks=Object.keys(sharedWeekUsage).sort().slice(0,2);
+          const _sizes=_sampleWeeks.map(w=>`${w}:${sharedWeekUsage[w].size}mats`).join(' | ');
+          console.log(`[v28-dedup] אחרי ${region}: sharedWeekUsage מכיל ${Object.keys(sharedWeekUsage).length} שבועות (דוגמאות: ${_sizes})`);
+        }catch(_e){}
       }
       if(!perRegion.length){resultEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px;font-size:13px">⚠ לא נמצאו מדריכות חוגי חיות באף אזור.<br><br><b>אזורים שדולגו:</b><br>${skippedRegions.map(s=>`• ${esc(s.region)}: ${esc(s.error)}`).join('<br>')}</div>`;return}
       // Merge: for each week, combine assignments from all regions
       const mergedByWeek={};perRegion.forEach(rr=>{rr.proposal.forEach(w=>{if(!mergedByWeek[w.weekISO])mergedByWeek[w.weekISO]={weekISO:w.weekISO,assignments:{}};Object.assign(mergedByWeek[w.weekISO].assignments,w.assignments)})});
       const mergedProposal=Object.values(mergedByWeek).sort((a,b)=>a.weekISO.localeCompare(b.weekISO));
       const mergedWarnings=perRegion.flatMap(rr=>(rr.warnings||[]).map(w=>({...w,region:rr.region})));
+      // v28: cross-region duplication stat. Count total EXTRA physical copies needed —
+      // for each (week × matId) with count K>1, we need K-1 extra copies beyond the one master.
+      // Uses sharedWeekUsage which was built up as regions were computed sequentially.
+      let _totalDuplications=0;let _duplicatedMatWeeks=0;
+      Object.keys(sharedWeekUsage).forEach(w=>{
+        const wk=sharedWeekUsage[w];if(!wk||typeof wk.forEach!=='function')return;
+        wk.forEach(cnt=>{if(cnt>1){_totalDuplications+=(cnt-1);_duplicatedMatWeeks++}});
+      });
+      if(_totalDuplications>0){
+        mergedWarnings.unshift({type:'total_duplications',msg:`🔁 סה"כ ${_totalDuplications} שיכפולים בכל האזורים (${_duplicatedMatWeeks} מערכים×שבועות דורשים עותק נוסף) — כל אחד = עותק פיזי נוסף במשרד`});
+      } else {
+        mergedWarnings.unshift({type:'total_duplications',msg:`✅ אפס שיכפולים בין אזורים — לא נדרשים עותקים פיזיים נוספים!`});
+      }
+      try{console.log(`[v28-dedup] סה"כ שיכפולים חוצי-אזורים: ${_totalDuplications} (${_duplicatedMatWeeks} מערכים×שבועות)`);}catch(_e){}
       const mergedStats={
         instructorsTotal:perRegion.reduce((s,rr)=>s+rr.stats.instructorsTotal,0),
         inGroups:perRegion.reduce((s,rr)=>s+rr.stats.inGroups,0),
