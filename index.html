@@ -685,6 +685,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <button class="btn-sec" style="background:#EDE9FE;border-color:#7C3AED;color:#5B21B6;font-weight:700" onclick="lockAllCurrentAssignments()" title="נועל את כל השיבוצים הקיימים — 'חשב מחדש + החל דריסה' לא ידרוס אותם">🔒 נעלי הכל</button>
             <button class="btn-sec" style="background:#FEF3C7;border-color:#F59E0B;color:#78350F;font-weight:700" onclick="unlockAllAssignments()" title="פותח נעילה של כל השיבוצים">🔓 בטלי הכל</button>
             <button class="btn-sec" style="background:#DBEAFE;border-color:#3B82F6;color:#1E40AF;font-weight:700" onclick="promptInstructorStartDate()" title="קבעי מתי מדריכה מתחילה/מסיימת (למשל רוני ללוש מתחילה ב-2026-10-25)">📅 תאריכי פעילות של מדריכה</button>
+            <button class="btn-sec admin-only" style="background:#E0F2FE;border-color:#0EA5E9;color:#0C4A6E;font-weight:700" onclick="openDriverRouteSheetMo()" title="הפק דף מסלול לנהג לפי אזור ותאריך חלוקה — כולל מחזירה, מקבלת, ופייפליין">🚗 דף מסלול לנהג</button>
           </div>
           <div style="background:linear-gradient(90deg,#EDE9FE,#DBEAFE);border:1px dashed #7C3AED;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:#5B21B6;line-height:1.5">💡 <b>נעילת שיבוצים ידנית</b>: כל שיבוץ שאת בוחרת ידנית נעול אוטומטית 🔒 — "חשב מחדש + החל דריסה" לא ידרוס אותו. לחצי על 🔓 בתא כדי לנעול/לבטל נעילה. הסרת מערך (בחירת "🗑 הסר שיבוץ") גם מסירה את הנעילה.</div>
           <div id="wsch-grid" style="overflow-x:auto"></div>
@@ -4786,6 +4787,121 @@ async function renderRouteEditor(){const el=document.getElementById('rr-editor')
 function getInstructorNameByUid(uid){const users=DB.get('users')||[];const u=users.find(x=>(x.uid||String(x.id))===String(uid));return u?u.name:'(לא נמצאה)'}
 function getInstructorsInRegion(regionName){const users=DB.get('users')||[];return users.filter(u=>u.role!=='admin'&&_hasSpec(u,'animals')).filter(u=>{if(!regionName)return true;if(u.region===regionName)return true;return inferInstructorRegion(u)===regionName}).sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'))}
 function openRotGroupsMo(){let mo=document.getElementById('rotgroups-mo');if(!mo){mo=document.createElement('div');mo.id='rotgroups-mo';mo.className='mo';document.body.appendChild(mo)}mo.innerHTML=`<div class="md" style="max-width:760px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>🔄 ניהול קבוצות רוטציה ומסלולי נהג</span><span class="mc" onclick="document.getElementById('rotgroups-mo').style.display='none'">×</span></div><div style="background:#FFF8E1;border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px;color:#7B5C00;line-height:1.5"><b>💡 שתי שכבות:</b><br>1. <b>מסלול נהג באזור</b> — סדר התחנות (ערים) שהנהג עובר ביניהן<br>2. <b>קבוצות רוטציה</b> — מדריכות שמחלקות מאגר פיזי (Latin square פנימי)</div><details open style="margin-bottom:14px;background:#F5F3FF;border:1.5px solid #C4B5FD;border-radius:8px"><summary style="padding:10px 14px;font-weight:700;font-size:13px;color:#5B21B6;cursor:pointer">🚗 סדר מסלול הנהג באזורים</summary><div style="padding:0 14px 14px"><div id="rr-editor"></div></div></details><details open style="background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:8px"><summary style="padding:10px 14px;font-weight:700;font-size:13px;color:#1B4332;cursor:pointer">🔄 קבוצות רוטציה פנימיות</summary><div style="padding:0 14px 14px"><button class="btn-prim" style="width:100%;margin-bottom:10px;background:#7C3AED;border-color:#7C3AED" onclick="openRotGroupEdit()">+ צרי קבוצת רוטציה חדשה</button><div id="rotgroups-list"></div></div></details></div>`;mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';renderRotGroupsList();renderRouteEditor()}
+/* ===== Driver Route Sheet — modal + generator + print + WhatsApp share =====
+   Produces a printable/mobile-friendly stop-by-stop sheet for a driver on a
+   given region + delivery date: current-week מחזירה, pipeline destination
+   (who takes it next week in same region), and next-week מקבלת. */
+window._driverRouteState=window._driverRouteState||{region:null,date:null,driver:'',data:null,html:''};
+function openDriverRouteSheetMo(){
+  let mo=document.getElementById('driver-route-mo');
+  if(!mo){mo=document.createElement('div');mo.id='driver-route-mo';mo.className='mo';document.body.appendChild(mo);}
+  const today=(typeof formatDateISO==='function')?formatDateISO(new Date()):new Date().toISOString().slice(0,10);
+  const regionOpts=REGIONS.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
+  const st=window._driverRouteState||{};
+  const dfDate=st.date||today;const dfRegion=st.region||'';const dfDriver=st.driver||'';
+  mo.innerHTML=`<style>
+    #driver-route-mo .drs-form label{display:block;font-size:12px;font-weight:700;color:#0C4A6E;margin-bottom:4px}
+    #driver-route-mo .drs-form input,#driver-route-mo .drs-form select{width:100%;padding:8px 10px;border:1px solid var(--brd);border-radius:6px;font-family:inherit;font-size:14px;box-sizing:border-box}
+    #driver-route-mo .drs-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px}
+    @media (max-width:640px){#driver-route-mo .drs-grid{grid-template-columns:1fr}}
+    @media print{
+      @page{margin:10mm}
+      body.drs-printing>*:not(#driver-route-mo){display:none !important}
+      body.drs-printing #driver-route-mo{position:static !important;inset:auto !important;background:white !important;padding:0 !important;margin:0 !important;display:block !important;height:auto !important}
+      body.drs-printing #driver-route-mo .md{position:static !important;background:white !important;box-shadow:none !important;border-radius:0 !important;padding:0 !important;margin:0 !important;max-height:none !important;max-width:100% !important;width:100% !important;overflow:visible !important}
+      body.drs-printing #driver-route-mo .drs-no-print{display:none !important}
+      body.drs-printing #driver-route-mo .drs-stop{page-break-inside:avoid;break-inside:avoid}
+      body.drs-printing #driver-route-mo .drs-header{page-break-after:avoid}
+    }
+  </style><div class="md" id="drs-md" style="max-width:900px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt drs-no-print"><span>🚗 דף מסלול לנהג</span><span class="mc" onclick="document.getElementById('driver-route-mo').style.display='none'">×</span></div><div class="drs-form drs-no-print" style="background:#F0F9FF;border:1.5px solid #0EA5E9;border-radius:10px;padding:14px;margin-bottom:14px"><div class="drs-grid"><div><label>📍 אזור</label><select id="drs-region"><option value="">— בחרי אזור —</option>${regionOpts.replace(`value="${esc(dfRegion)}"`,`value="${esc(dfRegion)}" selected`)}</select></div><div><label>📅 תאריך חלוקה</label><input type="date" id="drs-date" value="${esc(dfDate)}"></div><div><label>👤 שם הנהג</label><input type="text" id="drs-driver" placeholder="לדוגמה: מאור" value="${esc(dfDriver)}"></div></div><button class="btn-prim" style="width:100%;margin:0;background:#0EA5E9;border-color:#0EA5E9;font-size:15px;padding:12px;min-height:44px" onclick="generateDriverRouteSheet()">📄 הפק דף מסלול</button></div><div id="drs-actions" class="drs-no-print" style="display:none;margin-bottom:14px"><div style="display:flex;gap:8px"><button class="btn-prim" style="flex:1;margin:0;background:#16A34A;border-color:#16A34A;min-height:44px;font-size:15px" onclick="printDriverRouteSheet()">🖨 הדפסה</button><button class="btn-sec" style="flex:1;background:#25D366;border-color:#128C7E;color:white;font-weight:700;min-height:44px;font-size:15px" onclick="shareDriverRouteWA()">📱 שיתוף לוואטסאפ</button></div></div><div id="drs-sheet"></div></div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+function _drsFormatDateHe(iso){if(!iso)return'';const p=String(iso).split('-');if(p.length!==3)return iso;return`${p[2]}/${p[1]}/${p[0]}`}
+function _drsGardenAddr(name){try{const g=(typeof findGarden==='function')?findGarden(name):null;if(!g)return'';if(typeof g==='string')return'';return g.address||''}catch(e){return''}}
+function _drsBuildData(){
+  const region=((document.getElementById('drs-region')||{}).value||'').trim();
+  const dateStr=((document.getElementById('drs-date')||{}).value||'').trim();
+  const driver=((document.getElementById('drs-driver')||{}).value||'').trim();
+  if(!region)return{error:'בחרי אזור'};
+  if(!dateStr)return{error:'בחרי תאריך חלוקה'};
+  const baseD=new Date(dateStr+'T00:00:00');if(isNaN(baseD))return{error:'תאריך לא תקין'};
+  const curSun=getSunday(baseD);const currentWeekISO=formatDateISO(curSun);
+  const nxtSun=new Date(curSun);nxtSun.setDate(nxtSun.getDate()+7);const nextWeekISO=formatDateISO(nxtSun);
+  const schedule=(typeof getWeeklySchedule==='function')?getWeeklySchedule():{};
+  const materials=(typeof getMaterials==='function')?getMaterials():[];
+  const matById={};materials.forEach(m=>{matById[m.id]=m});
+  const instructors=(typeof getInstructorsInRegion==='function')?getInstructorsInRegion(region):[];
+  const stopsCfg=((_regionRoutes||{})[region]||{}).stops||[];
+  const routeIdx={};stopsCfg.forEach((s,i)=>{if(s.kind==='instructor')routeIdx[String(s.refId)]=i});
+  const sorted=instructors.slice().sort((a,b)=>{
+    const ai=routeIdx[String(a.uid||a.id)];const bi=routeIdx[String(b.uid||b.id)];
+    const av=(ai==null?99999:ai);const bv=(bi==null?99999:bi);
+    if(av!==bv)return av-bv;
+    return(a.name||'').localeCompare(b.name||'','he');
+  });
+  const curAssign=(schedule[currentWeekISO]&&schedule[currentWeekISO].assignments)||{};
+  const nxtAssign=(schedule[nextWeekISO]&&schedule[nextWeekISO].assignments)||{};
+  const nxtInvByMat={};Object.keys(nxtAssign).forEach(uid=>{const mid=nxtAssign[uid];if(!mid)return;(nxtInvByMat[mid]=nxtInvByMat[mid]||[]).push(String(uid))});
+  const uidToName={};(DB.get('users')||[]).forEach(u=>{uidToName[String(u.uid||u.id)]=u.name||'?'});
+  const regionUidSet=new Set(instructors.map(u=>String(u.uid||u.id)));
+  const stops=sorted.map(u=>{
+    const uid=String(u.uid||u.id);
+    const curId=curAssign[uid]||null;
+    const nxtId=nxtAssign[uid]||null;
+    const curMat=curId?(matById[curId]||null):null;
+    const nxtMat=nxtId?(matById[nxtId]||null):null;
+    let pipelineTo='חזרה למחסן';
+    if(curId){
+      const candidates=(nxtInvByMat[curId]||[]).filter(oid=>oid!==uid&&regionUidSet.has(oid));
+      if(candidates.length)pipelineTo=candidates.map(c=>uidToName[c]||'?').join(' / ');
+    }
+    const gardens=(u.gardens||[]).map(gn=>({name:gn,address:_drsGardenAddr(gn)}));
+    return{uid,name:u.name||'?',phone:u.phone||'',gardens,curMat,nxtMat,pipelineTo,hasCur:!!curId};
+  });
+  return{region,dateStr,driver,currentWeekISO,nextWeekISO,stops};
+}
+function generateDriverRouteSheet(){
+  const d=_drsBuildData();
+  const wrap=document.getElementById('drs-sheet');const actions=document.getElementById('drs-actions');
+  if(!wrap)return;
+  if(d.error){wrap.innerHTML=`<div style="padding:14px;background:#FEE2E2;border:1px solid #F87171;color:#991B1B;border-radius:8px;text-align:center;font-weight:700">${esc(d.error)}</div>`;if(actions)actions.style.display='none';return}
+  if(!d.stops.length){wrap.innerHTML=`<div style="padding:14px;background:#FEF3C7;border:1px solid #F59E0B;color:#78350F;border-radius:8px;text-align:center">אין מדריכות באזור "${esc(d.region)}"</div>`;if(actions)actions.style.display='none';return}
+  const header=`<div class="drs-header" style="background:#B4C7E7;color:#0C4A6E;padding:14px 18px;font-size:18px;font-weight:800;border:1px solid #666;border-radius:8px 8px 0 0;text-align:center">קו ${esc(d.region)} · ${esc(_drsFormatDateHe(d.dateStr))}${d.driver?` · נהג: ${esc(d.driver)}`:''}</div>`;
+  const cards=d.stops.map((s,i)=>{
+    const gardenHtml=s.gardens.length?s.gardens.map(g=>`<div style="font-size:13px;padding:2px 0;line-height:1.5">• <b>${esc(g.name)}</b>${g.address?` — ${esc(g.address)}`:''}</div>`).join(''):'<div style="font-size:12px;color:#888;font-style:italic">— אין גנים משויכים —</div>';
+    const cur=s.curMat?esc(s.curMat.name):'—';
+    const nxt=s.nxtMat?esc(s.nxtMat.name):'—';
+    const phoneHtml=s.phone?esc(s.phone):'<span style="color:#888;font-style:italic;font-weight:400">— אין טלפון —</span>';
+    return `<div class="drs-stop" style="border:1px solid #666;border-top:0;background:white"><div style="display:flex;background:#FBD4B4;border-bottom:1px solid #666"><div style="flex:1;padding:10px 14px;font-size:16px;font-weight:800;color:#0C4A6E">${i+1}. ${esc(s.name)}</div><div style="padding:10px 14px;font-size:14px;font-weight:700;color:#0C4A6E;border-right:1px solid #666;min-width:140px;text-align:center;direction:ltr">${phoneHtml}</div></div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:12px;font-weight:700;color:#555;margin-bottom:4px">כתובות:</div>${gardenHtml}</div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:14px"><b>מחזירה:</b> ${cur}</div>${s.hasCur?`<div style="font-size:12px;color:#1565C0;margin-top:3px;font-weight:600">→ ${esc(s.pipelineTo)}</div>`:''}</div><div style="padding:10px 14px"><div style="font-size:14px"><b>מקבלת:</b> ${nxt}</div></div></div>`;
+  }).join('');
+  const html=`<div id="drs-printable" style="font-family:inherit;direction:rtl;font-size:14px">${header}${cards}<div class="drs-no-print" style="margin-top:10px;font-size:11px;color:#666;text-align:center">שבוע נוכחי: ${esc(d.currentWeekISO)} · שבוע הבא: ${esc(d.nextWeekISO)} · ${d.stops.length} תחנות</div></div>`;
+  wrap.innerHTML=html;if(actions)actions.style.display='block';
+  window._driverRouteState={region:d.region,date:d.dateStr,driver:d.driver,data:d,html};
+}
+function printDriverRouteSheet(){
+  document.body.classList.add('drs-printing');
+  const done=()=>{document.body.classList.remove('drs-printing');window.removeEventListener('afterprint',done)};
+  window.addEventListener('afterprint',done);
+  setTimeout(()=>{try{window.print()}catch(e){alert('לא ניתן להדפיס: '+(e.message||e))}setTimeout(()=>document.body.classList.remove('drs-printing'),2000)},50);
+}
+function shareDriverRouteWA(){
+  const st=window._driverRouteState;
+  if(!st||!st.data){alert('הפיקי דף מסלול תחילה');return}
+  const d=st.data;
+  const lines=[];
+  lines.push(`🚗 קו ${d.region} · ${_drsFormatDateHe(d.dateStr)}${d.driver?` · נהג: ${d.driver}`:''}`);
+  lines.push('');
+  d.stops.forEach((s,i)=>{
+    lines.push(`${i+1}. ${s.name}${s.phone?` — ${s.phone}`:''}`);
+    if(s.gardens.length){s.gardens.forEach(g=>lines.push(`   • ${g.name}${g.address?` — ${g.address}`:''}`))}
+    lines.push(`   מחזירה: ${s.curMat?s.curMat.name:'—'}${s.hasCur?` → ${s.pipelineTo}`:''}`);
+    lines.push(`   מקבלת: ${s.nxtMat?s.nxtMat.name:'—'}`);
+    lines.push('');
+  });
+  const txt=lines.join('\n').trim();
+  const url='https://wa.me/?text='+encodeURIComponent(txt);
+  window.open(url,'_blank');
+}
 async function renderRotGroupsList(){
   const el=document.getElementById('rotgroups-list');if(!el)return;
   el.innerHTML='<div style="text-align:center;padding:20px;color:var(--mut)">⏳ טוען...</div>';
