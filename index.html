@@ -6633,11 +6633,20 @@ async function _sendWelcomeMsgForInstructor(uid){
   const users=DB.get('users')||[];
   const u=users.find(x=>String(x.uid||x.id)===String(uid));
   if(!u){alert('המדריכה לא נמצאה');return}
-  const _digits=String(Math.floor(1000+Math.random()*9000));
-  const _suggest=(u.username||'')+'-'+_digits;
-  const pw=prompt(`📨 הודעת פתיחה ל-${u.name}\n\nהזיני את הסיסמא הנוכחית של המדריכה, או השאירי את הברירת המחדל כדי להשתמש בסיסמא אקראית חדשה (תצטרכי גם לאפס אותה ידנית ב-Firebase Console).\n\nהערה: הסיסמאות של המדריכים לא נשמרות אצלנו מטעמי אבטחה — רק ב-Firebase Auth.`,_suggest);
-  if(pw===null||!pw.trim())return;
-  await _copyWelcomeMsg(u.name,u.username||'',pw.trim(),u.phone||'');
+  const choice=prompt(`📨 הודעת פתיחה ל-${u.name}\n\nהסיסמאות לא נשמרות אצלנו (אבטחת Firebase). 2 אפשרויות:\n\n1) יש לך את הסיסמא הנוכחית → הקלידי אותה\n2) אין לך → הקלידי "איפוס" → נשלח מייל איפוס + ההודעה תסביר לה להשתמש בקישור\n\nמה להזין:`,'איפוס');
+  if(choice===null||!choice.trim())return;
+  const trimmed=choice.trim();
+  if(trimmed==='איפוס'){
+    const email=u.email||usernameToEmail(u.username);
+    try{
+      await fbAuth.sendPasswordResetEmail(email);
+      await _logAudit('update','user',u.uid,`מייל איפוס נשלח ל-${u.name} (מהודעת פתיחה)`);
+      await _copyWelcomeMsg(u.name,u.username||'','[קבלת קישור איפוס במייל '+email+']',u.phone||'');
+      alert(`✓ מייל איפוס נשלח ל-${email}\n\nההודעה הועתקה עם הוראות לחצות על הקישור במייל, לבחור סיסמא ואז להתחבר.`);
+    }catch(e){alert('שגיאה בשליחת מייל: '+(e.message||e))}
+    return;
+  }
+  await _copyWelcomeMsg(u.name,u.username||'',trimmed,u.phone||'');
 }
 function toggleGC(el){el.classList.toggle('checked');el.querySelector('.ck').textContent=el.classList.contains('checked')?'✓ ':'○ ';if(el.closest('#ei-g')){const search=(document.getElementById('ei-g-search')?.value||'').trim();const gName=el.dataset.g;const existingSelects=el.querySelectorAll('select');if(el.classList.contains('checked')){if(!existingSelects.length){const editingUser=(DB.get('users')||[]).find(u=>u.id===editId||u.uid===editId);const defaultSpec=(editingUser&&_getSpecs(editingUser)[0])||'';const actHtml=buildActivitySelect(gName,_eiGardenActivityDraft[gName]||'',defaultSpec);el.insertAdjacentHTML('beforeend',actHtml);const lim=(_eiGardenLimitsDraft&&_eiGardenLimitsDraft[gName])||'';const safeG=esc(gName).replace(/'/g,"&#39;");const sel=document.createElement('select');sel.onclick=e=>e.stopPropagation();sel.onchange=()=>setGardenLimit(safeG,sel.value);sel.style.cssText=`font-size:10px;padding:2px 4px;border:1px solid var(--brd);border-radius:4px;background:${lim?'#FFF8E1':'white'};color:${lim?'#7B5C00':'var(--mut)'};font-weight:${lim?'700':'400'};font-family:inherit;margin-right:auto`;sel.innerHTML='<option value="">רגיל</option><option value="1">השלמה ×1</option><option value="2">השלמה ×2</option><option value="3">השלמה ×3</option><option value="5">השלמה ×5</option><option value="10">השלמה ×10</option>';sel.value=lim;el.appendChild(sel)}}else{existingSelects.forEach(s=>s.remove());if(_eiGardenLimitsDraft&&_eiGardenLimitsDraft[gName])delete _eiGardenLimitsDraft[gName];if(_eiGardenActivityDraft&&_eiGardenActivityDraft[gName])delete _eiGardenActivityDraft[gName];if(!search)el.style.display='none'}if(typeof updateEiGardenCounter==='function')updateEiGardenCounter()}}
 function getCheckedG(cid){return[...document.querySelectorAll(`#${cid} .gc.checked`)].map(e=>e.dataset.g)}
