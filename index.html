@@ -4798,7 +4798,7 @@ function openDriverRouteSheetMo(){
   const today=(typeof formatDateISO==='function')?formatDateISO(new Date()):new Date().toISOString().slice(0,10);
   const st=window._driverRouteState||{};
   const dfDate=st.date||today;const dfDriver=st.driver||'';
-  const dfRegionsArr=Array.isArray(st.regions)?st.regions:(st.region?[st.region]:[]);
+  const dfRegionsArr=Array.isArray(st.regions)&&st.regions.length?st.regions:REGIONS.slice();
   const regionChips=REGIONS.map(r=>{const checked=dfRegionsArr.includes(r)?'checked':'';const color=REGION_COLORS[r]||'#1565C0';return `<label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1.5px solid ${color};border-radius:14px;cursor:pointer;font-size:13px;font-weight:600;background:white;margin:2px"><input type="checkbox" class="drs-region-cb" value="${esc(r)}" ${checked} style="width:16px;height:16px;cursor:pointer;accent-color:${color}">${esc(r)}</label>`}).join('');
   mo.innerHTML=`<style>
     #driver-route-mo .drs-form label{display:block;font-size:12px;font-weight:700;color:#0C4A6E;margin-bottom:4px}
@@ -4869,7 +4869,7 @@ function generateDriverRouteSheet(){
   const d=_drsBuildData();
   const wrap=document.getElementById('drs-sheet');const actions=document.getElementById('drs-actions');
   if(!wrap)return;
-  if(d.error){wrap.innerHTML=`<div style="padding:14px;background:#FEE2E2;border:1px solid #F87171;color:#991B1B;border-radius:8px;text-align:center;font-weight:700">${esc(d.error)}</div>`;if(actions)actions.style.display='none';return}
+  if(d.error){alert('⚠ '+d.error);wrap.innerHTML=`<div style="padding:14px;background:#FEE2E2;border:1px solid #F87171;color:#991B1B;border-radius:8px;text-align:center;font-weight:700">${esc(d.error)}</div>`;if(actions)actions.style.display='none';return}
   let totalStops=0;
   const regionsHtml=d.perRegion.map(rgn=>{
     if(!rgn.stops.length)return `<div style="padding:14px;background:#FEF3C7;border:1px solid #F59E0B;color:#78350F;border-radius:8px;text-align:center;margin-bottom:14px">אין מדריכות באזור "${esc(rgn.region)}"</div>`;
@@ -4898,6 +4898,7 @@ function shareDriverRouteWA(){
   const st=window._driverRouteState;
   if(!st||!st.data){alert('הפיקי דף מסלול תחילה');return}
   const d=st.data;
+  if(!Array.isArray(d.perRegion)){alert('הפיקי דף מסלול מחדש (הפורמט הישן לא נתמך)');return}
   const lines=[];
   d.perRegion.forEach(rgn=>{
     if(!rgn.stops.length)return;
