@@ -4796,14 +4796,16 @@ function openDriverRouteSheetMo(){
   let mo=document.getElementById('driver-route-mo');
   if(!mo){mo=document.createElement('div');mo.id='driver-route-mo';mo.className='mo';document.body.appendChild(mo);}
   const today=(typeof formatDateISO==='function')?formatDateISO(new Date()):new Date().toISOString().slice(0,10);
-  const regionOpts=REGIONS.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   const st=window._driverRouteState||{};
-  const dfDate=st.date||today;const dfRegion=st.region||'';const dfDriver=st.driver||'';
+  const dfDate=st.date||today;const dfDriver=st.driver||'';
+  const dfRegionsArr=Array.isArray(st.regions)?st.regions:(st.region?[st.region]:[]);
+  const regionChips=REGIONS.map(r=>{const checked=dfRegionsArr.includes(r)?'checked':'';const color=REGION_COLORS[r]||'#1565C0';return `<label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1.5px solid ${color};border-radius:14px;cursor:pointer;font-size:13px;font-weight:600;background:white;margin:2px"><input type="checkbox" class="drs-region-cb" value="${esc(r)}" ${checked} style="width:16px;height:16px;cursor:pointer;accent-color:${color}">${esc(r)}</label>`}).join('');
   mo.innerHTML=`<style>
     #driver-route-mo .drs-form label{display:block;font-size:12px;font-weight:700;color:#0C4A6E;margin-bottom:4px}
     #driver-route-mo .drs-form input,#driver-route-mo .drs-form select{width:100%;padding:8px 10px;border:1px solid var(--brd);border-radius:6px;font-family:inherit;font-size:14px;box-sizing:border-box}
-    #driver-route-mo .drs-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px}
+    #driver-route-mo .drs-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
     @media (max-width:640px){#driver-route-mo .drs-grid{grid-template-columns:1fr}}
+    #driver-route-mo .drs-region-picker{background:white;border:1px solid var(--brd);border-radius:8px;padding:8px;margin-bottom:10px}
     @media print{
       @page{margin:10mm}
       body.drs-printing>*:not(#driver-route-mo){display:none !important}
@@ -4813,16 +4815,16 @@ function openDriverRouteSheetMo(){
       body.drs-printing #driver-route-mo .drs-stop{page-break-inside:avoid;break-inside:avoid}
       body.drs-printing #driver-route-mo .drs-header{page-break-after:avoid}
     }
-  </style><div class="md" id="drs-md" style="max-width:900px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt drs-no-print"><span>🚗 דף מסלול לנהג</span><span class="mc" onclick="document.getElementById('driver-route-mo').style.display='none'">×</span></div><div class="drs-form drs-no-print" style="background:#F0F9FF;border:1.5px solid #0EA5E9;border-radius:10px;padding:14px;margin-bottom:14px"><div class="drs-grid"><div><label>📍 אזור</label><select id="drs-region"><option value="">— בחרי אזור —</option>${regionOpts.replace(`value="${esc(dfRegion)}"`,`value="${esc(dfRegion)}" selected`)}</select></div><div><label>📅 תאריך חלוקה</label><input type="date" id="drs-date" value="${esc(dfDate)}"></div><div><label>👤 שם הנהג</label><input type="text" id="drs-driver" placeholder="לדוגמה: מאור" value="${esc(dfDriver)}"></div></div><button class="btn-prim" style="width:100%;margin:0;background:#0EA5E9;border-color:#0EA5E9;font-size:15px;padding:12px;min-height:44px" onclick="generateDriverRouteSheet()">📄 הפק דף מסלול</button></div><div id="drs-actions" class="drs-no-print" style="display:none;margin-bottom:14px"><div style="display:flex;gap:8px"><button class="btn-prim" style="flex:1;margin:0;background:#16A34A;border-color:#16A34A;min-height:44px;font-size:15px" onclick="printDriverRouteSheet()">🖨 הדפסה</button><button class="btn-sec" style="flex:1;background:#25D366;border-color:#128C7E;color:white;font-weight:700;min-height:44px;font-size:15px" onclick="shareDriverRouteWA()">📱 שיתוף לוואטסאפ</button></div></div><div id="drs-sheet"></div></div>`;
+  </style><div class="md" id="drs-md" style="max-width:900px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt drs-no-print"><span>🚗 דף מסלול לנהג</span><span class="mc" onclick="document.getElementById('driver-route-mo').style.display='none'">×</span></div><div class="drs-form drs-no-print" style="background:#F0F9FF;border:1.5px solid #0EA5E9;border-radius:10px;padding:14px;margin-bottom:14px"><div style="margin-bottom:10px"><label style="display:block;font-size:12px;font-weight:700;color:#0C4A6E;margin-bottom:6px">📍 אזורים (סמני כמה שרוצה)</label><div class="drs-region-picker">${regionChips}<div style="margin-top:6px;display:flex;gap:6px"><button type="button" class="btn-sec" style="font-size:11px;padding:4px 10px" onclick="document.querySelectorAll('.drs-region-cb').forEach(c=>c.checked=true)">✅ סמני הכל</button><button type="button" class="btn-sec" style="font-size:11px;padding:4px 10px" onclick="document.querySelectorAll('.drs-region-cb').forEach(c=>c.checked=false)">🚫 נקי הכל</button></div></div></div><div class="drs-grid"><div><label>📅 תאריך חלוקה</label><input type="date" id="drs-date" value="${esc(dfDate)}"></div><div><label>👤 שם הנהג</label><input type="text" id="drs-driver" placeholder="לדוגמה: מאור" value="${esc(dfDriver)}"></div></div><button class="btn-prim" style="width:100%;margin:0;background:#0EA5E9;border-color:#0EA5E9;font-size:15px;padding:12px;min-height:44px" onclick="generateDriverRouteSheet()">📄 הפק דף מסלול</button></div><div id="drs-actions" class="drs-no-print" style="display:none;margin-bottom:14px"><div style="display:flex;gap:8px"><button class="btn-prim" style="flex:1;margin:0;background:#16A34A;border-color:#16A34A;min-height:44px;font-size:15px" onclick="printDriverRouteSheet()">🖨 הדפסה</button><button class="btn-sec" style="flex:1;background:#25D366;border-color:#128C7E;color:white;font-weight:700;min-height:44px;font-size:15px" onclick="shareDriverRouteWA()">📱 שיתוף לוואטסאפ</button></div></div><div id="drs-sheet"></div></div>`;
   mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
 }
 function _drsFormatDateHe(iso){if(!iso)return'';const p=String(iso).split('-');if(p.length!==3)return iso;return`${p[2]}/${p[1]}/${p[0]}`}
 function _drsGardenAddr(name){try{const g=(typeof findGarden==='function')?findGarden(name):null;if(!g)return'';if(typeof g==='string')return'';return g.address||''}catch(e){return''}}
 function _drsBuildData(){
-  const region=((document.getElementById('drs-region')||{}).value||'').trim();
+  const regions=Array.from(document.querySelectorAll('.drs-region-cb:checked')).map(c=>c.value).filter(Boolean);
   const dateStr=((document.getElementById('drs-date')||{}).value||'').trim();
   const driver=((document.getElementById('drs-driver')||{}).value||'').trim();
-  if(!region)return{error:'בחרי אזור'};
+  if(!regions.length)return{error:'סמני לפחות אזור אחד'};
   if(!dateStr)return{error:'בחרי תאריך חלוקה'};
   const baseD=new Date(dateStr+'T00:00:00');if(isNaN(baseD))return{error:'תאריך לא תקין'};
   const curSun=getSunday(baseD);const currentWeekISO=formatDateISO(curSun);
@@ -4830,6 +4832,7 @@ function _drsBuildData(){
   const schedule=(typeof getWeeklySchedule==='function')?getWeeklySchedule():{};
   const materials=(typeof getMaterials==='function')?getMaterials():[];
   const matById={};materials.forEach(m=>{matById[m.id]=m});
+  const perRegion=regions.map(region=>{
   const instructors=(typeof getInstructorsInRegion==='function')?getInstructorsInRegion(region):[];
   const stopsCfg=((_regionRoutes||{})[region]||{}).stops||[];
   const routeIdx={};stopsCfg.forEach((s,i)=>{if(s.kind==='instructor')routeIdx[String(s.refId)]=i});
@@ -4858,25 +4861,32 @@ function _drsBuildData(){
     const instructorAddr=(u.address||'').trim();
     return{uid,name:u.name||'?',phone:u.phone||'',address:instructorAddr,curMat,nxtMat,pipelineTo,hasCur:!!curId};
   });
-  return{region,dateStr,driver,currentWeekISO,nextWeekISO,stops};
+  return{region,stops};
+  });
+  return{regions,dateStr,driver,currentWeekISO,nextWeekISO,perRegion};
 }
 function generateDriverRouteSheet(){
   const d=_drsBuildData();
   const wrap=document.getElementById('drs-sheet');const actions=document.getElementById('drs-actions');
   if(!wrap)return;
   if(d.error){wrap.innerHTML=`<div style="padding:14px;background:#FEE2E2;border:1px solid #F87171;color:#991B1B;border-radius:8px;text-align:center;font-weight:700">${esc(d.error)}</div>`;if(actions)actions.style.display='none';return}
-  if(!d.stops.length){wrap.innerHTML=`<div style="padding:14px;background:#FEF3C7;border:1px solid #F59E0B;color:#78350F;border-radius:8px;text-align:center">אין מדריכות באזור "${esc(d.region)}"</div>`;if(actions)actions.style.display='none';return}
-  const header=`<div class="drs-header" style="background:#B4C7E7;color:#0C4A6E;padding:14px 18px;font-size:18px;font-weight:800;border:1px solid #666;border-radius:8px 8px 0 0;text-align:center">קו ${esc(d.region)} · ${esc(_drsFormatDateHe(d.dateStr))}${d.driver?` · נהג: ${esc(d.driver)}`:''}</div>`;
-  const cards=d.stops.map((s,i)=>{
-    const addrHtml=s.address?`<div style="font-size:15px;padding:2px 0;line-height:1.5;font-weight:600">📍 ${esc(s.address)}</div>`:'<div style="font-size:12px;color:#888;font-style:italic">— אין כתובת מוגדרת למדריכה —</div>';
-    const cur=s.curMat?esc(s.curMat.name):'—';
-    const nxt=s.nxtMat?esc(s.nxtMat.name):'—';
-    const phoneHtml=s.phone?esc(s.phone):'<span style="color:#888;font-style:italic;font-weight:400">— אין טלפון —</span>';
-    return `<div class="drs-stop" style="border:1px solid #666;border-top:0;background:white"><div style="display:flex;background:#FBD4B4;border-bottom:1px solid #666"><div style="flex:1;padding:10px 14px;font-size:16px;font-weight:800;color:#0C4A6E">${i+1}. ${esc(s.name)}</div><div style="padding:10px 14px;font-size:14px;font-weight:700;color:#0C4A6E;border-right:1px solid #666;min-width:140px;text-align:center;direction:ltr">${phoneHtml}</div></div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:12px;font-weight:700;color:#555;margin-bottom:4px">כתובת המדריכה:</div>${addrHtml}</div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:14px"><b>מחזירה:</b> ${cur}</div>${s.hasCur?`<div style="font-size:12px;color:#1565C0;margin-top:3px;font-weight:600">→ ${esc(s.pipelineTo)}</div>`:''}</div><div style="padding:10px 14px"><div style="font-size:14px"><b>מקבלת:</b> ${nxt}</div></div></div>`;
+  let totalStops=0;
+  const regionsHtml=d.perRegion.map(rgn=>{
+    if(!rgn.stops.length)return `<div style="padding:14px;background:#FEF3C7;border:1px solid #F59E0B;color:#78350F;border-radius:8px;text-align:center;margin-bottom:14px">אין מדריכות באזור "${esc(rgn.region)}"</div>`;
+    totalStops+=rgn.stops.length;
+    const header=`<div class="drs-header" style="background:#B4C7E7;color:#0C4A6E;padding:14px 18px;font-size:18px;font-weight:800;border:1px solid #666;border-radius:8px 8px 0 0;text-align:center">קו ${esc(rgn.region)} · ${esc(_drsFormatDateHe(d.dateStr))}${d.driver?` · נהג: ${esc(d.driver)}`:''}</div>`;
+    const cards=rgn.stops.map((s,i)=>{
+      const addrHtml=s.address?`<div style="font-size:15px;padding:2px 0;line-height:1.5;font-weight:600">📍 ${esc(s.address)}</div>`:'<div style="font-size:12px;color:#888;font-style:italic">— אין כתובת מוגדרת למדריכה —</div>';
+      const cur=s.curMat?esc(s.curMat.name):'—';
+      const nxt=s.nxtMat?esc(s.nxtMat.name):'—';
+      const phoneHtml=s.phone?esc(s.phone):'<span style="color:#888;font-style:italic;font-weight:400">— אין טלפון —</span>';
+      return `<div class="drs-stop" style="border:1px solid #666;border-top:0;background:white"><div style="display:flex;background:#FBD4B4;border-bottom:1px solid #666"><div style="flex:1;padding:10px 14px;font-size:16px;font-weight:800;color:#0C4A6E">${i+1}. ${esc(s.name)}</div><div style="padding:10px 14px;font-size:14px;font-weight:700;color:#0C4A6E;border-right:1px solid #666;min-width:140px;text-align:center;direction:ltr">${phoneHtml}</div></div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:12px;font-weight:700;color:#555;margin-bottom:4px">כתובת המדריכה:</div>${addrHtml}</div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:14px"><b>מחזירה:</b> ${cur}</div>${s.hasCur?`<div style="font-size:12px;color:#1565C0;margin-top:3px;font-weight:600">→ ${esc(s.pipelineTo)}</div>`:''}</div><div style="padding:10px 14px"><div style="font-size:14px"><b>מקבלת:</b> ${nxt}</div></div></div>`;
+    }).join('');
+    return `<div class="drs-region-block" style="margin-bottom:24px;page-break-after:always">${header}${cards}</div>`;
   }).join('');
-  const html=`<div id="drs-printable" style="font-family:inherit;direction:rtl;font-size:14px">${header}${cards}<div class="drs-no-print" style="margin-top:10px;font-size:11px;color:#666;text-align:center">שבוע נוכחי: ${esc(d.currentWeekISO)} · שבוע הבא: ${esc(d.nextWeekISO)} · ${d.stops.length} תחנות</div></div>`;
+  const html=`<div id="drs-printable" style="font-family:inherit;direction:rtl;font-size:14px">${regionsHtml}<div class="drs-no-print" style="margin-top:10px;font-size:11px;color:#666;text-align:center">שבוע נוכחי: ${esc(d.currentWeekISO)} · שבוע הבא: ${esc(d.nextWeekISO)} · ${d.regions.length} אזורים · ${totalStops} תחנות</div></div>`;
   wrap.innerHTML=html;if(actions)actions.style.display='block';
-  window._driverRouteState={region:d.region,date:d.dateStr,driver:d.driver,data:d,html};
+  window._driverRouteState={regions:d.regions,date:d.dateStr,driver:d.driver,data:d,html};
 }
 function printDriverRouteSheet(){
   document.body.classList.add('drs-printing');
@@ -4889,13 +4899,18 @@ function shareDriverRouteWA(){
   if(!st||!st.data){alert('הפיקי דף מסלול תחילה');return}
   const d=st.data;
   const lines=[];
-  lines.push(`🚗 קו ${d.region} · ${_drsFormatDateHe(d.dateStr)}${d.driver?` · נהג: ${d.driver}`:''}`);
-  lines.push('');
-  d.stops.forEach((s,i)=>{
-    lines.push(`${i+1}. ${s.name}${s.phone?` — ${s.phone}`:''}`);
-    if(s.gardens.length){s.gardens.forEach(g=>lines.push(`   • ${g.name}${g.address?` — ${g.address}`:''}`))}
-    lines.push(`   מחזירה: ${s.curMat?s.curMat.name:'—'}${s.hasCur?` → ${s.pipelineTo}`:''}`);
-    lines.push(`   מקבלת: ${s.nxtMat?s.nxtMat.name:'—'}`);
+  d.perRegion.forEach(rgn=>{
+    if(!rgn.stops.length)return;
+    lines.push(`🚗 קו ${rgn.region} · ${_drsFormatDateHe(d.dateStr)}${d.driver?` · נהג: ${d.driver}`:''}`);
+    lines.push('');
+    rgn.stops.forEach((s,i)=>{
+      lines.push(`${i+1}. ${s.name}${s.phone?` — ${s.phone}`:''}`);
+      if(s.address)lines.push(`   📍 ${s.address}`);
+      lines.push(`   מחזירה: ${s.curMat?s.curMat.name:'—'}${s.hasCur?` → ${s.pipelineTo}`:''}`);
+      lines.push(`   מקבלת: ${s.nxtMat?s.nxtMat.name:'—'}`);
+      lines.push('');
+    });
+    lines.push('━━━━━━━━━━');
     lines.push('');
   });
   const txt=lines.join('\n').trim();
