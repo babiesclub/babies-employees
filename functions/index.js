@@ -7682,3 +7682,68 @@ ${hintCategory ? `\nרמז מהמשתמשת: קטגוריה מבוקשת = "${hi
     };
   }
 );
+
+/**
+ * adminResetUserPassword — Admin/office directly resets another user's Firebase Auth password.
+ * Requires: caller must be authenticated AND have role='admin' or 'office' in Firestore.
+ * Uses Admin SDK to bypass the client-side "same user only" restriction.
+ * Logs to auditLog. Returns { success: true } — actual password is never returned by the server
+ * (the client already has it since it entered the value).
+ */
+exports.adminResetUserPassword = onCall({}, async (request) => {
+  if (!request.auth || !request.auth.uid) {
+    throw new HttpsError('unauthenticated', 'התחברות נדרשת');
+  }
+  const callerUid = request.auth.uid;
+  const callerDoc = await admin.firestore().collection('users').doc(callerUid).get();
+  if (!callerDoc.exists) {
+    throw new HttpsError('permission-denied', 'משתמש לא נמצא ב-Firestore');
+  }
+  const callerData = callerDoc.data();
+  const callerRole = callerData.role;
+  if (callerRole !== 'admin' && callerRole !== 'office') {
+    throw new HttpsError('permission-denied', 'רק אדמין / עובדת משרד יכולים לאפס סיסמאות');
+  }
+  const targetUid = request.data && request.data.targetUid;
+  const newPassword = request.data && request.data.newPassword;
+  if (!targetUid) throw new HttpsError('invalid-argument', 'חסר targetUid');
+  if (!newPassword || typeof newPassword !== 'string') throw new HttpsError('invalid-argument', 'חסרה סיסמא');
+  if (newPassword.length < 6) throw new HttpsError('invalid-argument', 'סיסמא חייבת להיות לפחות 6 תווים');
+
+  // Prevent admin from resetting THE only remaining admin's password (safety guard).
+  // Prevent office user from resetting an ADMIN's password (privilege escalation).
+  if (callerRole === 'office') {
+    const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
+    if (targetDoc.exists && targetDoc.data().role === 'admin') {
+      throw new HttpsError('permission-denied', 'עובדת משרד לא יכולה לאפס סיסמא של אדמין');
+    }
+  }
+
+  try {
+    await admin.auth().updateUser(targetUid, { password: newPassword });
+  } catch (e) {
+    logger.error('adminResetUserPassword failed', { targetUid, callerUid, error: e.message });
+    throw new HttpsError('internal', 'שגיאה באיפוס: ' + (e.message || 'unknown'));
+  }
+
+  // Audit log — mirrors the client-side format so entries appear together in the log viewer.
+  try {
+    const auditDocId = Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    await admin.firestore().collection('auditLog').doc(auditDocId).set({
+      ts: new Date().toISOString(),
+      actorUid: callerUid,
+      actorName: callerData.name || callerData.username || callerUid,
+      actorRole: callerRole,
+      action: 'reset_password',
+      target: 'user',
+      targetId: targetUid,
+      label: `איפוס סיסמא ישיר (Cloud Function) ל-uid ${targetUid.slice(0, 8)}`,
+      details: '',
+    });
+  } catch (e) {
+    logger.warn('adminResetUserPassword: audit log save failed', { error: e.message });
+  }
+
+  logger.info('adminResetUserPassword: success', { callerUid, targetUid });
+  return { success: true, targetUid };
+});
