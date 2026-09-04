@@ -4904,7 +4904,20 @@ function generateDriverRouteSheet(){
     const addSection=missing.length?`<div class="drs-no-print" style="border:1px dashed #7C3AED;border-top:0;background:#F5F3FF;padding:10px 14px"><div style="font-size:12px;font-weight:700;color:#5B21B6;margin-bottom:6px">➕ הוסיפי מדריכה למסלול</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select id="drs-add-${esc(rgn.region)}" style="flex:1;min-width:150px;padding:6px 10px;border:1.5px solid #C4B5FD;border-radius:6px;font-family:inherit;font-size:13px"><option value="">— בחרי מדריכה —</option>${missing.map(m=>`<option value="${esc(m.uid)}">${esc(m.name)}${m.phone?' · '+esc(m.phone):''}</option>`).join('')}</select><button onclick="_drsAddStopFromSelect('${esc(rgn.region)}','drs-add-${esc(rgn.region)}')" style="background:#7C3AED;color:white;border:0;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">+ הוסיפי לסוף</button></div></div>`:'';
     return `<div class="drs-region-block" style="margin-bottom:24px;page-break-after:always">${header}${cards}${addSection}</div>`;
   }).join('');
-  const html=`<div id="drs-printable" style="font-family:inherit;direction:rtl;font-size:14px">${regionsHtml}<div class="drs-no-print" style="margin-top:10px;font-size:11px;color:#666;text-align:center">שבוע נוכחי: ${esc(d.currentWeekISO)} · שבוע הבא: ${esc(d.nextWeekISO)} · ${d.regions.length} אזורים · ${totalStops} תחנות</div></div>`;
+  // Summary — what goes out (מקבלת = deliver) and what comes back (מחזירה = collect).
+  // Aggregate across all regions in the sheet, count copies of each material.
+  const outCount={},inCount={};let outNames={},inNames={};
+  d.perRegion.forEach(rgn=>rgn.stops.forEach(s=>{
+    if(s.nxtMat){const k=s.nxtMat.id||s.nxtMat.name;outCount[k]=(outCount[k]||0)+1;outNames[k]=s.nxtMat.name}
+    if(s.curMat){const k=s.curMat.id||s.curMat.name;inCount[k]=(inCount[k]||0)+1;inNames[k]=s.curMat.name}
+  }));
+  const _chip=(name,count,bg,fg)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:${bg};color:${fg};padding:5px 12px;border-radius:12px;font-size:13px;font-weight:700;margin:3px;border:1.5px solid ${fg}"><span style="background:white;color:${fg};padding:1px 8px;border-radius:8px;font-weight:800;font-size:12px">${count}</span>${esc(name)}</span>`;
+  const outEntries=Object.keys(outCount).sort((a,b)=>outCount[b]-outCount[a]);
+  const inEntries=Object.keys(inCount).sort((a,b)=>inCount[b]-inCount[a]);
+  const outTotal=Object.values(outCount).reduce((a,b)=>a+b,0);
+  const inTotal=Object.values(inCount).reduce((a,b)=>a+b,0);
+  const summaryHtml=(outEntries.length||inEntries.length)?`<div class="drs-stop" style="page-break-inside:avoid;break-inside:avoid;margin-top:20px;border:2.5px solid #1E40AF;border-radius:12px;background:white;overflow:hidden"><div style="background:linear-gradient(135deg,#1E40AF,#3730A3);color:white;padding:12px 18px;font-size:17px;font-weight:800;text-align:center">📋 סיכום — סה"כ הזמנת מערכים ליום</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:0"><div style="padding:14px 16px;background:#D8F3DC;border-left:2px solid #1E40AF"><div style="font-size:13px;font-weight:800;color:#065F46;margin-bottom:8px;text-align:center;background:white;padding:6px;border-radius:8px">📦 יוצא עם הנהג (${outTotal})</div>${outEntries.length?outEntries.map(k=>_chip(outNames[k],outCount[k],'#D8F3DC','#065F46')).join(''):'<div style="font-size:12px;color:#065F46;text-align:center;font-style:italic;margin-top:8px">—</div>'}</div><div style="padding:14px 16px;background:#FEF3C7"><div style="font-size:13px;font-weight:800;color:#78350F;margin-bottom:8px;text-align:center;background:white;padding:6px;border-radius:8px">🔄 חוזר עם הנהג (${inTotal})</div>${inEntries.length?inEntries.map(k=>_chip(inNames[k],inCount[k],'#FEF3C7','#78350F')).join(''):'<div style="font-size:12px;color:#78350F;text-align:center;font-style:italic;margin-top:8px">—</div>'}</div></div><div style="padding:8px 14px;background:#F0F9FF;font-size:11px;color:#0369A1;text-align:center;border-top:1px solid #C7DEF7">💡 המספר בעיגול = כמות עותקים של אותו מערך שצריך לקחת</div></div>`:'';
+  const html=`<div id="drs-printable" style="font-family:inherit;direction:rtl;font-size:14px">${regionsHtml}${summaryHtml}<div class="drs-no-print" style="margin-top:10px;font-size:11px;color:#666;text-align:center">שבוע נוכחי: ${esc(d.currentWeekISO)} · שבוע הבא: ${esc(d.nextWeekISO)} · ${d.regions.length} אזורים · ${totalStops} תחנות</div></div>`;
   wrap.innerHTML=html;if(actions)actions.style.display='block';
   window._driverRouteState={regions:d.regions,date:d.dateStr,driver:d.driver,data:d,html};
 }
@@ -4975,6 +4988,22 @@ function shareDriverRouteWA(){
     lines.push('━━━━━━━━━━');
     lines.push('');
   });
+  const outCount={},inCount={};const outNames={},inNames={};
+  d.perRegion.forEach(rgn=>rgn.stops.forEach(s=>{
+    if(s.nxtMat){const k=s.nxtMat.id||s.nxtMat.name;outCount[k]=(outCount[k]||0)+1;outNames[k]=s.nxtMat.name}
+    if(s.curMat){const k=s.curMat.id||s.curMat.name;inCount[k]=(inCount[k]||0)+1;inNames[k]=s.curMat.name}
+  }));
+  const outEntries=Object.keys(outCount).sort((a,b)=>outCount[b]-outCount[a]);
+  const inEntries=Object.keys(inCount).sort((a,b)=>inCount[b]-inCount[a]);
+  if(outEntries.length||inEntries.length){
+    lines.push('📋 *סיכום ההזמנה ליום:*');
+    lines.push('');
+    lines.push(`📦 *יוצא עם הנהג* (${Object.values(outCount).reduce((a,b)=>a+b,0)}):`);
+    outEntries.forEach(k=>lines.push(`  • ${outNames[k]} ×${outCount[k]}`));
+    lines.push('');
+    lines.push(`🔄 *חוזר עם הנהג* (${Object.values(inCount).reduce((a,b)=>a+b,0)}):`);
+    inEntries.forEach(k=>lines.push(`  • ${inNames[k]} ×${inCount[k]}`));
+  }
   const txt=lines.join('\n').trim();
   const url='https://wa.me/?text='+encodeURIComponent(txt);
   window.open(url,'_blank');
