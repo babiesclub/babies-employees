@@ -4833,10 +4833,16 @@ function _drsBuildData(){
   const materials=(typeof getMaterials==='function')?getMaterials():[];
   const matById={};materials.forEach(m=>{matById[m.id]=m});
   const perRegion=regions.map(region=>{
-  const instructors=(typeof getInstructorsInRegion==='function')?getInstructorsInRegion(region):[];
+  const instructorsRaw=(typeof getInstructorsInRegion==='function')?getInstructorsInRegion(region):[];
+  // Filter out inactive instructors (offboarded / access blocked) — driver shouldn't visit them.
+  const instructors=instructorsRaw.filter(u=>!(u&&(u.accessBlocked||u.offboarded)));
   const stopsCfg=((_regionRoutes||{})[region]||{}).stops||[];
   const routeIdx={};stopsCfg.forEach((s,i)=>{if(s.kind==='instructor')routeIdx[String(s.refId)]=i});
-  const sorted=instructors.slice().sort((a,b)=>{
+  const hasRoute=Object.keys(routeIdx).length>0;
+  // If a route exists → show ONLY instructors IN the route (removing from route hides them
+  // from the sheet). If no route defined yet → show all active as fallback.
+  const filteredInstructors=hasRoute?instructors.filter(u=>routeIdx[String(u.uid||u.id)]!=null):instructors;
+  const sorted=filteredInstructors.slice().sort((a,b)=>{
     const ai=routeIdx[String(a.uid||a.id)];const bi=routeIdx[String(b.uid||b.id)];
     const av=(ai==null?99999:ai);const bv=(bi==null?99999:bi);
     if(av!==bv)return av-bv;
