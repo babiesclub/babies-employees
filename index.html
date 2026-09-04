@@ -4867,7 +4867,10 @@ function _drsBuildData(){
     const instructorAddr=(u.address||'').trim();
     return{uid,name:u.name||'?',phone:u.phone||'',address:instructorAddr,curMat,nxtMat,pipelineTo,hasCur:!!curId};
   });
-  return{region,stops};
+  // Instructors active in region but NOT in the sheet (removed from route or never added).
+  const shownUids=new Set(stops.map(s=>s.uid));
+  const availableToAdd=instructors.filter(u=>!shownUids.has(String(u.uid||u.id))).map(u=>({uid:String(u.uid||u.id),name:u.name||'?',phone:u.phone||''})).sort((a,b)=>a.name.localeCompare(b.name,'he'));
+  return{region,stops,availableToAdd};
   });
   return{regions,dateStr,driver,currentWeekISO,nextWeekISO,perRegion};
 }
@@ -4890,7 +4893,10 @@ function generateDriverRouteSheet(){
       const actionBtns=`<div class="drs-no-print" style="display:flex;gap:3px;padding:4px 8px;align-items:center;background:rgba(255,255,255,0.4);border-right:1px solid #666"><button onclick="_drsMoveStop('${esc(rgn.region)}','${esc(s.uid)}',-1)" ${isFirst?'disabled':''} title="הזז למעלה" style="background:${isFirst?'#F5F5F5':'white'};border:1px solid #999;border-radius:4px;width:26px;height:26px;cursor:${isFirst?'not-allowed':'pointer'};font-size:12px;font-family:inherit;padding:0;opacity:${isFirst?'0.4':'1'}">⬆</button><button onclick="_drsMoveStop('${esc(rgn.region)}','${esc(s.uid)}',1)" ${isLast?'disabled':''} title="הזז למטה" style="background:${isLast?'#F5F5F5':'white'};border:1px solid #999;border-radius:4px;width:26px;height:26px;cursor:${isLast?'not-allowed':'pointer'};font-size:12px;font-family:inherit;padding:0;opacity:${isLast?'0.4':'1'}">⬇</button><button onclick="_drsEditInstructor('${esc(s.uid)}')" title="ערוך את המדריכה" style="background:#DBEAFE;border:1px solid #3B82F6;color:#1E40AF;border-radius:4px;width:26px;height:26px;cursor:pointer;font-size:12px;font-family:inherit;padding:0">✏</button><button onclick="_drsRemoveStop('${esc(rgn.region)}','${esc(s.uid)}','${esc(s.name)}')" title="הסירי מהמסלול (לא מוחק את המדריכה)" style="background:#FEE2E2;border:1px solid #DC2626;color:#991B1B;border-radius:4px;width:26px;height:26px;cursor:pointer;font-size:12px;font-family:inherit;padding:0">🗑</button></div>`;
       return `<div class="drs-stop" style="border:1px solid #666;border-top:0;background:white"><div style="display:flex;background:#FBD4B4;border-bottom:1px solid #666">${actionBtns}<div style="flex:1;padding:10px 14px;font-size:16px;font-weight:800;color:#0C4A6E">${i+1}. ${esc(s.name)}</div><div style="padding:10px 14px;font-size:14px;font-weight:700;color:#0C4A6E;border-right:1px solid #666;min-width:140px;text-align:center;direction:ltr">${phoneHtml}</div></div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:12px;font-weight:700;color:#555;margin-bottom:4px">כתובת המדריכה:</div>${addrHtml}</div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:14px"><b>מחזירה:</b> ${cur}</div>${s.hasCur?`<div style="font-size:12px;color:#1565C0;margin-top:3px;font-weight:600">→ ${esc(s.pipelineTo)}</div>`:''}</div><div style="padding:10px 14px"><div style="font-size:14px"><b>מקבלת:</b> ${nxt}</div></div></div>`;
     }).join('');
-    return `<div class="drs-region-block" style="margin-bottom:24px;page-break-after:always">${header}${cards}</div>`;
+    // Available instructors NOT in route yet — can be added back via dropdown.
+    const missing=(rgn.availableToAdd||[]);
+    const addSection=missing.length?`<div class="drs-no-print" style="border:1px dashed #7C3AED;border-top:0;background:#F5F3FF;padding:10px 14px"><div style="font-size:12px;font-weight:700;color:#5B21B6;margin-bottom:6px">➕ הוסיפי מדריכה למסלול</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select id="drs-add-${esc(rgn.region)}" style="flex:1;min-width:150px;padding:6px 10px;border:1.5px solid #C4B5FD;border-radius:6px;font-family:inherit;font-size:13px"><option value="">— בחרי מדריכה —</option>${missing.map(m=>`<option value="${esc(m.uid)}">${esc(m.name)}${m.phone?' · '+esc(m.phone):''}</option>`).join('')}</select><button onclick="_drsAddStopFromSelect('${esc(rgn.region)}','drs-add-${esc(rgn.region)}')" style="background:#7C3AED;color:white;border:0;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">+ הוסיפי לסוף</button></div></div>`:'';
+    return `<div class="drs-region-block" style="margin-bottom:24px;page-break-after:always">${header}${cards}${addSection}</div>`;
   }).join('');
   const html=`<div id="drs-printable" style="font-family:inherit;direction:rtl;font-size:14px">${regionsHtml}<div class="drs-no-print" style="margin-top:10px;font-size:11px;color:#666;text-align:center">שבוע נוכחי: ${esc(d.currentWeekISO)} · שבוע הבא: ${esc(d.nextWeekISO)} · ${d.regions.length} אזורים · ${totalStops} תחנות</div></div>`;
   wrap.innerHTML=html;if(actions)actions.style.display='block';
@@ -4930,6 +4936,18 @@ async function _drsRemoveStop(region,uid,name){
 function _drsEditInstructor(uid){
   if(typeof openEdit==='function'){openEdit(uid);}
   else{alert('פונקציית עריכה לא נמצאה');}
+}
+async function _drsAddStopFromSelect(region,selectId){
+  const sel=document.getElementById(selectId);
+  if(!sel||!sel.value){alert('בחרי מדריכה מהרשימה');return}
+  const uid=sel.value;
+  const stops=(((_regionRoutes||{})[region]||{}).stops||[]).slice();
+  if(stops.some(s=>s.kind==='instructor'&&String(s.refId)===String(uid))){alert('המדריכה כבר במסלול');return}
+  stops.push({kind:'instructor',refId:uid});
+  await saveRegionRoute(region,stops);
+  const users=DB.get('users')||[];const u=users.find(x=>String(x.uid||x.id)===String(uid));
+  _logAudit('update','regionRoute',region,`נוספה ${u?u.name:uid.slice(0,8)} למסלול ${region}`);
+  generateDriverRouteSheet();
 }
 function shareDriverRouteWA(){
   const st=window._driverRouteState;
