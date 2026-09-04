@@ -4880,7 +4880,9 @@ function generateDriverRouteSheet(){
       const cur=s.curMat?esc(s.curMat.name):'—';
       const nxt=s.nxtMat?esc(s.nxtMat.name):'—';
       const phoneHtml=s.phone?esc(s.phone):'<span style="color:#888;font-style:italic;font-weight:400">— אין טלפון —</span>';
-      return `<div class="drs-stop" style="border:1px solid #666;border-top:0;background:white"><div style="display:flex;background:#FBD4B4;border-bottom:1px solid #666"><div style="flex:1;padding:10px 14px;font-size:16px;font-weight:800;color:#0C4A6E">${i+1}. ${esc(s.name)}</div><div style="padding:10px 14px;font-size:14px;font-weight:700;color:#0C4A6E;border-right:1px solid #666;min-width:140px;text-align:center;direction:ltr">${phoneHtml}</div></div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:12px;font-weight:700;color:#555;margin-bottom:4px">כתובת המדריכה:</div>${addrHtml}</div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:14px"><b>מחזירה:</b> ${cur}</div>${s.hasCur?`<div style="font-size:12px;color:#1565C0;margin-top:3px;font-weight:600">→ ${esc(s.pipelineTo)}</div>`:''}</div><div style="padding:10px 14px"><div style="font-size:14px"><b>מקבלת:</b> ${nxt}</div></div></div>`;
+      const isFirst=i===0;const isLast=i===rgn.stops.length-1;
+      const actionBtns=`<div class="drs-no-print" style="display:flex;gap:3px;padding:4px 8px;align-items:center;background:rgba(255,255,255,0.4);border-right:1px solid #666"><button onclick="_drsMoveStop('${esc(rgn.region)}','${esc(s.uid)}',-1)" ${isFirst?'disabled':''} title="הזז למעלה" style="background:${isFirst?'#F5F5F5':'white'};border:1px solid #999;border-radius:4px;width:26px;height:26px;cursor:${isFirst?'not-allowed':'pointer'};font-size:12px;font-family:inherit;padding:0;opacity:${isFirst?'0.4':'1'}">⬆</button><button onclick="_drsMoveStop('${esc(rgn.region)}','${esc(s.uid)}',1)" ${isLast?'disabled':''} title="הזז למטה" style="background:${isLast?'#F5F5F5':'white'};border:1px solid #999;border-radius:4px;width:26px;height:26px;cursor:${isLast?'not-allowed':'pointer'};font-size:12px;font-family:inherit;padding:0;opacity:${isLast?'0.4':'1'}">⬇</button><button onclick="_drsEditInstructor('${esc(s.uid)}')" title="ערוך את המדריכה" style="background:#DBEAFE;border:1px solid #3B82F6;color:#1E40AF;border-radius:4px;width:26px;height:26px;cursor:pointer;font-size:12px;font-family:inherit;padding:0">✏</button><button onclick="_drsRemoveStop('${esc(rgn.region)}','${esc(s.uid)}','${esc(s.name)}')" title="הסירי מהמסלול (לא מוחק את המדריכה)" style="background:#FEE2E2;border:1px solid #DC2626;color:#991B1B;border-radius:4px;width:26px;height:26px;cursor:pointer;font-size:12px;font-family:inherit;padding:0">🗑</button></div>`;
+      return `<div class="drs-stop" style="border:1px solid #666;border-top:0;background:white"><div style="display:flex;background:#FBD4B4;border-bottom:1px solid #666">${actionBtns}<div style="flex:1;padding:10px 14px;font-size:16px;font-weight:800;color:#0C4A6E">${i+1}. ${esc(s.name)}</div><div style="padding:10px 14px;font-size:14px;font-weight:700;color:#0C4A6E;border-right:1px solid #666;min-width:140px;text-align:center;direction:ltr">${phoneHtml}</div></div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:12px;font-weight:700;color:#555;margin-bottom:4px">כתובת המדריכה:</div>${addrHtml}</div><div style="padding:10px 14px;border-bottom:1px solid #666"><div style="font-size:14px"><b>מחזירה:</b> ${cur}</div>${s.hasCur?`<div style="font-size:12px;color:#1565C0;margin-top:3px;font-weight:600">→ ${esc(s.pipelineTo)}</div>`:''}</div><div style="padding:10px 14px"><div style="font-size:14px"><b>מקבלת:</b> ${nxt}</div></div></div>`;
     }).join('');
     return `<div class="drs-region-block" style="margin-bottom:24px;page-break-after:always">${header}${cards}</div>`;
   }).join('');
@@ -4893,6 +4895,35 @@ function printDriverRouteSheet(){
   const done=()=>{document.body.classList.remove('drs-printing');window.removeEventListener('afterprint',done)};
   window.addEventListener('afterprint',done);
   setTimeout(()=>{try{window.print()}catch(e){alert('לא ניתן להדפיס: '+(e.message||e))}setTimeout(()=>document.body.classList.remove('drs-printing'),2000)},50);
+}
+/* Move/remove instructor stops directly from the driver route sheet.
+   Modifies _regionRoutes[region].stops and persists via saveRegionRoute — then
+   regenerates the sheet so the new order is reflected immediately.
+   NOTE: Removing a stop here ONLY removes from route; the instructor herself is untouched. */
+async function _drsMoveStop(region,uid,dir){
+  const stops=(((_regionRoutes||{})[region]||{}).stops||[]).slice();
+  const idx=stops.findIndex(s=>s.kind==='instructor'&&String(s.refId)===String(uid));
+  // If not in stops yet, ADD her at start (dir=-1) or end (dir=1) first — then user can move.
+  if(idx<0){
+    if(dir===-1)stops.unshift({kind:'instructor',refId:uid});else stops.push({kind:'instructor',refId:uid});
+  }else{
+    const t=idx+dir;if(t<0||t>=stops.length)return;
+    [stops[idx],stops[t]]=[stops[t],stops[idx]];
+  }
+  await saveRegionRoute(region,stops);
+  _logAudit('update','regionRoute',region,`שינוי סדר במסלול ${region}`);
+  generateDriverRouteSheet();
+}
+async function _drsRemoveStop(region,uid,name){
+  if(!confirm(`להסיר את ${name||'המדריכה'} מהמסלול של אזור ${region}?\n\n⚠ זה מסיר רק מהסדר — המדריכה עצמה לא נמחקת. אפשר להוסיף אותה בחזרה בכל רגע דרך "🔄 ניהול קבוצות רוטציה".`))return;
+  const stops=(((_regionRoutes||{})[region]||{}).stops||[]).filter(s=>!(s.kind==='instructor'&&String(s.refId)===String(uid)));
+  await saveRegionRoute(region,stops);
+  _logAudit('delete','regionRoute',region,`הוסרה ${name||uid.slice(0,8)} ממסלול ${region}`);
+  generateDriverRouteSheet();
+}
+function _drsEditInstructor(uid){
+  if(typeof openEdit==='function'){openEdit(uid);}
+  else{alert('פונקציית עריכה לא נמצאה');}
 }
 function shareDriverRouteWA(){
   const st=window._driverRouteState;
