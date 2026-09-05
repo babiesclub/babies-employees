@@ -2654,7 +2654,76 @@ const SENSITIVE_CACHE_KEYS=['bz3_users','bz3_records','bz3_records_lastSynced','
 function clearSensitiveCaches(){SENSITIVE_CACHE_KEYS.forEach(k=>localStorage.removeItem(k))}
 async function doLogin(){const u=document.getElementById('lu').value.trim(),p=document.getElementById('lp').value;const btn=document.querySelector('.btn-login');const setLoading=(on,text)=>{if(btn){btn.disabled=on;btn.textContent=on?(text||'מתחבר...'):'כניסה למערכת'}};setLoading(true);try{const authUser=await fbAuthSignIn(u,p);if(authUser){const profile=await getFsUser(authUser.uid);if(!profile){await fbAuth.signOut();document.getElementById('lerr').textContent='חשבון קיים אך אין פרופיל - פני לאדמין';document.getElementById('lerr').style.display='block';return}if(profile.accessBlocked&&profile.role!=='admin'){await fbAuth.signOut();document.getElementById('lerr').textContent='⛔ הגישה לחשבון שלך נחסמה על ידי האדמין.';document.getElementById('lerr').style.display='block';return}const prevSession=DB.get('session');const isUserChange=!prevSession||String(prevSession.userId)!==String(authUser.uid);if(isUserChange){clearSensitiveCaches()}DB.set('session',{userId:authUser.uid,ts:Date.now()});setLoading(true,'טוען נתונים...');cu=profile;try{await syncFromCloud()}catch(e){console.warn('login sync failed:',e)}enterApp(profile);return}if(fbDb&&!_cloudReady)await syncFromCloud();const legacy=(DB.get('users')||[]).find(x=>x.username===u&&x.password===p);if(legacy){if(legacy.role==='admin'||legacy.role==='office'){document.getElementById('lerr').textContent='חשבון אדמין/עובדת משרד מוגן ב־2FA — יש להיכנס דרך "התחבר עם Google" למטה.';document.getElementById('lerr').style.display='block';return}if(legacy.accessBlocked&&legacy.role!=='admin'){document.getElementById('lerr').textContent='⛔ הגישה לחשבון שלך נחסמה על ידי האדמין.';document.getElementById('lerr').style.display='block';return}const prevSession=DB.get('session');const isUserChange=!prevSession||String(prevSession.userId)!==String(legacy.id);if(isUserChange){clearSensitiveCaches()}DB.set('session',{userId:legacy.id,ts:Date.now(),legacy:true});enterApp(legacy);return}document.getElementById('lerr').textContent='שם משתמש או סיסמא שגויים';document.getElementById('lerr').style.display='block'}finally{setLoading(false)}}
 async function doLogout(){if(!confirm('להתנתק? בכניסה הבאה תידרשי שם משתמש וסיסמא.'))return;stopNotifsListener();if(window.fbAuth&&fbAuth.currentUser){try{await fbAuth.signOut()}catch(e){console.error(e)}}osClearUser();clearSensitiveCaches();localStorage.removeItem('bz3_notifications');localStorage.removeItem('bz3_session');cu=null;document.getElementById('login-screen').style.display='flex';document.getElementById('app').style.display='none';document.getElementById('lu').value='';document.getElementById('lp').value='';document.getElementById('lerr').style.display='none'}
-async function doGoogleSignIn(){if(!window.fbAuth||!window.firebase){alert('Firebase לא זמין');return}const errEl=document.getElementById('lerr');errEl.style.display='none';try{const provider=new firebase.auth.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});const result=await fbAuth.signInWithPopup(provider);const authUser=result.user;if(!authUser){errEl.textContent='התחברות בוטלה';errEl.style.display='block';return}const profile=await getFsUser(authUser.uid);if(!profile||(profile.role!=='admin'&&profile.role!=='office')){await fbAuth.signOut();errEl.textContent='חשבון Google זה לא קשור לחשבון אדמין/עובדת משרד. פני לאדמין הראשי או השתמשי בשם משתמש וסיסמא.';errEl.style.display='block';return}const prevSession=DB.get('session');const isUserChange=!prevSession||String(prevSession.userId)!==String(authUser.uid);if(isUserChange)clearSensitiveCaches();DB.set('session',{userId:authUser.uid,ts:Date.now(),google:true});cu=profile;try{await syncFromCloud()}catch(e){console.warn('google login sync failed:',e)}enterApp(profile)}catch(e){console.error('Google sign-in failed:',e);if(e.code==='auth/popup-closed-by-user'||e.code==='auth/cancelled-popup-request')return;if(e.code==='auth/account-exists-with-different-credential'){errEl.textContent='חשבון קיים עם שיטת אימות אחרת. התחברי עם שם משתמש וסיסמא, ואז קשרי את Google מהפרופיל.'}else if(e.code==='auth/operation-not-allowed'){errEl.textContent='ספק Google לא מופעל ב־Firebase Console → Authentication → Sign-in method → Google → Enable'}else{errEl.textContent='שגיאת התחברות: '+(e.message||e.code||'לא ידוע')}errEl.style.display='block'}}
+/* Process the result of a signInWithRedirect return, called on page load if we're
+   coming back from the Google OAuth redirect flow. */
+async function _handleGoogleRedirectResult(){
+  if(!window.fbAuth)return;
+  try{
+    const result=await fbAuth.getRedirectResult();
+    if(!result||!result.user)return;
+    const authUser=result.user;
+    const profile=await getFsUser(authUser.uid);
+    const errEl=document.getElementById('lerr');
+    if(!profile||(profile.role!=='admin'&&profile.role!=='office')){
+      await fbAuth.signOut();
+      if(errEl){errEl.textContent='חשבון Google זה לא קשור לחשבון אדמין/עובדת משרד.';errEl.style.display='block'}
+      return;
+    }
+    const prevSession=DB.get('session');
+    const isUserChange=!prevSession||String(prevSession.userId)!==String(authUser.uid);
+    if(isUserChange)clearSensitiveCaches();
+    DB.set('session',{userId:authUser.uid,ts:Date.now(),google:true});
+    cu=profile;
+    try{await syncFromCloud()}catch(e){console.warn('google redirect sync:',e)}
+    enterApp(profile);
+  }catch(e){
+    console.error('getRedirectResult failed:',e);
+    const errEl=document.getElementById('lerr');
+    if(errEl && e.code && e.code!=='auth/no-auth-event'){errEl.textContent='שגיאה בהתחברות: '+(e.message||e.code);errEl.style.display='block'}
+  }
+}
+// Run on page load — if we returned from redirect, this will pick it up.
+if(typeof window!=='undefined'){window.addEventListener('DOMContentLoaded',()=>{setTimeout(_handleGoogleRedirectResult,500)})}
+async function doGoogleSignIn(){
+  if(!window.fbAuth||!window.firebase){alert('Firebase לא זמין');return}
+  const errEl=document.getElementById('lerr');errEl.style.display='none';
+  const provider=new firebase.auth.GoogleAuthProvider();
+  provider.setCustomParameters({prompt:'select_account'});
+  try{
+    const result=await fbAuth.signInWithPopup(provider);
+    const authUser=result.user;
+    if(!authUser){errEl.textContent='התחברות בוטלה';errEl.style.display='block';return}
+    const profile=await getFsUser(authUser.uid);
+    if(!profile||(profile.role!=='admin'&&profile.role!=='office')){
+      await fbAuth.signOut();
+      errEl.textContent='חשבון Google זה לא קשור לחשבון אדמין/עובדת משרד. פני לאדמין הראשי או השתמשי בשם משתמש וסיסמא.';
+      errEl.style.display='block';return;
+    }
+    const prevSession=DB.get('session');
+    const isUserChange=!prevSession||String(prevSession.userId)!==String(authUser.uid);
+    if(isUserChange)clearSensitiveCaches();
+    DB.set('session',{userId:authUser.uid,ts:Date.now(),google:true});
+    cu=profile;
+    try{await syncFromCloud()}catch(e){console.warn('google login sync failed:',e)}
+    enterApp(profile);
+  }catch(e){
+    console.error('Google sign-in popup failed:',e);
+    if(e.code==='auth/popup-closed-by-user'||e.code==='auth/cancelled-popup-request')return;
+    // Third-party cookies blocked / popup blocked / invalid-credential → fall back to REDIRECT flow.
+    // Chrome is phasing out 3rd-party cookies globally in 2025-2026, and popup flow relies on them.
+    const isCookieOrPopupErr=['auth/popup-blocked','auth/invalid-credential','auth/web-storage-unsupported','auth/internal-error'].includes(e.code)||String(e.message||'').includes('userinfo')||String(e.message||'').includes('cookies');
+    if(isCookieOrPopupErr){
+      errEl.textContent='מנסה שיטת התחברות חלופית (redirect)... כרגע תעברי לגוגל ותחזרי אוטומטית.';
+      errEl.style.display='block';
+      try{await fbAuth.signInWithRedirect(provider);return}
+      catch(re){console.error('redirect also failed:',re);errEl.textContent='שגיאה בהתחברות: '+(re.message||re.code||'לא ידוע');errEl.style.display='block';return}
+    }
+    if(e.code==='auth/account-exists-with-different-credential'){errEl.textContent='חשבון קיים עם שיטת אימות אחרת. התחברי עם שם משתמש וסיסמא, ואז קשרי את Google מהפרופיל.'}
+    else if(e.code==='auth/operation-not-allowed'){errEl.textContent='ספק Google לא מופעל ב־Firebase Console → Authentication → Sign-in method → Google → Enable'}
+    else{errEl.textContent='שגיאת התחברות: '+(e.message||e.code||'לא ידוע')}
+    errEl.style.display='block';
+  }
+}
 async function removeAdminPassword(){if(!cu||cu.role!=='admin'){alert('רק אדמין');return}if(!window.fbAuth||!fbAuth.currentUser){alert('צריך להיות מחוברת');return}const providers=(fbAuth.currentUser.providerData||[]).map(p=>p.providerId);if(!providers.includes('google.com')){alert('קודם צריך לקשר חשבון Google. בלי זה לא תוכלי להיכנס בכלל.');return}if(!providers.includes('password')){alert('אין שיטת סיסמא בחשבון שלך — כבר רק Google.');return}const msg='⚠ שימי לב היטב לפני שאת ממשיכה:\n\nמהרגע שתלחצי OK:\n• לא תוכלי יותר להיכנס עם שם משתמש וסיסמא\n• רק כניסה עם Google תעבוד\n• אם תאבדי גישה לחשבון ה־Google — לא תוכלי להיכנס\n\nוודאי:\n1. יש לך את קודי הגיבוי של Google שמורים במקום בטוח\n2. בדקת שכניסה עם Google עובדת (חלון בסתר)\n\nלהמשיך?';if(!confirm(msg))return;const typed=prompt('הקלידי "מחקי סיסמא" כדי לאשר:');if(typed!=='מחקי סיסמא'){alert('הפעולה בוטלה');return}try{await fbAuth.currentUser.unlink('password');try{await fbDb.collection('users').doc(cu.uid).update({password:firebase.firestore.FieldValue.delete()});delete cu.password;const users=DB.get('users')||[];const idx=users.findIndex(u=>u.uid===cu.uid);if(idx>=0){delete users[idx].password;localStorage.setItem('bz3_users',JSON.stringify(users))}}catch(cleanupErr){console.warn('doc password cleanup:',cleanupErr)}alert('✓ שיטת הסיסמא נמחקה!\n\nמעכשיו רק כניסה עם Google תעבוד — עם ה־2FA שהגדרת ב־Google.\n\nזה השלב האחרון והחזק ביותר של האבטחה. חשבון האדמין שלך מוגן עכשיו מלא.');document.getElementById('myprofile-mo').style.display='none'}catch(e){console.error('unlink password failed:',e);if(e.code==='auth/no-such-provider'){alert('אין שיטת סיסמא בחשבון — כבר רק Google.')}else{alert('שגיאה: '+(e.message||e.code))}}}
 async function linkAdminToGoogle(){if(!cu||cu.role!=='admin'){alert('רק אדמין יכולה לקשר חשבון Google');return}if(!window.fbAuth||!fbAuth.currentUser){alert('צריך להיות מחוברת עם סיסמא לפני שקושרים Google');return}if(!window.firebase){alert('Firebase לא זמין');return}try{const provider=new firebase.auth.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});await fbAuth.currentUser.linkWithPopup(provider);const providers=(fbAuth.currentUser.providerData||[]).map(p=>p.providerId).join(', ');const gmail=(fbAuth.currentUser.providerData||[]).find(p=>p.providerId==='google.com');alert('✓ חשבון Google קושר בהצלחה!\n\nמעכשיו אפשר להיכנס גם עם:\n📧 '+(gmail?gmail.email:'הGmail שלך')+'\n\nשלב הבא — הפעילי 2FA בחשבון ה־Google עצמו:\nmyaccount.google.com/security → אימות דו־שלבי\n\nכשה־2FA פעיל שם, כל התחברות דרך Google תדרוש אותו אוטומטית — זה נותן לך את השכבה השנייה של האבטחה.');document.getElementById('myprofile-mo').style.display='none'}catch(e){console.error('link google failed:',e);if(e.code==='auth/popup-closed-by-user')return;if(e.code==='auth/credential-already-in-use'){alert('חשבון ה־Google הזה כבר קשור למשתמש אחר במערכת')}else if(e.code==='auth/provider-already-linked'){alert('כבר קשור. את יכולה להתחבר עם Google מדף ההתחברות')}else if(e.code==='auth/operation-not-allowed'){alert('ספק Google לא מופעל.\n\nלכי ל־Firebase Console:\nהאתחה → Sign-in method → Google → Enable')}else{alert('שגיאה: '+(e.message||e.code))}}}
 function tryRestoreSession(){const sess=DB.get('session');if(!sess||!sess.userId)return false;const user=(DB.get('users')||[]).find(u=>u.id===sess.userId||u.uid===sess.userId);if(!user){localStorage.removeItem('bz3_session');return false}enterApp(user);syncFromCloud().then(()=>{const act=document.querySelector('.screen.active')?.id;if(act==='s-his')renderHis();if(act==='s-adm')renderAdm();if(act==='s-rcp')renderReceipts();renderContractsBanner();renderPdocsBanner()}).catch(e=>console.warn('restore sync:',e));return true}
