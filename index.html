@@ -2689,6 +2689,10 @@ async function doGoogleSignIn(){
   const errEl=document.getElementById('lerr');errEl.style.display='none';
   const provider=new firebase.auth.GoogleAuthProvider();
   provider.setCustomParameters({prompt:'select_account'});
+  // REDIRECT-first: popup silently fails when 3rd-party cookies blocked (Chrome default 2025+).
+  errEl.textContent='מעביר אותך לגוגל להתחברות... תחזרי אוטומטית.';errEl.style.display='block';
+  try{await fbAuth.signInWithRedirect(provider);return}
+  catch(re){console.error('signInWithRedirect failed:',re);errEl.textContent='שגיאה במעבר לגוגל: '+(re.message||re.code||'לא ידוע')+'. מנסה popup...';errEl.style.display='block';}
   try{
     const result=await fbAuth.signInWithPopup(provider);
     const authUser=result.user;
