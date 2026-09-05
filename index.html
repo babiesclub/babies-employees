@@ -2725,6 +2725,8 @@ async function doGoogleSignIn(){
   if(!window.fbAuth||!window.firebase){alert('Firebase לא זמין');return}
   const errEl=document.getElementById('lerr');errEl.style.display='none';
   const provider=new firebase.auth.GoogleAuthProvider();
+  provider.addScope('profile');
+  provider.addScope('email');
   provider.setCustomParameters({prompt:'select_account'});
   // REDIRECT-first: popup silently fails when 3rd-party cookies blocked (Chrome default 2025+).
   errEl.textContent='מעביר אותך לגוגל להתחברות... תחזרי אוטומטית.';errEl.style.display='block';
