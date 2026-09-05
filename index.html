@@ -2686,6 +2686,41 @@ async function _handleGoogleRedirectResult(){
 }
 // Run on page load — if we returned from redirect, this will pick it up.
 if(typeof window!=='undefined'){window.addEventListener('DOMContentLoaded',()=>{setTimeout(_handleGoogleRedirectResult,500)})}
+// STRONGER: onAuthStateChanged. Fires whenever Firebase Auth's user changes, including after
+// redirect resolves. Safety net if getRedirectResult silently returns no user.
+if(typeof window!=='undefined'){window.addEventListener('DOMContentLoaded',()=>{
+  setTimeout(()=>{
+    if(!window.fbAuth)return;
+    fbAuth.onAuthStateChanged(async(user)=>{
+      if(!user)return;
+      if(cu && String(cu.uid)===String(user.uid))return;
+      if(cu)return;
+      console.log('[auto-login] Firebase Auth session detected, fetching profile for uid:',user.uid);
+      try{
+        const profile=await getFsUser(user.uid);
+        if(!profile){
+          console.warn('[auto-login] no Firestore profile for uid',user.uid,'- signing out');
+          await fbAuth.signOut();
+          const errEl=document.getElementById('lerr');
+          if(errEl){errEl.textContent='חשבון Google זה לא קשור לחשבון קיים במערכת.';errEl.style.display='block'}
+          return;
+        }
+        if(profile.role!=='admin'&&profile.role!=='office'){
+          console.warn('[auto-login] user role is',profile.role,'- not admin/office, signing out');
+          await fbAuth.signOut();
+          const errEl=document.getElementById('lerr');
+          if(errEl){errEl.textContent='חשבון Google זה לא של אדמין/עובדת משרד.';errEl.style.display='block'}
+          return;
+        }
+        console.log('[auto-login] SUCCESS as',profile.name);
+        cu=profile;
+        DB.set('session',{userId:user.uid,ts:Date.now(),google:true});
+        try{await syncFromCloud()}catch(e){console.warn('sync failed:',e)}
+        enterApp(profile);
+      }catch(e){console.error('[auto-login] error:',e)}
+    });
+  },800);
+})}
 async function doGoogleSignIn(){
   if(!window.fbAuth||!window.firebase){alert('Firebase לא זמין');return}
   const errEl=document.getElementById('lerr');errEl.style.display='none';
