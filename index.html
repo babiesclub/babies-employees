@@ -481,20 +481,23 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
       <div class="ph"><h2>🏫 הגנים שלי</h2></div>
       <div id="mygdns-content"></div>
     </div>
-    <div id="s-mysched" class="screen">
-      <div class="ph"><h2>🗓 המערכת שלי</h2></div>
-      <div id="myWeeklyMat-card" class="card" style="display:none;background:linear-gradient(135deg,#E8F5E9,#C8E6C9);border:2px solid #66BB6A;margin-bottom:14px">
+    <div id="s-mymat" class="screen">
+      <div class="ph"><h2>📦 המערך השבועי שלי</h2></div>
+      <div id="myWeeklyMat-card" class="card" style="display:none;background:linear-gradient(135deg,#E8F5E9,#C8E6C9);border:2px solid #66BB6A">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
           <div style="font-weight:700;color:#1B4332;font-size:13px;display:flex;align-items:center;gap:8px">📦 המערך השבועי שלי</div>
           <div id="myWeeklyMat-dates" style="font-size:11px;color:#1B4332;opacity:0.8"></div>
         </div>
         <div id="myWeeklyMat-content"></div>
       </div>
-      <div id="mymat-empty" class="card" style="display:none;text-align:center;color:var(--mut);padding:20px 12px;margin-bottom:14px">
-        <div style="font-size:28px;margin-bottom:6px">📭</div>
-        <div style="font-weight:700;margin-bottom:4px;font-size:13px">אין מערך פעיל השבוע</div>
-        <div style="font-size:11px">כשהאדמין ישבץ לך מערך שבועי — הוא יופיע כאן עם השירים והתכנים.</div>
+      <div id="mymat-empty" class="card" style="display:none;text-align:center;color:var(--mut);padding:24px 12px">
+        <div style="font-size:32px;margin-bottom:8px">📭</div>
+        <div style="font-weight:700;margin-bottom:4px">אין מערך פעיל השבוע</div>
+        <div style="font-size:12px">כשהאדמין ישבץ לך מערך שבועי — הוא יופיע כאן עם השירים והתכנים.</div>
       </div>
+    </div>
+    <div id="s-mysched" class="screen">
+      <div class="ph"><h2>🗓 המערכת שלי</h2></div>
       <div id="instructor-quick-report-card" class="instructor-only card" style="display:none;background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border:2px solid #7C3AED;margin-bottom:14px">
         <div class="card-title"><div class="card-icon">✅</div>דיווח היום — בוצע/לא בוצע</div>
         <div style="font-size:12px;color:#5B21B6;margin-bottom:12px;line-height:1.5">💡 בחרי תאריך → תופיע רשימת השיבוצים שלך מהמערכת השבועית → לחצי <b>✅ בוצע</b> או <b>❌ לא בוצע</b> על כל שיבוץ.</div>
@@ -1003,6 +1006,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     <button class="bnt instructor-only" data-s="monthly_approval" style="display:none"><span class="bnt-icon">📋</span>אישור דוח</button>
     <button class="bnt non-driver" data-s="mygdns"><span class="bnt-icon">🏫</span>הגנים שלי</button>
     <button class="bnt instructor-only" data-s="mysched" style="display:none"><span class="bnt-icon">🗓</span>המערכת</button>
+    <button class="bnt instructor-only" data-s="mymat" style="display:none"><span class="bnt-icon">📦</span>המערך</button>
     <!-- CAMP-TAB-DISABLED: Camps hidden site-wide until next camp season. To re-enable, uncomment this button and the s-mycamp screen. -->
     <!-- <button class="bnt camp-only" data-s="mycamp" style="display:none"><span class="bnt-icon">🏕️</span>קייטנות</button> -->
     <button class="bnt driver-only" data-s="drv" style="display:none"><span class="bnt-icon">🚗</span>מסלול</button>
