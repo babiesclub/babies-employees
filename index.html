@@ -506,7 +506,8 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
       </div>
       <div id="mysched-content"></div>
     </div>
-    <div id="s-mycamp" class="screen">
+    <!-- CAMP-SCREEN-DISABLED: hidden until next camp season -->
+    <div id="s-mycamp" class="screen" style="display:none !important" hidden>
       <div class="ph"><h2>🏕️ הקייטנות שלי</h2></div>
       <div id="mycamp-content"></div>
     </div>
@@ -1006,7 +1007,8 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     <button class="bnt non-driver" data-s="mygdns"><span class="bnt-icon">🏫</span>הגנים שלי</button>
     <button class="bnt instructor-only" data-s="mysched" style="display:none"><span class="bnt-icon">🗓</span>המערכת</button>
     <button class="bnt instructor-only" data-s="mymat" style="display:none"><span class="bnt-icon">📦</span>המערך</button>
-    <button class="bnt camp-only" data-s="mycamp" style="display:none"><span class="bnt-icon">🏕️</span>קייטנות</button>
+    <!-- CAMP-TAB-DISABLED: Camps hidden site-wide until next camp season. To re-enable, uncomment this button and the s-mycamp screen. -->
+    <!-- <button class="bnt camp-only" data-s="mycamp" style="display:none"><span class="bnt-icon">🏕️</span>קייטנות</button> -->
     <button class="bnt driver-only" data-s="drv" style="display:none"><span class="bnt-icon">🚗</span>מסלול</button>
     <button class="bnt admin-only" data-s="wai"><span class="bnt-icon" style="position:relative;display:inline-block">💬<span id="wai-badge" style="display:none;position:absolute;top:-6px;right:-10px;background:#E63946;color:white;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;line-height:16px;padding:0 4px;box-shadow:0 1px 3px rgba(0,0,0,0.2)"></span></span>הודעות</button>
     <button class="bnt admin-only" data-s="tsk"><span class="bnt-icon" style="position:relative;display:inline-block">📋<span id="tsk-badge" style="display:none;position:absolute;top:-6px;right:-10px;background:#FFA94D;color:white;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;line-height:16px;padding:0 4px;box-shadow:0 1px 3px rgba(0,0,0,0.2)"></span></span>משימות</button>
