@@ -15,6 +15,12 @@ service firebase.storage {
       allow write: if isAdmin();
     }
 
+    // Dog-trainer materials (parallel system for specialty='dog').
+    match /dogMaterials/{matId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
     // Receipts uploaded by instructors and viewed by admins.
     match /receipts/{userId}/{allPaths=**} {
       allow read: if request.auth != null

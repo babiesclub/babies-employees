@@ -137,6 +137,7 @@ service cloud.firestore {
 
     // MATERIALS / WEEKLY SCHEDULE / ANIMALS — read all, write admin
     match /materials/{matId}        { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /dogMaterials/{matId}     { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /weeklySchedule/{weekId}  { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /animals/{animalId}       { allow read: if isSignedIn(); allow write: if isAdmin(); }
 
