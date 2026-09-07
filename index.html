@@ -7142,7 +7142,7 @@ async function openNetworkImageImportMo(preselectInstrUid){
   const activeUsers=(DB.get('users')||[]).filter(u=>u.role!=='admin'&&!u.offboarded&&!u.accessBlocked).sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
   const preselectStr=preselectInstrUid!=null?String(preselectInstrUid):'';
   const instrOpts=activeUsers.map(u=>{const v=String(u.uid||u.id);return `<option value="${esc(v)}"${v===preselectStr?' selected':''}>${esc(u.name)}</option>`}).join('');
-  mo.innerHTML=`<div class="md" style="max-width:640px;max-height:92vh;overflow-y:auto"><div class="mt"><span>📷 ייבוא סניפי רשת מתמונה</span><span class="mc" onclick="_nimgClose()">×</span></div><div style="background:#EDE9FE;border-right:4px solid #7C3AED;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7"><b>💡 איך זה עובד:</b><br>1. מלאי פרטים למטה: שם רשת, סוג פעילות, המדריכה שתקבל את הסניפים ועיר ברירת מחדל<br>2. עלי תמונה של הטבלה של הלקוח (או Ctrl+V / drag)<br>3. Claude Vision יזהה סניפים+שיבוצים ויציג לאישור<br>4. אשרי → סניפים ייווצרו, שיבוצים ייכנסו למערכת השבועית של המדריכה</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">שם רשת</label><input type="text" id="nimg-network" class="md-input" value="אפטר סקול" placeholder="אפטר סקול / אילנות קידס..." list="nimg-network-list"><datalist id="nimg-network-list"><option value="אפטר סקול"><option value="אילנות קידס"></datalist></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">סוג פעילות</label><select id="nimg-asrtype" class="md-input" onchange="_nimgAsrTypeChange(this.value)"><option value="tzaharon">🎨 צהרון</option><option value="talan">🎒 תל"ן</option><option value="nivkharot">🏆 נבחרות</option></select></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">מדריכה לשיוך</label><select id="nimg-instr" class="md-input"><option value="">— בחרי מדריכה —</option>${instrOpts}</select></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">עיר ברירת מחדל</label><input type="text" id="nimg-city" class="md-input" value="נתניה" placeholder="נתניה"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">⏱ משך פעילות פר קבוצה</label><select id="nimg-duration" class="md-input"><option value="30">30 דקות</option><option value="35">35 דקות</option><option value="40" selected>40 דקות</option><option value="45">45 דקות</option><option value="60">60 דקות</option></select></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">🏫 סוג מוסד</label><select id="nimg-instype" class="md-input"><option value="school" selected>🏫 בתי ספר</option><option value="kindergarten">🌱 גני ילדים</option></select></div></div><div style="font-size:10px;color:var(--mut);margin-top:-4px;margin-bottom:10px;line-height:1.4">💡 <b>משך:</b> אם הטבלה מציגה מספר קבוצות באותה שעה (למשל 4× 13:00), האפליקציה תרחיב אוטומטית לרצף. אפשר לשנות גם אחרי הפרסינג. <b>סוג מוסד:</b> משפיע על סוג מערך החיות שהמדריכה רואה (מערך לגן vs מערך להקרנה לבית ספר).</div><div id="nimg-drop" style="border:2px dashed #7C3AED;border-radius:10px;padding:24px;background:#FAF5FF;text-align:center;cursor:pointer;margin-bottom:12px" onclick="document.getElementById('nimg-file').click()"><div style="font-size:32px;margin-bottom:6px">📷</div><div style="font-weight:700;color:#5B21B6;font-size:13px">לחצי / הדביקי (Ctrl+V) / גררי תמונה של הטבלה</div><input type="file" id="nimg-file" accept="image/*" style="display:none" onchange="_nimgFile(event)"></div><div id="nimg-preview" style="margin-top:10px;text-align:center"></div><div id="nimg-result" style="margin-top:12px"></div><div class="ma" style="margin-top:14px;flex-wrap:wrap;gap:6px"><button class="btn-prim" id="nimg-parse-btn" style="flex:1;margin:0;background:#7C3AED;min-width:180px" onclick="_nimgParse()" disabled>🧠 פרקי את התמונה</button><button class="btn-prim" style="flex:1;margin:0;background:#059669;min-width:180px" onclick="_nimgSkipToManual()" title="דלגי על העלאת תמונה — פותח פריוויו ריק להזנת סניפים ידניים">➕ סניף ידני (בלי תמונה)</button><button class="btn-sec" onclick="_nimgClose()">סגור</button></div></div>`;
+  mo.innerHTML=`<div class="md" style="max-width:640px;max-height:92vh;overflow-y:auto"><div class="mt"><span>📷 ייבוא סניפי רשת מתמונה</span><span class="mc" onclick="_nimgClose()">×</span></div><div style="background:#EDE9FE;border-right:4px solid #7C3AED;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#5B21B6;line-height:1.7"><b>💡 איך זה עובד:</b><br>1. מלאי פרטים למטה: שם רשת, סוג פעילות, המדריכה שתקבל את הסניפים ועיר ברירת מחדל<br>2. עלי תמונה של הטבלה של הלקוח (או Ctrl+V / drag)<br>3. Claude Vision יזהה סניפים+שיבוצים ויציג לאישור<br>4. אשרי → סניפים ייווצרו, שיבוצים ייכנסו למערכת השבועית של המדריכה</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">שם רשת</label><input type="text" id="nimg-network" class="md-input" value="אפטר סקול" placeholder="אפטר סקול / אילנות קידס..." list="nimg-network-list"><datalist id="nimg-network-list"><option value="אפטר סקול"><option value="אילנות קידס"></datalist></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">סוג פעילות</label><select id="nimg-asrtype" class="md-input" onchange="_nimgAsrTypeChange(this.value)"><option value="tzaharon">🎨 צהרון</option><option value="talan">🎒 תל"ן</option><option value="nivkharot">🏆 נבחרות</option></select></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">מדריכה לשיוך (אופציונלי)</label><select id="nimg-instr" class="md-input"><option value="">— ללא מדריכה (רק צור סניפים במאגר) —</option>${instrOpts}</select></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">עיר ברירת מחדל</label><input type="text" id="nimg-city" class="md-input" value="נתניה" placeholder="נתניה"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">⏱ משך פעילות פר קבוצה</label><select id="nimg-duration" class="md-input"><option value="30">30 דקות</option><option value="35">35 דקות</option><option value="40" selected>40 דקות</option><option value="45">45 דקות</option><option value="60">60 דקות</option></select></div><div><label class="lf-label" style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">🏫 סוג מוסד</label><select id="nimg-instype" class="md-input"><option value="school" selected>🏫 בתי ספר</option><option value="kindergarten">🌱 גני ילדים</option></select></div></div><div style="font-size:10px;color:var(--mut);margin-top:-4px;margin-bottom:10px;line-height:1.4">💡 <b>משך:</b> אם הטבלה מציגה מספר קבוצות באותה שעה (למשל 4× 13:00), האפליקציה תרחיב אוטומטית לרצף. אפשר לשנות גם אחרי הפרסינג. <b>סוג מוסד:</b> משפיע על סוג מערך החיות שהמדריכה רואה (מערך לגן vs מערך להקרנה לבית ספר).</div><div id="nimg-drop" style="border:2px dashed #7C3AED;border-radius:10px;padding:24px;background:#FAF5FF;text-align:center;cursor:pointer;margin-bottom:12px" onclick="document.getElementById('nimg-file').click()"><div style="font-size:32px;margin-bottom:6px">📷</div><div style="font-weight:700;color:#5B21B6;font-size:13px">לחצי / הדביקי (Ctrl+V) / גררי תמונה של הטבלה</div><input type="file" id="nimg-file" accept="image/*" style="display:none" onchange="_nimgFile(event)"></div><div id="nimg-preview" style="margin-top:10px;text-align:center"></div><div id="nimg-result" style="margin-top:12px"></div><div class="ma" style="margin-top:14px;flex-wrap:wrap;gap:6px"><button class="btn-prim" id="nimg-parse-btn" style="flex:1;margin:0;background:#7C3AED;min-width:180px" onclick="_nimgParse()" disabled>🧠 פרקי את התמונה</button><button class="btn-prim" style="flex:1;margin:0;background:#059669;min-width:180px" onclick="_nimgSkipToManual()" title="דלגי על העלאת תמונה — פותח פריוויו ריק להזנת סניפים ידניים">➕ סניף ידני (בלי תמונה)</button><button class="btn-sec" onclick="_nimgClose()">סגור</button></div></div>`;
   mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
   window._nimgImage=null;window._nimgResult=null;
   const drop=document.getElementById('nimg-drop');
@@ -7185,9 +7185,8 @@ function _nimgSkipToManual(){
   const durationMin=Number(document.getElementById('nimg-duration').value)||40;
   const institutionType=(document.getElementById('nimg-instype').value==='kindergarten')?'kindergarten':'school';
   if(!network){alert('חובה לבחור שם רשת');return}
-  if(!instrId){alert('חובה לבחור מדריכה לשיוך');return}
-  const instr=(DB.get('users')||[]).find(u=>String(u.uid||u.id)===instrId);
-  if(!instr){alert('המדריכה לא נמצאה');return}
+  const instr=instrId?(DB.get('users')||[]).find(u=>String(u.uid||u.id)===instrId):null;
+  if(instrId&&!instr){alert('המדריכה לא נמצאה');return}
   /* Empty branches + one starter row so the user sees the edit UI immediately. */
   const starterBranch={name:'',address:'',contactName:'',contactPhone:'',sessions:[]};
   window._nimgOrigBranches=[JSON.parse(JSON.stringify(starterBranch))];
@@ -7203,9 +7202,8 @@ async function _nimgParse(){
   const durationMin=Number(document.getElementById('nimg-duration').value)||40;
   const institutionType=(document.getElementById('nimg-instype').value==='kindergarten')?'kindergarten':'school';
   if(!network){alert('חובה לבחור שם רשת');return}
-  if(!instrId){alert('חובה לבחור מדריכה לשיוך');return}
-  const instr=(DB.get('users')||[]).find(u=>String(u.uid||u.id)===instrId);
-  if(!instr){alert('המדריכה לא נמצאה');return}
+  const instr=instrId?(DB.get('users')||[]).find(u=>String(u.uid||u.id)===instrId):null;
+  if(instrId&&!instr){alert('המדריכה לא נמצאה');return}
   const btn=document.getElementById('nimg-parse-btn');
   btn.disabled=true;btn.innerHTML='⏳ קלוד קורא את הטבלה...';
   document.getElementById('nimg-result').innerHTML='<div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">⏳ קלוד ויז\'ן מפרק את התמונה — זה יכול לקחת 15-30 שניות</div>';
@@ -7213,7 +7211,7 @@ async function _nimgParse(){
     /* Client-side timeout defaults to 70s; the CF is set to 540s, so we override
        so the client waits long enough for Vision to finish on complex tables. */
     const fn=window.fbFunctions.httpsCallable('parsenetworkscheduleimage',{timeout:540000});
-    const res=await fn({imageBase64:window._nimgImage.base64,mimeType:window._nimgImage.mime,networkName:network,defaultCity:city,instructorName:instr.name,afterSchoolType:asrtype});
+    const res=await fn({imageBase64:window._nimgImage.base64,mimeType:window._nimgImage.mime,networkName:network,defaultCity:city,instructorName:instr?instr.name:'',afterSchoolType:asrtype});
     const d=res.data||{};
     if(!d.branches||!d.branches.length){document.getElementById('nimg-result').innerHTML='<div style="background:#FEE2E2;color:#991B1B;padding:12px;border-radius:8px;font-size:12px">⚠ לא זוהו סניפים בתמונה. נסי תמונה ברורה יותר של אותה טבלה.</div>';btn.innerHTML='🧠 פרקי שוב';btn.disabled=false;return}
     /* Save raw response so duration changes can re-process without another CF call. */
@@ -7314,7 +7312,7 @@ function _nimgRenderResult(){
   const warnHtml=warnings.length?`<div style="background:#FEF3C7;border:1px solid #F59E0B;color:#78350F;padding:8px 12px;border-radius:6px;font-size:11px;margin-bottom:8px">⚠ ${warnings.length} אזהרות מקלוד:<br>${warnings.slice(0,5).map(w=>'• '+esc(String(w))).join('<br>')}</div>`:'';
   const _exEnd=_nimgMinToTime(13*60+_curDur);
   const durHtml=`<div style="background:#F0F9FF;border:1.5px solid #7DD3FC;border-radius:8px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><label style="font-size:12px;font-weight:700;color:#0C4A6E">⏱ משך פעילות פר קבוצה:</label><select onchange="_nimgReprocess(this.value)" style="padding:4px 10px;border:1.5px solid #90CDF4;border-radius:6px;font-family:inherit;font-size:12px;background:white"><option value="30"${_curDur===30?' selected':''}>30 דקות</option><option value="35"${_curDur===35?' selected':''}>35 דקות</option><option value="40"${_curDur===40?' selected':''}>40 דקות</option><option value="45"${_curDur===45?' selected':''}>45 דקות</option><option value="60"${_curDur===60?' selected':''}>60 דקות</option></select><span style="font-size:11px;color:#0C4A6E">שינוי מחשב מיד את השיבוצים לרצף (למשל 4 קבוצות מ־13:00 → 13:00-${_exEnd}, ...)</span></div>`;
-  document.getElementById('nimg-result').innerHTML=`<div style="background:#F0FDF4;border:1.5px solid #52B788;border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;color:#166534"><b>✓ זוהו ${branches.length} סניפים</b> · יווצרו תחת רשת <b>"${esc(network)}"</b> (${asrCol.lbl} · ${_instLbl}) · ישויכו ל־<b>${esc(instr.name)}</b> · מסודר לפי היום המוקדם ביותר<br><span style="font-size:10px;color:#166534;font-weight:400">💡 אפשר לערוך שם/כתובת/טלפון/שיבוצים ישירות בטבלה; להעביר שיבוץ לסניף אחר; להוסיף סניף/שיבוץ ידני; או למחוק.</span></div>${durHtml}${warnHtml}${rows}${addBranchBtn}<div class="ma" style="margin-top:10px"><button class="btn-prim" style="flex:1;margin:0;background:#059669" onclick="_nimgApply()">✓ צור סניפים ושיבוצים</button></div>`;
+  const _assignLbl=instr?`ישויכו ל־<b>${esc(instr.name)}</b>`:'<b>ללא שיוך למדריכה</b> (רק במאגר, בלי שיבוצים)';const _applyBtnLbl=instr?'✓ צור סניפים ושיבוצים':'✓ צור סניפים במאגר';document.getElementById('nimg-result').innerHTML=`<div style="background:#F0FDF4;border:1.5px solid #52B788;border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;color:#166534"><b>✓ זוהו ${branches.length} סניפים</b> · יווצרו תחת רשת <b>"${esc(network)}"</b> (${asrCol.lbl} · ${_instLbl}) · ${_assignLbl} · מסודר לפי היום המוקדם ביותר<br><span style="font-size:10px;color:#166534;font-weight:400">💡 אפשר לערוך שם/כתובת/טלפון/שיבוצים ישירות בטבלה; להעביר שיבוץ לסניף אחר; להוסיף סניף/שיבוץ ידני; או למחוק.</span></div>${durHtml}${warnHtml}${rows}${addBranchBtn}<div class="ma" style="margin-top:10px"><button class="btn-prim" style="flex:1;margin:0;background:#059669" onclick="_nimgApply()">${_applyBtnLbl}</button></div>`;
   const b=document.getElementById('nimg-parse-btn');if(b){b.innerHTML='🔄 פרקי שוב';b.disabled=false}
 }
 async function _nimgApply(){
@@ -7325,14 +7323,13 @@ async function _nimgApply(){
   const included=[];
   document.querySelectorAll('.nimg-inc:checked').forEach(cb=>{const idx=Number(cb.dataset.idx);if(!isNaN(idx))included.push(branches[idx])});
   if(!included.length){alert('לא נבחרו סניפים לייצור');return}
-  if(!confirm(`ליצור ${included.length} סניפים תחת "${network}" ולשייכם ל-${instr.name}?`))return;
+  const _confirmMsg=instr?`ליצור ${included.length} סניפים תחת "${network}" ולשייכם ל-${instr.name}?`:`ליצור ${included.length} סניפים תחת "${network}" במאגר בלבד (בלי שיוך למדריכה ובלי שיבוצים)?`;
+  if(!confirm(_confirmMsg))return;
   const gardens=DB.get('gardens')||[];
   const users=DB.get('users')||[];
-  const uidx=users.findIndex(u=>(u.uid&&u.uid===instr.uid)||(u.id===instr.id));
-  if(uidx===-1){alert('המדריכה לא נמצאה — טעני מחדש');return}
-  const u=users[uidx];
-  if(!Array.isArray(u.gardens))u.gardens=[];
-  const _ws=u.weeklySchedule&&typeof u.weeklySchedule==='object'?{...u.weeklySchedule}:{};
+  let u=null,uidx=-1;
+  if(instr){uidx=users.findIndex(uu=>(uu.uid&&uu.uid===instr.uid)||(uu.id===instr.id));if(uidx===-1){alert('המדריכה לא נמצאה — טעני מחדש');return}u=users[uidx];if(!Array.isArray(u.gardens))u.gardens=[]}
+  const _ws=(u&&u.weeklySchedule&&typeof u.weeklySchedule==='object')?{...u.weeklySchedule}:{};
   /* Editor supports Sun-Thu (0-4) only; clamp so Friday sessions don't survive
      the next sched-mo/ei save (which reconstructs weeklySchedule from days 0-4). */
   for(let d=0;d<=4;d++)if(!Array.isArray(_ws[d]))_ws[d]=[];
@@ -7349,29 +7346,29 @@ async function _nimgApply(){
     if(existsIdx>=0){skipped++;continue}
     const gObj={name:fullName,address:addr||null,phone:b.contactPhone||null,visitPhone:b.contactPhone||null,email:'',networkName:network,branchName:branchName,afterSchoolType:asrtype,institutionType:_inst,billingMode:'time',payMode:'time',chargeRatesHistory:[],instructorPayHistory:[],monthlyChildCounts:{},morningClientId:null,morningDocType:'305'};
     gardens.push(gObj);
-    if(!u.gardens.includes(fullName))u.gardens.push(fullName);
-    (b.sessions||[]).forEach(s=>{
+    if(u&&!u.gardens.includes(fullName))u.gardens.push(fullName);
+    if(u){(b.sessions||[]).forEach(s=>{
       const d=Number(s.day);
       if(isNaN(d)||d<0)return;
       if(d>4){_skippedFriday++;return}
       _ws[d].push({start:String(s.start||'').trim(),end:String(s.end||'').trim(),garden:fullName,note:String(s.note||'').trim()});
       sessionsAdded++;
-    });
+    })}
     created++;
   }
-  u.weeklySchedule=_ws;
+  if(u)u.weeklySchedule=_ws;
   DB.set('gardens',gardens);
-  localStorage.setItem('bz3_users',JSON.stringify(users));
-  if(window.fbDb&&u.uid){
+  if(u)localStorage.setItem('bz3_users',JSON.stringify(users));
+  if(u&&window.fbDb&&u.uid){
     try{await fbDb.collection('users').doc(u.uid).set({gardens:u.gardens,weeklySchedule:_ws},{merge:true})}catch(e){console.error('user sync failed:',e);alert('אזהרה: השמירה לענן נכשלה — נסי שוב.\n'+String(e.message||e))}
   }
   /* Critical: if a schedule editor is currently open for this instructor, the
      in-memory _eiScheduleDraft is now stale. If the user later clicks "save"
      in that editor, it would overwrite our fresh weeklySchedule with the old
      snapshot. Refresh the draft in-place + re-render so both are in sync. */
-  const _affectedId=String(u.uid||u.id);
-  const _matchesSched=(typeof _schedEditingUid!=='undefined')&&_schedEditingUid&&String(_schedEditingUid)===_affectedId;
-  const _matchesEi=(typeof editId!=='undefined')&&editId&&String(editId)===_affectedId;
+  const _affectedId=u?String(u.uid||u.id):null;
+  const _matchesSched=u&&(typeof _schedEditingUid!=='undefined')&&_schedEditingUid&&String(_schedEditingUid)===_affectedId;
+  const _matchesEi=u&&(typeof editId!=='undefined')&&editId&&String(editId)===_affectedId;
   if(_matchesSched||_matchesEi){
     if(typeof _eiScheduleDraft!=='undefined'){
       for(let d=0;d<=4;d++){_eiScheduleDraft[d]=Array.isArray(_ws[d])?_ws[d].map(e=>({...e})):[]}
@@ -7383,7 +7380,8 @@ async function _nimgApply(){
   if(typeof initApp==='function')initApp();
   const parts=[`✓ נוצרו ${created} סניפים תחת רשת "${network}"`];
   if(skipped>0)parts.push(`⏭ ${skipped} דולגו (כפילות שם או ללא שם)`);
-  parts.push(`🗓 ${sessionsAdded} שיבוצים נוספו למערכת השבועית של ${u.name}`);
+  if(u)parts.push(`🗓 ${sessionsAdded} שיבוצים נוספו למערכת השבועית של ${u.name}`);
+  else parts.push(`📌 הסניפים נוצרו במאגר בלבד — ללא שיוך למדריכה ובלי שיבוצים.`);
   if(_skippedFriday>0)parts.push(`⚠ ${_skippedFriday} שיבוצים בימי שישי דולגו (העורך לא תומך בשישי)`);
   if(_matchesSched||_matchesEi)parts.push(`\n🔄 העורך הפתוח רוענן — לא צריך ללחוץ "שמור" שוב במערכת השבועית (כבר נשמרה).`);
   alert(parts.join('\n'));
