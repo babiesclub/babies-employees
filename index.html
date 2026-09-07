@@ -498,7 +498,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
       </div>
     </div>
     <div id="s-mydogmat" class="screen">
-      <div class="ph"><h2>🐕 מערך השבוע</h2></div>
+      <div class="ph"><h2>🎓 המאלף הצעיר — מערך השבוע</h2></div>
       <div class="card" style="background:linear-gradient(135deg,#FFF8E1,#FFECB3);border:2px solid #FFB300;margin-bottom:12px">
         <div style="font-weight:700;color:#7B5C00;font-size:13px;margin-bottom:6px">🐕 המערך שאת מלמדת עכשיו — פר גן</div>
         <div style="font-size:11px;color:#7B5C00;line-height:1.5">כל גן מתקדם בקצב שלו לפי הדיווחים שלך. אחרי שאת מסמנת <b>✅ בוצע</b> — המונה קופץ אוטומטית למערך הבא.</div>
@@ -650,7 +650,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
           <div class="card-title"><div class="card-icon">📦</div>מערכים</div>
           <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1.5px solid var(--brd)">
             <button type="button" onclick="switchMatSub('animals')" id="mat-sub-btn-animals" style="padding:8px 14px;border:1.5px solid #52B788;background:#52B788;color:white;border-radius:16px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit">🌱 חוגי חיות</button>
-            <button type="button" onclick="switchMatSub('dogs')" id="mat-sub-btn-dogs" style="padding:8px 14px;border:1.5px solid #F59E0B;background:white;color:#78350F;border-radius:16px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit">🐕 אילוף כלבים</button>
+            <button type="button" onclick="switchMatSub('dogs')" id="mat-sub-btn-dogs" style="padding:8px 14px;border:1.5px solid #F59E0B;background:white;color:#78350F;border-radius:16px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit">🎓 המאלף הצעיר</button>
           </div>
           <div id="mat-sub-animals" class="mat-sub-section">
             <div style="background:#E1F2FA;border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px;color:#1565C0;line-height:1.5">
@@ -685,10 +685,10 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
           <div id="mat-sub-dogs" class="mat-sub-section" style="display:none">
             <div style="background:#FFF8E1;border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px;color:#7B5C00;line-height:1.5">
               <b>💡 איך זה עובד:</b><br>
-              • מערכי כלבים נפרדים לגמרי ממערכי חוגי חיות — Collection נפרד (dogMaterials)<br>
-              • כל מערך: PDF מדריך, סוג כלב, גיל, רמת קושי, סרטון (רשות), פקודות קוליות (רשות)<br>
-              • אין רוטציה שבועית — מוצג כקטלוג למאלפי כלבים<br>
-              • מוצג רק למדריכות עם התמחות "אילוף כלבים"
+              • מערכי המאלף הצעיר נפרדים ממערכי חוגי חיות — Collection נפרד (dogMaterials)<br>
+              • כל מערך: PDF מדריך, סרטון (רשות), אודיו (רשות), מספר סידורי (שלב בתכנית)<br>
+              • התקדמות שבועית פר-גן — כל דיווח "בוצע" מקדם את המדריכה למערך הבא בתכנית<br>
+              • מוצג רק למדריכות עם התמחות "אילוף כלבים" (תכנית המאלף הצעיר)
             </div>
             <div class="srch-row" style="margin-bottom:12px"><input type="text" id="dogmat-search" placeholder="חיפוש מערך כלבים..." oninput="renderDogMaterialsList()"></div>
             <button class="btn-prim" style="width:100%;margin-bottom:14px;margin-top:0;padding:14px;font-size:14px;background:#F59E0B;border-color:#B45309" onclick="openDogMaterialAddManual()">➕ הוסף מערך כלבים חדש</button>
@@ -1036,7 +1036,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
     <button class="bnt non-driver" data-s="mygdns"><span class="bnt-icon">🏫</span>הגנים שלי</button>
     <button class="bnt instructor-only" data-s="mysched" style="display:none"><span class="bnt-icon">🗓</span>המערכת</button>
     <button class="bnt instructor-only" data-s="mymat" style="display:none"><span class="bnt-icon">📦</span>המערך</button>
-    <button class="bnt instructor-only" data-s="mydogmat" style="display:none"><span class="bnt-icon">🐕</span>מערך השבוע</button>
+    <button class="bnt instructor-only" data-s="mydogmat" style="display:none"><span class="bnt-icon">🎓</span>המאלף הצעיר</button>
     <!-- CAMP-TAB-DISABLED: Camps hidden site-wide until next camp season. To re-enable, uncomment this button and the s-mycamp screen. -->
     <!-- <button class="bnt camp-only" data-s="mycamp" style="display:none"><span class="bnt-icon">🏕️</span>קייטנות</button> -->
     <button class="bnt driver-only" data-s="drv" style="display:none"><span class="bnt-icon">🚗</span>מסלול</button>
