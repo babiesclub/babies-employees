@@ -7521,7 +7521,16 @@ async function _nimgApply(){
     created++;
   }
   if(u)u.weeklySchedule=_ws;
-  DB.set('gardens',gardens);
+  /* CRITICAL ORDER: save gardens to cloud FIRST and await it. If gardens cloud-save
+     fails but the user cloud-save succeeds, the user ends up with schedule entries
+     that reference garden names not in meta/gardens → ghost gardens across the app.
+     DB.set fires-and-forgets pushToCloud, so we explicitly await the meta write
+     here and bail with a clear error before touching the user. */
+  localStorage.setItem('bz3_gardens',JSON.stringify(gardens));
+  if(window.fbDb){
+    try{await fbDb.collection('meta').doc('gardens').set({items:gardens})}
+    catch(e){console.error('gardens cloud sync failed:',e);alert('❌ שגיאה בסנכרון גנים לענן!\nהסניפים לא נשמרו — לא יוצרים שיבוצים כדי למנוע גני רפאים.\n\nפרטים: '+String(e.message||e));return}
+  }
   if(u)localStorage.setItem('bz3_users',JSON.stringify(users));
   if(u&&window.fbDb&&u.uid){
     try{await fbDb.collection('users').doc(u.uid).set({gardens:u.gardens,weeklySchedule:_ws},{merge:true})}catch(e){console.error('user sync failed:',e);alert('אזהרה: השמירה לענן נכשלה — נסי שוב.\n'+String(e.message||e))}
