@@ -56,7 +56,8 @@ service cloud.firestore {
           'name','phone','email','tz','address','gender',
           'oneSignalSubscriptionIds','oneSignalSubscriptionId',
           'fcmToken','lastSeen','pushEnabled',
-          'scheduleApprovedAt','scheduleApprovedBy'
+          'scheduleApprovedAt','scheduleApprovedBy',
+          'dogMatProgress'
         ])
       ) || (
         hasOfficePerm('adm_instructors')
