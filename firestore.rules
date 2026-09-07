@@ -264,7 +264,14 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
-    // META (gardens, animals lists, etc.) — read all, write admin
+    // META (gardens, animals lists, etc.) — read all, write admin.
+    // networkSettings gets a specific matcher above the generic meta rule so office
+    // employees with adm_gardens can edit network-level pricing (consistent with
+    // how they edit individual gardens under the /gardens/{gardenId} rule).
+    match /meta/networkSettings {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() || hasOfficePerm('adm_gardens');
+    }
     match /meta/{docId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
