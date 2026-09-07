@@ -7704,6 +7704,14 @@ exports.adminResetUserPassword = onCall({}, async (request) => {
   if (callerRole !== 'admin' && callerRole !== 'office') {
     throw new HttpsError('permission-denied', 'רק אדמין / עובדת משרד יכולים לאפס סיסמאות');
   }
+  // Per-employee permission: an office user needs `op_reset_pw` enabled.
+  // Missing map / missing key ⇒ allow (backwards-compat with pre-perms office users).
+  if (callerRole === 'office') {
+    const perms = callerData.officePermissions || {};
+    if (perms.op_reset_pw === false) {
+      throw new HttpsError('permission-denied', 'אין לך הרשאה לאפס סיסמאות. פני לאדמין.');
+    }
+  }
   const targetUid = request.data && request.data.targetUid;
   const newPassword = request.data && request.data.newPassword;
   if (!targetUid) throw new HttpsError('invalid-argument', 'חסר targetUid');

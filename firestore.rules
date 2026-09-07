@@ -12,6 +12,24 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
+    function isOffice() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'office';
+    }
+
+    // Per-office-employee permission flag lookup. `perm` is one of the
+    // documented keys (adm_gardens, adm_animals, op_delete, op_reset_pw, ...).
+    // Missing map/missing key ⇒ allow (backwards-compat with existing office
+    // users that were created before the officePermissions map existed).
+    // Explicit `false` denies. Admins always pass — they use isAdmin() gates.
+    function hasOfficePerm(perm) {
+      return isOffice()
+        && (!('officePermissions' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+            || !(perm in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.officePermissions)
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.officePermissions[perm] != false);
+    }
+
     function isSelf(uid) {
       return request.auth != null && request.auth.uid == uid;
     }
@@ -23,9 +41,16 @@ service cloud.firestore {
     // USERS
     // Instructors may only update a small whitelist on their own doc (profile + push tokens).
     // role, salary rates, gardens, adminSignature, unlockedMonths, camps* — ADMIN ONLY.
+    // Office employees may manage instructor docs if they have `adm_instructors`,
+    // but never touch an admin's doc and never grant/revoke office perms — those
+    // sit inside the `officePermissions` map that ONLY isAdmin() writes.
     match /users/{uid} {
       allow read: if isSignedIn();
-      allow create: if isAdmin();
+      allow create: if isAdmin() || (
+        hasOfficePerm('adm_instructors')
+        && request.resource.data.role != 'admin'
+        && request.resource.data.role != 'office'
+      );
       allow update: if isAdmin() || (
         isSelf(uid) && affectsOnly([
           'name','phone','email','tz','address','gender',
@@ -33,14 +58,25 @@ service cloud.firestore {
           'fcmToken','lastSeen','pushEnabled',
           'scheduleApprovedAt','scheduleApprovedBy'
         ])
+      ) || (
+        hasOfficePerm('adm_instructors')
+        && resource.data.role != 'admin'
+        && resource.data.role != 'office'
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['officePermissions','role'])
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (
+        hasOfficePerm('adm_instructors')
+        && hasOfficePerm('op_delete')
+        && resource.data.role != 'admin'
+        && resource.data.role != 'office'
+      );
     }
 
     // GARDENS
     match /gardens/{gardenId} {
       allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow create, update: if isAdmin() || hasOfficePerm('adm_gardens');
+      allow delete: if isAdmin() || (hasOfficePerm('adm_gardens') && hasOfficePerm('op_delete'));
     }
 
     // VIRTUAL INSTRUCTORS — planned/pending positions that don't have a real Firebase Auth account.
@@ -52,7 +88,12 @@ service cloud.firestore {
     // RECORDS — instructors log their own attendance
     match /records/{recordId} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isSignedIn() && (
+        isAdmin()
+        || (isOffice() && hasOfficePerm('op_delete'))
+        || (!isOffice() && !isAdmin())  // instructor deleting own record — existing behaviour
+      );
     }
 
     // INVOICES — ADMIN ONLY
@@ -62,20 +103,27 @@ service cloud.firestore {
 
     // CONTRACTS — read own or admin, sign own, admin creates
     match /contracts/{contractId} {
-      allow read: if isSignedIn() && (isAdmin() || resource.data.instructorUid == request.auth.uid);
-      allow create: if isAdmin();
-      allow update: if isAdmin() || (
+      allow read: if isSignedIn() && (isAdmin() || hasOfficePerm('adm_instructors') || resource.data.instructorUid == request.auth.uid);
+      allow create: if isAdmin() || hasOfficePerm('adm_instructors');
+      allow update: if isAdmin() || hasOfficePerm('adm_instructors') || (
         resource.data.instructorUid == request.auth.uid
         && resource.data.status == 'pending'
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (hasOfficePerm('adm_instructors') && hasOfficePerm('op_delete'));
     }
 
     // PERSONAL DOCS — sensitive PII (id card, bank confirmation)
     match /personalDocs/{docId} {
-      allow read: if isSignedIn() && (isAdmin() || resource.data.instructorUid == request.auth.uid);
-      allow create: if isSignedIn() && request.resource.data.instructorUid == request.auth.uid;
-      allow update, delete: if isAdmin() || (
+      allow read: if isSignedIn() && (isAdmin() || hasOfficePerm('adm_instructors') || resource.data.instructorUid == request.auth.uid);
+      allow create: if isSignedIn() && (
+        request.resource.data.instructorUid == request.auth.uid
+        || isAdmin()
+        || hasOfficePerm('adm_instructors')
+      );
+      allow update: if isAdmin() || hasOfficePerm('adm_instructors') || (
+        resource.data.instructorUid == request.auth.uid
+      );
+      allow delete: if isAdmin() || (hasOfficePerm('adm_instructors') && hasOfficePerm('op_delete')) || (
         resource.data.instructorUid == request.auth.uid
       );
     }
@@ -135,11 +183,27 @@ service cloud.firestore {
     match /regionRoutes/{docId}         { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /rotationGroups/{docId}       { allow read: if isSignedIn(); allow write: if isAdmin(); }
 
-    // MATERIALS / WEEKLY SCHEDULE / ANIMALS — read all, write admin
-    match /materials/{matId}        { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /dogMaterials/{matId}     { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /weeklySchedule/{weekId}  { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /animals/{animalId}       { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    // MATERIALS / WEEKLY SCHEDULE / ANIMALS — read all, write admin or scoped office
+    match /materials/{matId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasOfficePerm('adm_materials');
+      allow delete: if isAdmin() || (hasOfficePerm('adm_materials') && hasOfficePerm('op_delete'));
+    }
+    match /dogMaterials/{matId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasOfficePerm('adm_materials');
+      allow delete: if isAdmin() || (hasOfficePerm('adm_materials') && hasOfficePerm('op_delete'));
+    }
+    match /weeklySchedule/{weekId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasOfficePerm('adm_wsch');
+      allow delete: if isAdmin() || (hasOfficePerm('adm_wsch') && hasOfficePerm('op_delete'));
+    }
+    match /animals/{animalId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasOfficePerm('adm_animals');
+      allow delete: if isAdmin() || (hasOfficePerm('adm_animals') && hasOfficePerm('op_delete'));
+    }
 
     // CAMP SESSIONS — read/write for signed-in (self-service marking)
     match /camp_sessions/{sessId}   { allow read, write: if isSignedIn(); }
