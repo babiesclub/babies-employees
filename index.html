@@ -4778,9 +4778,146 @@ async function computeAnnualRotation(region, opts){
     }
     proposal.push({weekISO,assignments:weekAssignments});
   }
+  /* ===== DEDUP-SWAP POST-PASS =====
+     After the primary compute, iterate every (region, week) cell for duplicates:
+     the same material assigned to ≥2 free-agent instructors in the same week.
+     For each duplicate cluster, compute per-instructor "free alternatives"
+     (never-seen-this-year + season-fits + garden-no-repeat + NOT already
+     assigned to any other uid this week), sort instructors by free-count
+     descending, keep the least-flexible instructor on the duplicate, swap
+     everyone else to their best-scored free alternative. Runs to fixed point.
+     Rotation-group cells are NEVER swapped (Latin-square cycle is precomputed;
+     swapping breaks the pipeline). Holiday-lockdown weeks are skipped —
+     duplicates there are intentionally allowed. Reuses the same detection +
+     free-alternative logic as the post-compute warning modal (openDupSwapMo).
+     Root cause: the primary compute picks a duplicate when the per-uid best
+     score of the shared mat beats every free alternative's score — e.g. the
+     duplicate's per-garden bonus (100/unseen-garden) + freshness (120) can
+     outrank a free alternative whose garden-set has already seen its animal.
+     But the SECOND instructor to hit that mat still has free alternatives
+     that would REDUCE duplication; the greedy per-uid picker never
+     re-considers earlier uids. This pass fixes it retroactively. */
+  {
+    const _matById_dd=new Map(materials.map(m=>[m.id,m]));
+    let _ddSwapCount=0;
+    let _ddPasses=0;
+    let didSwap=true;
+    while(didSwap && _ddPasses<5){
+      didSwap=false;_ddPasses++;
+      // Global gardens-seen index rebuilt each pass (excluding assignments per-week is done
+      // lazily inside the check — cheaper to rebuild once then subtract per-week's contributions).
+      // Same for per-uid seen-mats.
+      const _gardensSeenExW=(excludeWeekISO)=>{
+        const gs={};
+        for(const p of proposal){
+          if(!p||p.skipped)continue;
+          if(p.weekISO===excludeWeekISO)continue;
+          const assigns=p.assignments||{};
+          for(const [assignUid,mid] of Object.entries(assigns)){
+            const mat=_matById_dd.get(mid);if(!mat)continue;
+            const animal=(mat.animalName||mat.name||'').trim();if(!animal)continue;
+            (gardensByUid[String(assignUid)]||[]).forEach(gn=>{if(!gs[gn])gs[gn]=new Set();gs[gn].add(animal)});
+          }
+        }
+        return gs;
+      };
+      const _seenByUidExW=(uid,excludeWeekISO)=>{
+        const s=new Set();
+        for(const p of proposal){
+          if(!p||p.skipped)continue;
+          if(p.weekISO===excludeWeekISO)continue;
+          const mid=(p.assignments||{})[uid];
+          if(mid)s.add(mid);
+        }
+        return s;
+      };
+      for(let wi=0;wi<proposal.length;wi++){
+        const p=proposal[wi];
+        if(!p||p.skipped)continue;
+        // Holiday-lockdown weeks: duplicates intentionally allowed (small holiday pool).
+        if(p.holidayOnly)continue;
+        const weekISO=p.weekISO;
+        const assigns=p.assignments||{};
+        // Tally material usage
+        const matUse={};
+        for(const mid of Object.values(assigns)){if(mid)matUse[mid]=(matUse[mid]||0)+1}
+        const dupMatIds=Object.keys(matUse).filter(mid=>matUse[mid]>=2);
+        if(!dupMatIds.length)continue;
+        for(const dupMatId of dupMatIds){
+          if((matUse[dupMatId]||0)<2)continue; // may have been resolved by earlier swap this iteration
+          const uidsOnDup=Object.entries(assigns).filter(([,mid])=>mid===dupMatId).map(([u])=>u);
+          if(uidsOnDup.length<2)continue;
+          // Only free-agent uids are swappable. Rotation-group cells are cycled by pipeline
+          // logic — swapping them breaks the Latin-square. A rotation-group uid on the
+          // duplicate is automatically the "keeper" (its mat is fixed).
+          const swappableUids=uidsOnDup.filter(u=>!inGroupUids.has(String(u)));
+          if(!swappableUids.length)continue; // all locked in pipelines
+          const hasGroupUid=uidsOnDup.some(u=>inGroupUids.has(String(u)));
+          // Compute free alternatives per swappable uid. "Free" mirrors the openDupSwapMo
+          // definition: never-seen by this uid this year + season-fits + garden-no-repeat
+          // + NOT already in this week's assignments (would just move the duplicate).
+          const globalGS=_gardensSeenExW(weekISO);
+          const matsInWeekOccupied=new Set(Object.values(assigns).filter(Boolean));
+          const freeByUid=new Map();
+          for(const uid of swappableUids){
+            const gardens=gardensByUid[String(uid)]||[];
+            const seen=_seenByUidExW(String(uid),weekISO);
+            const cands=materials.filter(m=>{
+              if(m.id===dupMatId)return false;
+              if(seen.has(m.id))return false;
+              if(!_matSeasonFits(m,weekISO,holidayDates))return false;
+              const animal=(m.animalName||m.name||'').trim();
+              if(animal){
+                for(const gn of gardens){if(globalGS[gn]&&globalGS[gn].has(animal))return false}
+              }
+              if(matsInWeekOccupied.has(m.id))return false;
+              return true;
+            });
+            freeByUid.set(String(uid),cands);
+          }
+          // Sort swappable uids by free-count DESCENDING — most flexible swaps first,
+          // so the least-flexible stays on the duplicate.
+          swappableUids.sort((a,b)=>freeByUid.get(String(b)).length-freeByUid.get(String(a)).length);
+          // Decide who keeps the duplicate:
+          //  - If any rotation-group uid is on the dup, it's locked as the keeper.
+          //  - Otherwise: the swappable uid with FEWEST free alternatives (last after sort).
+          const keeperSwappable=hasGroupUid?null:swappableUids[swappableUids.length-1];
+          for(const uid of swappableUids){
+            if(uid===keeperSwappable)continue;
+            const cands=freeByUid.get(String(uid));
+            if(!cands||!cands.length)continue; // no free alt — leave on dup (data problem, not algo)
+            const gardens=gardensByUid[String(uid)]||[];
+            // Score and pick best — reuse the primary compute's scoring function.
+            const scored=cands.map(m=>({m,score:_scoreMaterial(m,{
+              gardens,gardensSeen:globalGS,
+              lastCategory:lastCategoryByUid[String(uid)],
+              globallyUsed,weekISO,
+              weekMonthIdx:_monthOfISO(weekISO),
+              sharedThisWeek:(opts.sharedWeekUsage&&opts.sharedWeekUsage[weekISO])||new Set()
+            })}));
+            scored.sort((a,b)=>b.score-a.score);
+            const chosen=scored[0].m;
+            const oldMid=assigns[uid];
+            assigns[uid]=chosen.id;
+            globallyUsed.add(chosen.id);
+            matUse[oldMid]=(matUse[oldMid]||1)-1;
+            matUse[chosen.id]=(matUse[chosen.id]||0)+1;
+            _ddSwapCount++;
+            didSwap=true;
+            const oldName=(_matById_dd.get(oldMid)||{}).name||String(oldMid).slice(0,8);
+            warnings.push({weekISO,uid:String(uid),type:'dedup_swap',msg:`🔀 dedup-swap: ${String(uid).slice(0,8)} הוחלף מ-"${oldName}" ל-"${chosen.name}" (מתוך ${cands.length} אלטרנטיבות פנויות; ${uidsOnDup.length} מדריכות היו על אותו מערך)`});
+          }
+        }
+      }
+    }
+    if(_ddSwapCount){
+      warnings.push({type:'dedup_summary',msg:`🎯 dedup-swap post-pass: הוספו ${_ddSwapCount} החלפות ב-${_ddPasses} מעברים לפתרון שיכפולים באזור`});
+      console.log('[computeAnnualRotation] dedup-swap post-pass: '+_ddSwapCount+' swaps in '+_ddPasses+' passes for region '+region);
+    }
+  }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-08/v28-strip-invalid-holiday-mats-on-apply';
+  const _algoVersion='2026-09-08/v29-dedup-swap-pass';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
