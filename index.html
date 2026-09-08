@@ -629,7 +629,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#F59E0B;color:#78350F;font-weight:800" onclick="openOrphanedGardensScanMo()">🔍 סרוק גני רפאים בשיבוצים (לא קיימים במאגר)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border-color:#7C3AED;color:#5B21B6;font-weight:800" onclick="openNetworkImageImportMo()">📷 ייבוא סניפי רשת מתמונה (אפטר סקול / צהרונים)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#DCFCE7,#BBF7D0);border-color:#16A34A;color:#14532D;font-weight:800" onclick="openMoveNetworkMo()">🔀 העבר סניפים בין רשתות</button>
-            <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#D97706;color:#78350F;font-weight:800" onclick="openReconcileMo()">🏦 התאמת תשלומים (OneZero / Bit / PayBox) — MVP</button>
+            <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#D97706;color:#78350F;font-weight:800" onclick="openReconcileMo()">🏦 התאמת תשלומים · OneZero / Bit / PayBox → Morning</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#E1F2FA,#BBDEFB);border-color:#1976D2;color:#0D47A1;font-weight:800" onclick="openNetworkMorningIdMo()">🧾 קבע מזהה מורנינג לכל סניפי רשת</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FFF4E5,#FFE0B2);border-color:#F59E0B;color:#78350F;font-weight:800" onclick="openNetworkSettingsMo()">🏢 תעריפי רשת (מודל תמחור ברמת רשת)</button>
           </div>
@@ -6357,21 +6357,462 @@ function openMoveNetworkMo(){_mvSelected=new Set();let mo=document.getElementByI
 function _moveNetPreview(){const from=(document.getElementById('mv-net-from')||{}).value||'';const usePrefix=document.getElementById('mv-net-prefix')?.checked;const el=document.getElementById('mv-net-preview');if(!el)return;if(!from.trim()){el.innerHTML='<div style="font-size:12px;color:var(--mut);text-align:center;font-style:italic;padding:20px">הזיני סינון כדי לראות סניפים</div>';_mvSelected.clear();return}const gardens=DB.get('gardens')||[];const matches=gardens.filter(g=>_moveNetMatch(g,from,usePrefix));if(!matches.length){el.innerHTML='<div style="font-size:12px;color:#C62828;text-align:center;font-weight:700;padding:20px">⚠ לא נמצאו סניפים תואמים</div>';return}el.innerHTML=`<div style="font-size:12px;color:#166534;font-weight:700;margin-bottom:8px;padding:6px 8px;background:white;border-radius:6px;position:sticky;top:0">נמצאו ${matches.length} סניפים · מסומנים: <span id="mv-net-count">${_mvSelected.size}</span></div>`+matches.map(g=>{const o=_moveNetGetGardenObj(g);const isChk=_mvSelected.has(o.name);const escName=esc(o.name).replace(/'/g,"\\'").replace(/"/g,'&quot;');return `<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-bottom:1px solid #E5E7EB;font-size:12px;cursor:pointer;background:${isChk?'#EFF6FF':'transparent'}"><input type="checkbox" class="mv-net-cb" data-name="${esc(o.name)}" ${isChk?'checked':''} onchange="_moveNetToggle('${escName}',this.checked)" style="width:18px;height:18px;flex-shrink:0;margin-top:2px;cursor:pointer"><div style="flex:1;min-width:0"><div style="font-weight:700;color:#1F2937">${esc(o.name)}</div>${o.address?`<div style="font-size:11px;color:#0C4A6E;margin-top:2px">📍 ${esc(o.address)}</div>`:'<div style="font-size:11px;color:#C62828;margin-top:2px;font-style:italic">📍 אין כתובת</div>'}${o.networkName?`<div style="font-size:10px;color:var(--mut);margin-top:2px">🏢 ${esc(o.networkName)}</div>`:''}</div></label>`}).join('')}
 function openNetworkMorningIdMo(){let mo=document.getElementById('net-morning-mo');if(!mo){mo=document.createElement('div');mo.id='net-morning-mo';mo.className='mo';document.body.appendChild(mo)}const gardens=DB.get('gardens')||[];const nets=new Set();gardens.forEach(g=>{const o=_moveNetGetGardenObj(g);if(o.networkName)nets.add(o.networkName)});const netOpts=[...nets].sort((a,b)=>a.localeCompare(b,'he')).map(n=>{const cnt=gardens.filter(g=>_moveNetGetGardenObj(g).networkName===n).length;const withId=gardens.filter(g=>{const o=_moveNetGetGardenObj(g);return o.networkName===n&&o.morningClientId}).length;return `<option value="${esc(n)}">${esc(n)} (${cnt} סניפים · ${withId} עם מזהה)</option>`}).join('');mo.innerHTML=`<div class="md" style="max-width:560px;max-height:92vh;overflow-y:auto"><div class="mt"><span>🧾 קבע מזהה מורנינג לכל סניפי רשת</span><span class="mc" onclick="document.getElementById('net-morning-mo').style.display='none'">×</span></div><div style="background:#E1F2FA;border:1.5px solid #1976D2;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#0D47A1;line-height:1.6"><b>מה זה עושה:</b> קובע את מזהה הלקוח ב-Morning על <b>כל</b> הסניפים של הרשת שתבחרי. אם כבר יש מזהה שונה בסניף מסוים — יידרס.</div><label style="font-size:11px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px">🏢 בחרי רשת</label><select id="nmid-net" onchange="_nmidPreview()" style="width:100%;padding:8px 10px;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit;font-size:13px;margin-bottom:12px"><option value="">— בחרי רשת —</option>${netOpts}</select><label style="font-size:11px;font-weight:700;color:var(--mut);display:block;margin-bottom:4px">🧾 מזהה לקוח ב-Morning</label><input type="text" id="nmid-id" placeholder="למשל: 12345" oninput="_nmidPreview()" style="width:100%;padding:8px 10px;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit;font-size:13px;margin-bottom:12px"><div id="nmid-preview" style="max-height:280px;overflow-y:auto;border:1.5px solid var(--brd);border-radius:8px;padding:10px;margin-bottom:12px;background:#F9FAFB"><div style="font-size:12px;color:var(--mut);text-align:center;font-style:italic">בחרי רשת + הזיני מזהה כדי לראות תצוגה מקדימה</div></div><div class="ma"><button class="btn-prim" style="flex:1;background:#1976D2;border-color:#0D47A1" onclick="executeSetNetworkMorningId()">✓ החל על כל הסניפים</button><button class="btn-sec" onclick="document.getElementById('net-morning-mo').style.display='none'">ביטול</button></div></div>`;mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center'}
 function _nmidPreview(){const net=(document.getElementById('nmid-net')||{}).value;const id=(document.getElementById('nmid-id')||{}).value.trim();const el=document.getElementById('nmid-preview');if(!el)return;if(!net){el.innerHTML='<div style="font-size:12px;color:var(--mut);text-align:center;font-style:italic">בחרי רשת קודם</div>';return}const gardens=DB.get('gardens')||[];const matches=gardens.filter(g=>_moveNetGetGardenObj(g).networkName===net);if(!matches.length){el.innerHTML='<div style="font-size:12px;color:#C62828;text-align:center;font-weight:700">⚠ אין סניפים ברשת הזו</div>';return}el.innerHTML=`<div style="font-size:12px;color:#0D47A1;font-weight:700;margin-bottom:8px">${matches.length} סניפים יעודכנו${id?` למזהה: <code style="background:#DBEAFE;padding:2px 6px;border-radius:4px">${esc(id)}</code>`:''}</div>`+matches.map(g=>{const o=_moveNetGetGardenObj(g);const cur=o.morningClientId||'—';const willChange=id&&String(cur)!==String(id);return `<div style="padding:6px 8px;border-bottom:1px solid #E5E7EB;font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:6px"><b>${esc(o.name)}</b><span style="color:${willChange?'#C62828':'#666'};font-size:10px;white-space:nowrap">כרגע: ${esc(String(cur))}${willChange?' → '+esc(id):''}</span></div>`}).join('')}
-/* ========== 🏦 PAYMENTS RECONCILIATION (MVP) ==========
-   Upload OneZero .xls, parse credits, match against Morning invoices
-   by amount (±10₪ or ±1%), let admin confirm, learn account→garden. */
-let _reconState={credits:[],invoices:[],matches:[],month:''};
+/* ========== 🏦 PAYMENTS RECONCILIATION ==========
+   Upload OneZero .xls / Bit CSV / PayBox CSV, parse credits, match against Morning invoices,
+   learn account + sender-name → garden mappings, close matched invoices in Morning as
+   חשבונית מס-קבלה (docType 320) via markinvoicepaid CF.
+   Supports split matches (1 transfer → N invoices), search+filter, bulk auto-confirm,
+   undo, session resume (meta/paymentReconciliationSession/sessions/{uid}), aged-invoice report.
+   Data stores:
+     meta/paymentAccountMapping.mapping[account]    -> gardenName  (learn by bank account)
+     meta/paymentAccountMapping.senderMapping[name] -> gardenName  (learn by normalized sender name)
+     meta/paymentReconciliationSession/sessions/{uid} -> { credits, month, confirmed, savedAt } */
+let _reconState={credits:[],invoices:[],month:'',filter:'all',search:'',confirmed:{},mapping:{},senderMapping:{},sessionUid:null,loaded:false};
+const _RECON_SOURCES={onezero:{label:'OneZero',color:'#D97706',morningPayType:4},bit:{label:'Bit',color:'#DC2626',morningPayType:10},paybox:{label:'PayBox',color:'#059669',morningPayType:10}};
+
 function _reconRevHeb(s){s=String(s||'');const parts=s.split('/');const isHeb=x=>/[֐-׿]/.test(x);return parts.map(p=>isHeb(p)?p.split('').reverse().join(''):p).join('/')}
-function _reconExcelDate(n){try{const d=new Date(Date.UTC(1899,11,30)+Math.round(Number(n))*86400000);return d.toISOString().slice(0,10)}catch(_){return String(n)}}
+function _reconExcelDate(n){if(n==null||n==='')return'';const str=String(n).trim();if(/^\d{4}-\d{2}-\d{2}/.test(str))return str.slice(0,10);const dmy=str.match(/^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{2,4})/);if(dmy){let y=dmy[3];if(y.length===2)y='20'+y;return `${y}-${dmy[2].padStart(2,'0')}-${dmy[1].padStart(2,'0')}`}const num=Number(str);if(!isNaN(num)&&num>10000&&num<80000){try{const d=new Date(Date.UTC(1899,11,30)+Math.round(num)*86400000);return d.toISOString().slice(0,10)}catch(_){return str}}return str}
 function _reconCleanCell(s){return String(s||'').replace(/[‭‬‎‏]/g,'').trim()}
-async function openReconcileMo(){if(!cu||cu.role!=='admin'){alert('רק אדמין');return}_reconState={credits:[],invoices:[],matches:[],month:new Date().toISOString().slice(0,7)};let mo=document.getElementById('recon-mo');if(!mo){mo=document.createElement('div');mo.id='recon-mo';mo.className='mo';document.body.appendChild(mo)}mo.innerHTML=`<div class="md" style="max-width:1000px;max-height:96vh;overflow-y:auto"><div class="mt"><span>🏦 התאמת תשלומים · תנועות בנק ↔ חשבוניות פתוחות</span><span class="mc" onclick="document.getElementById('recon-mo').style.display='none'">×</span></div><div style="background:#FEF3C7;border-right:4px solid #D97706;padding:10px 12px;border-radius:8px;margin-bottom:12px;font-size:12px;color:#78350F;line-height:1.6"><b>💡 איך זה עובד:</b><br>1. העלי קובץ תנועות OneZero (.xls) והמערכת תחלץ זיכויים.<br>2. בחרי חודש → נטענות חשבוניות פתוחות ממורנינג.<br>3. לכל תנועה מוצעת חשבונית תואמת בסכום. אשרי → נשמר מיפוי לפעם הבאה.<br><b>MVP:</b> Bit + PayBox יתווספו בשלב הבא. סגירת חשבוניות ב-Morning עדיין ידנית.</div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:10px;background:#F9FAFB;border-radius:8px"><label style="background:#D97706;color:white;padding:8px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit">📥 קובץ OneZero (.xls)<input type="file" accept=".xls,.xlsx" id="recon-file" onchange="_reconHandleFile(event)" style="display:none"></label><label style="font-size:11px;font-weight:700;color:var(--mut);margin-right:auto">📅 חודש חשבוניות</label><input type="month" id="recon-month" value="${_reconState.month}" style="padding:6px 10px;border:1.5px solid var(--brd);border-radius:6px;font-family:inherit;font-size:12px" onchange="_reconState.month=this.value;_reconLoadInvoices()"><button type="button" onclick="_reconLoadInvoices()" style="background:#1E40AF;color:white;border:0;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit">🔄 טען חשבוניות</button></div><div id="recon-status" style="display:none;padding:10px;border-radius:6px;font-size:12px;margin-bottom:10px"></div><div id="recon-table" style="max-height:60vh;overflow-y:auto"><div style="padding:30px;text-align:center;color:var(--mut);font-style:italic">העלי קובץ OneZero כדי להתחיל</div></div></div>`;mo.style.display='flex';mo.style.alignItems='flex-start';mo.style.justifyContent='center';mo.style.padding='20px 10px';mo.style.overflow='auto'}
-async function _reconHandleFile(ev){const f=ev.target.files[0];if(!f)return;ev.target.value='';const stat=document.getElementById('recon-status');stat.style.display='block';stat.style.background='#F0F9FF';stat.style.color='#1E40AF';stat.textContent='📄 פותח קובץ...';try{const buf=await f.arrayBuffer();const wb=XLSX.read(buf,{type:'array'});const sh=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(sh,{header:1,defval:''});if(rows.length<2)throw new Error('קובץ ריק');const credits=[];for(let r=1;r<rows.length;r++){const row=rows[r];if(!row||row.length<7)continue;const dr=_reconCleanCell(row[6]);if(!dr.includes('זיכוי'))continue;const descRaw=_reconCleanCell(row[3]);const descFixed=_reconRevHeb(descRaw);const parts=descFixed.split('/');let acct='',name='',note='';for(const p of parts){if(/^[\d\-]+$/.test(p)&&p.includes('-'))acct=p;else if(/[֐-׿]/.test(p)){if(!name)name=p.trim();else if(!note)note=p.trim()}}credits.push({date:_reconExcelDate(row[0]),amount:Number(row[4])||0,name:name||'(לא זוהה)',account:acct,ref:_reconCleanCell(row[8]||''),desc:descFixed,matchedInvoiceId:null})}_reconState.credits=credits;stat.style.background='#DCFCE7';stat.style.color='#166534';stat.textContent=`✓ נטענו ${credits.length} זיכויים · ₪${credits.reduce((s,c)=>s+c.amount,0).toLocaleString('he-IL')}`;await _reconLoadInvoices()}catch(e){stat.style.background='#FEE2E2';stat.style.color='#991B1B';stat.textContent='✗ '+(e.message||e);console.error('recon parse failed:',e)}}
-async function _reconLoadInvoices(){const stat=document.getElementById('recon-status');const month=_reconState.month||new Date().toISOString().slice(0,7);_reconState.month=month;if(!window.fbFunctions){stat.style.display='block';stat.style.background='#FEE2E2';stat.style.color='#991B1B';stat.textContent='Firebase Functions לא זמינים';return}try{const fn=window.fbFunctions.httpsCallable('listinvoices');const res=await fn({month});_reconState.invoices=((res.data&&res.data.invoices)||[]).filter(inv=>inv&&(inv.gardenName||inv.docNum));_reconRender()}catch(e){console.error('load invoices failed:',e);_reconState.invoices=[];_reconRender()}}
-function _reconMatchInvoice(credit,invoices,mapping){const amt=Math.abs(credit.amount);/* 1. Learning: if senderAccount was mapped, prefer invoices of that garden */if(credit.account&&mapping[credit.account]){const mappedGarden=mapping[credit.account];const invForGarden=invoices.filter(inv=>inv.gardenName===mappedGarden);const closeMatch=invForGarden.find(inv=>{const delta=Math.abs(Number(inv.totalAmount||inv.amount||0)-amt);return delta<=Math.max(10,amt*0.01)});if(closeMatch)return{invoice:closeMatch,confidence:'auto',reason:'לפי חשבון מעביר שכבר תוייג'}}/* 2. Exact amount match */const exact=invoices.filter(inv=>Math.abs(Number(inv.totalAmount||inv.amount||0)-amt)<0.5);if(exact.length===1)return{invoice:exact[0],confidence:'high',reason:'סכום זהה, יחיד'};if(exact.length>1)return{invoice:exact[0],confidence:'medium',reason:`סכום זהה, ${exact.length} מועמדים`};/* 3. Close amount match (±10₪ or ±1%) */const close=invoices.filter(inv=>{const d=Math.abs(Number(inv.totalAmount||inv.amount||0)-amt);return d<=Math.max(10,amt*0.01)});if(close.length===1)return{invoice:close[0],confidence:'medium',reason:`סכום קרוב (הפרש ₪${Math.abs(Number(close[0].totalAmount||close[0].amount||0)-amt).toFixed(2)})`};if(close.length>1)return{invoice:close[0],confidence:'low',reason:`סכום קרוב, ${close.length} מועמדים`};return null}
-async function _reconGetAcctMapping(){try{const doc=await fbDb.collection('meta').doc('paymentAccountMapping').get();return(doc.exists&&doc.data().mapping)||{}}catch(_){return{}}}
-async function _reconSaveMapping(account,gardenName){try{const doc=await fbDb.collection('meta').doc('paymentAccountMapping').get();const mapping=(doc.exists&&doc.data().mapping)||{};mapping[account]=gardenName;await fbDb.collection('meta').doc('paymentAccountMapping').set({mapping,updatedAt:new Date().toISOString()},{merge:true})}catch(e){console.warn('save mapping failed:',e)}}
-async function _reconRender(){const el=document.getElementById('recon-table');if(!el)return;const mapping=await _reconGetAcctMapping();const inv=_reconState.invoices;el.innerHTML=`<div style="font-size:11px;color:var(--mut);margin-bottom:8px">${_reconState.credits.length} תנועות · ${inv.length} חשבוניות פתוחות (${_reconState.month}) · ${Object.keys(mapping).length} מיפויי חשבון שמורים</div>`+`<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F3F4F6;color:#374151"><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">תנועה</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">סכום</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">מעביר</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">חשבונית מוצעת</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">פעולה</th></tr></thead><tbody>${_reconState.credits.map((c,i)=>{const m=_reconMatchInvoice(c,inv,mapping);const conf=m?m.confidence:'none';const bg=conf==='auto'?'#DCFCE7':(conf==='high'?'#DBEAFE':(conf==='medium'?'#FEF3C7':(conf==='low'?'#FFEDD5':'#FEE2E2')));const suggestion=m?`<b>${esc(m.invoice.gardenName||'?')}</b><br><span style="font-size:10px;color:var(--mut)">#${esc(m.invoice.docNum||m.invoice.docNumber||'?')} · ₪${Number(m.invoice.totalAmount||m.invoice.amount||0).toLocaleString('he-IL')}</span><br><span style="font-size:10px;color:#666;font-style:italic">${esc(m.reason)}</span>`:'<span style="color:#991B1B;font-style:italic">אין הצעה</span>';const _cEsc=(c.account||'').replace(/'/g,"\\'");const _gEsc=m?(m.invoice.gardenName||'').replace(/'/g,"\\'"):'';const btnLbl=conf==='auto'?'✓ אשרי (אוטומטי)':(m?'✓ אשרי':'—');const btnDis=m?'':'disabled';return `<tr style="background:${bg}"><td style="padding:8px;border:1px solid #E5E7EB;font-size:10px">${esc(c.date)}</td><td style="padding:8px;border:1px solid #E5E7EB;font-weight:700">₪${c.amount.toLocaleString('he-IL')}</td><td style="padding:8px;border:1px solid #E5E7EB">${esc(c.name)}<br><span style="font-size:10px;color:var(--mut);direction:ltr">${esc(c.account||'—')}</span></td><td style="padding:8px;border:1px solid #E5E7EB">${suggestion}</td><td style="padding:8px;border:1px solid #E5E7EB;text-align:center"><button type="button" ${btnDis} onclick="_reconConfirm(${i},'${_cEsc}','${_gEsc}')" style="background:${m?'#166534':'#9CA3AF'};color:white;border:0;padding:6px 12px;border-radius:6px;cursor:${m?'pointer':'not-allowed'};font-size:11px;font-weight:700;font-family:inherit">${btnLbl}</button></td></tr>`}).join('')}</tbody></table>`}
-async function _reconConfirm(idx,account,gardenName){const c=_reconState.credits[idx];if(!c||!gardenName)return;if(!confirm(`לאשר: תנועה של ₪${c.amount.toLocaleString('he-IL')} מ-${c.name} → ${gardenName}?\n\nגם יישמר מיפוי: חשבון ${account} → ${gardenName} (לזיהוי אוטומטי בפעם הבאה).`))return;if(account)await _reconSaveMapping(account,gardenName);c.matched=true;c.matchedGarden=gardenName;await _reconRender();alert(`✓ נשמר. חשבונית של ${gardenName} סומנה כמשולמת (מקומית).\n\nלסגירה סופית ב-Morning — עדיין ידני.`)}
+function _reconNormName(s){return String(s||'').replace(/["'".,()\-–—:]/g,'').replace(/\s+/g,' ').trim()}
+function _reconCreditKey(c){return `${c.source||'x'}|${c.date}|${Math.round((c.amount||0)*100)}|${c.ref||c.account||_reconNormName(c.name)||''}`.slice(0,220)}
+function _reconNameSim(a,b){const na=_reconNormName(a).toLowerCase();const nb=_reconNormName(b).toLowerCase();if(!na||!nb)return 0;if(na===nb)return 1;if(nb.includes(na)||na.includes(nb))return 0.85;const tokA=na.split(' ').filter(x=>x.length>1);const tokB=nb.split(' ').filter(x=>x.length>1);if(!tokA.length||!tokB.length)return 0;let hits=0;tokA.forEach(t=>{if(tokB.some(u=>u===t||u.includes(t)||t.includes(u)))hits++});return hits/Math.max(tokA.length,tokB.length)}
+function _reconInvAmount(inv){return Number(inv.totalAmount||inv.amount||0)+Number(inv.vatAmount||0)}
+function _reconMonthList(baseMonth,count){const [y,m]=baseMonth.split('-').map(Number);const out=[];for(let i=count-1;i>=0;i--){const d=new Date(Date.UTC(y,m-1-i,1));out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`)}return out}
+
+/* --- File type detection --- */
+function _reconDetectSource(fileName,wb){
+  const nm=String(fileName||'').toLowerCase();
+  if(/onezero|oz[_ ]|one\s?zero|transfers|movements_ils/.test(nm))return'onezero';
+  if(/paybox/.test(nm))return'paybox';
+  if(/(^|[\-_ .])bit([\-_ .]|$)|_bit\b|\bbit_/.test(nm))return'bit';
+  if(!wb||!wb.SheetNames||!wb.SheetNames.length)return null;
+  const shn=String(wb.SheetNames[0]||'');
+  if(/TRANSFERS/i.test(shn))return'onezero';
+  if(/paybox/i.test(shn))return'paybox';
+  if(/^bit\b|_bit_/i.test(shn))return'bit';
+  try{
+    const sh=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(sh,{header:1,defval:''});
+    const hdr=(rows[0]||[]).map(v=>String(v||'').trim().toLowerCase()).join('|');
+    if(/חיוב\/זיכוי|יתרה.*אסמכתא|תאריך תנועה.*תאריך ערך/.test(hdr))return'onezero';
+    if(/paybox|קופה חכמה/.test(hdr))return'paybox';
+    if(/bit(?!coin)|ביט(?![וא])/.test(hdr))return'bit';
+  }catch(_){}
+  return null;
+}
+
+function _reconFindCol(hdr,patterns){for(let i=0;i<hdr.length;i++){const h=String(hdr[i]||'').trim().toLowerCase();for(const p of patterns){const pl=String(p).toLowerCase();if(h===pl||h.includes(pl))return i}}return -1}
+
+/* --- Parsers --- */
+function _reconParseOneZero(wb){
+  const sh=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(sh,{header:1,defval:''});const credits=[];
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r];if(!row||row.length<7)continue;
+    const dr=_reconCleanCell(row[6]);if(!dr.includes('זיכוי'))continue;
+    const descRaw=_reconCleanCell(row[3]);const descFixed=_reconRevHeb(descRaw);
+    const parts=descFixed.split('/').map(p=>p.trim()).filter(Boolean);
+    let acct='',nameParts=[];
+    for(const p of parts){
+      if(/^[\d\-]+$/.test(p)&&p.includes('-'))acct=p;
+      else if(/^\d{5,}$/.test(p)){/* internal id, skip */}
+      else if(/[֐-׿]/.test(p))nameParts.push(p);
+    }
+    credits.push({date:_reconExcelDate(row[0]),amount:Number(row[4])||0,name:nameParts.join(' · ')||'(לא זוהה)',account:acct,ref:_reconCleanCell(row[8]||''),desc:descFixed});
+  }
+  return credits;
+}
+
+function _reconParseBit(wb){
+  // Bit business export — flexible header detection. Common columns:
+  //   תאריך | שם שולח / שם משלם / שולח | סכום | אסמכתא / מזהה עסקה | הודעה / הערה
+  //   Date | Sender / From | Amount | Reference | Note
+  const sh=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(sh,{header:1,defval:''});
+  if(rows.length<2)return[];
+  const hdr=(rows[0]||[]).map(v=>String(v||'').trim());
+  const cDate=_reconFindCol(hdr,['תאריך','date','תאריך תנועה','תאריך פעולה']);
+  const cName=_reconFindCol(hdr,['שם שולח','שם משלם','שולח','מעביר','שם','sender','from','payer']);
+  const cAmt =_reconFindCol(hdr,['סכום','amount','שקלים','ils']);
+  const cRef =_reconFindCol(hdr,['אסמכתא','reference','מספר עסקה','מספר עסקאה','transaction','id']);
+  const cNote=_reconFindCol(hdr,['הודעה','הערה','description','note','תיאור']);
+  const cType=_reconFindCol(hdr,['סוג','type','חיוב/זיכוי','כיוון','direction','status','סטטוס']);
+  const credits=[];
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r];if(!row||!row.length)continue;
+    if(cType>=0){const t=String(row[cType]||'').toLowerCase();if(t&&/חיוב|debit|out|יצא|שולם ל|refund|החזר|נכשל|failed|cancel|בוטל/.test(t))continue}
+    const raw=cAmt>=0?row[cAmt]:row[2];
+    const amt=Number(String(raw||'').replace(/[₪,\s]/g,''))||0;
+    if(amt<=0)continue;
+    const date=_reconExcelDate(cDate>=0?row[cDate]:row[0]);if(!date)continue;
+    const name=String(cName>=0?row[cName]:(row[1]||'')).trim();
+    const ref=String(cRef>=0?row[cRef]:(row[3]||'')).trim();
+    const note=String(cNote>=0?row[cNote]:(row[4]||'')).trim();
+    credits.push({date,amount:amt,name:name||'(לא זוהה)',account:'',ref,desc:[name,note,ref].filter(Boolean).join(' · ')});
+  }
+  return credits;
+}
+
+function _reconParsePayBox(wb){
+  // PayBox admin export — flexible header detection. Common columns:
+  //   תאריך | שם משלם | סכום | הודעה | סטטוס / אושר / נכשל
+  const sh=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(sh,{header:1,defval:''});
+  if(rows.length<2)return[];
+  const hdr=(rows[0]||[]).map(v=>String(v||'').trim());
+  const cDate=_reconFindCol(hdr,['תאריך','date']);
+  const cName=_reconFindCol(hdr,['שם משלם','שולח','שם','payer','from','sender','משלם']);
+  const cAmt =_reconFindCol(hdr,['סכום','amount','סה"כ','שקלים']);
+  const cRef =_reconFindCol(hdr,['מספר עסקה','אסמכתא','transaction','reference','id','מזהה']);
+  const cNote=_reconFindCol(hdr,['הודעה','description','note','תיאור','remark','הערה']);
+  const cStat=_reconFindCol(hdr,['סטטוס','status']);
+  const credits=[];
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r];if(!row||!row.length)continue;
+    if(cStat>=0){const s=String(row[cStat]||'').toLowerCase().trim();if(s&&!/success|approved|אושר|completed|paid|בוצע|ok|הועבר/.test(s))continue}
+    const raw=cAmt>=0?row[cAmt]:row[2];
+    const amt=Number(String(raw||'').replace(/[₪,\s]/g,''))||0;
+    if(amt<=0)continue;
+    const date=_reconExcelDate(cDate>=0?row[cDate]:row[0]);if(!date)continue;
+    const name=String(cName>=0?row[cName]:(row[1]||'')).trim();
+    const ref=String(cRef>=0?row[cRef]:(row[3]||'')).trim();
+    const note=String(cNote>=0?row[cNote]:(row[4]||'')).trim();
+    credits.push({date,amount:amt,name:name||'(לא זוהה)',account:'',ref,desc:[name,note,ref].filter(Boolean).join(' · ')});
+  }
+  return credits;
+}
+
+/* --- Modal --- */
+async function openReconcileMo(){
+  if(!cu||cu.role!=='admin'){alert('רק אדמין');return}
+  _reconState={credits:[],invoices:[],month:new Date().toISOString().slice(0,7),filter:'all',search:'',confirmed:{},mapping:{},senderMapping:{},sessionUid:(cu&&cu.uid)||null,loaded:false};
+  let mo=document.getElementById('recon-mo');
+  if(!mo){mo=document.createElement('div');mo.id='recon-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:1200px;max-height:96vh;overflow-y:auto"><div class="mt"><span>🏦 התאמת תשלומים · תנועות בנק ↔ חשבוניות פתוחות</span><span class="mc" onclick="_reconClose()">×</span></div><div style="background:#FEF3C7;border-right:4px solid #D97706;padding:10px 12px;border-radius:8px;margin-bottom:12px;font-size:12px;color:#78350F;line-height:1.6"><b>💡 איך זה עובד:</b><br>1. העלי קבצי תנועות (OneZero .xls / Bit CSV או Excel / PayBox CSV או Excel — אפשר יחד).<br>2. בחרי חודש → נטענות חשבוניות פתוחות ממורנינג (חודש נוכחי + 2 קודמים).<br>3. לכל תנועה מוצעת חשבונית תואמת. אישור → יוצר חשבונית מס-קבלה במורנינג + נשמר מיפוי.<br>4. מעברים "חשבון/שם שולח → גן" נלמדים אוטומטית לחודשים הבאים. גם התאמות SPLIT (חיבור של 2-3 חשבוניות לתשלום אחד).</div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:10px;background:#F9FAFB;border-radius:8px"><label style="background:#D97706;color:white;padding:8px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit">📥 העלי קבצי תנועות<input type="file" accept=".xls,.xlsx,.csv" multiple id="recon-file" onchange="_reconHandleFile(event)" style="display:none"></label><span id="recon-src-badges" style="display:flex;gap:4px;flex-wrap:wrap"></span><label style="font-size:11px;font-weight:700;color:var(--mut);margin-right:auto">📅 חודש חשבוניות</label><input type="month" id="recon-month" value="${_reconState.month}" style="padding:6px 10px;border:1.5px solid var(--brd);border-radius:6px;font-family:inherit;font-size:12px" onchange="_reconState.month=this.value;_reconLoadInvoices()"><button type="button" onclick="_reconLoadInvoices()" style="background:#1E40AF;color:white;border:0;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit">🔄 טען חשבוניות</button><button type="button" onclick="_reconOfferResume(false)" style="background:#7C3AED;color:white;border:0;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit" title="שחזרי סשן קודם">⤴ שחזור</button></div><div id="recon-status" style="display:none;padding:10px;border-radius:6px;font-size:12px;margin-bottom:10px"></div><div id="recon-summary" style="display:none;margin-bottom:10px"></div><div id="recon-toolbar" style="display:none;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;padding:8px 10px;background:#FFF7ED;border-radius:8px;border:1px solid #FED7AA"></div><div id="recon-table" style="max-height:55vh;overflow-y:auto"><div style="padding:30px;text-align:center;color:var(--mut);font-style:italic">העלי קבצי תנועות כדי להתחיל (OneZero / Bit / PayBox)</div></div><div id="recon-aged" style="display:none;margin-top:14px"></div></div>`;
+  mo.style.display='flex';mo.style.alignItems='flex-start';mo.style.justifyContent='center';mo.style.padding='20px 10px';mo.style.overflow='auto';
+  await _reconLoadMappings();
+  _reconOfferResume(true);
+}
+function _reconClose(){const el=document.getElementById('recon-mo');if(el)el.style.display='none'}
+
+async function _reconLoadMappings(){try{const doc=await fbDb.collection('meta').doc('paymentAccountMapping').get();if(doc.exists){const d=doc.data();_reconState.mapping=d.mapping||{};_reconState.senderMapping=d.senderMapping||{}}}catch(_){}}
+
+async function _reconHandleFile(ev){
+  const files=Array.from(ev.target.files||[]);if(!files.length)return;ev.target.value='';
+  const stat=document.getElementById('recon-status');
+  stat.style.display='block';stat.style.background='#F0F9FF';stat.style.color='#1E40AF';stat.textContent='📄 פותח קבצים ('+files.length+')...';
+  const byBadge={};let allNew=[];const errors=[];
+  try{
+    for(const f of files){
+      const buf=await f.arrayBuffer();let wb;
+      try{wb=XLSX.read(buf,{type:'array',cellDates:false,codepage:65001,raw:true})}catch(e){errors.push(f.name+': כשל בקריאה — '+e.message);continue}
+      let source=_reconDetectSource(f.name,wb);
+      if(!source){const picked=prompt(`לא זיהיתי סוג של "${f.name}".\nהקישי סוג ידנית — onezero / bit / paybox`,'onezero');if(!picked)continue;source=String(picked).toLowerCase().trim();if(!_RECON_SOURCES[source]){errors.push(f.name+': סוג לא חוקי ('+source+')');continue}}
+      let parsed=[];
+      try{if(source==='onezero')parsed=_reconParseOneZero(wb);else if(source==='bit')parsed=_reconParseBit(wb);else if(source==='paybox')parsed=_reconParsePayBox(wb)}
+      catch(e){errors.push(f.name+': כשל בניתוח — '+e.message);continue}
+      parsed.forEach(c=>{c.source=source;c.fileName=f.name});
+      byBadge[source]=(byBadge[source]||0)+parsed.length;
+      allNew=allNew.concat(parsed);
+    }
+    const seen=new Set(_reconState.credits.map(c=>_reconCreditKey(c)));
+    const uniq=allNew.filter(c=>{const k=_reconCreditKey(c);if(seen.has(k))return false;seen.add(k);return true});
+    _reconState.credits=_reconState.credits.concat(uniq);
+    const totalAmt=_reconState.credits.reduce((s,c)=>s+c.amount,0);
+    const badges=Object.entries(byBadge).map(([s,n])=>`${_RECON_SOURCES[s].label}: ${n}`).join(' · ');
+    stat.style.background=errors.length?'#FEF3C7':'#DCFCE7';stat.style.color=errors.length?'#78350F':'#166534';
+    stat.innerHTML=`✓ נטענו ${uniq.length} תנועות חדשות${badges?' ('+esc(badges)+')':''} · סה"כ ${_reconState.credits.length} · ₪${totalAmt.toLocaleString('he-IL')}`+(errors.length?`<br><b>⚠ שגיאות:</b><br>${errors.map(e=>'• '+esc(e)).join('<br>')}`:'');
+    _reconRenderBadges();
+    await _reconLoadInvoices();
+    _reconPersistSession();
+  }catch(e){stat.style.background='#FEE2E2';stat.style.color='#991B1B';stat.textContent='✗ '+(e.message||e);console.error('recon file handling failed:',e)}
+}
+
+function _reconRenderBadges(){const el=document.getElementById('recon-src-badges');if(!el)return;const counts={};_reconState.credits.forEach(c=>{counts[c.source]=(counts[c.source]||0)+1});el.innerHTML=Object.entries(counts).map(([s,n])=>{const src=_RECON_SOURCES[s]||{label:s,color:'#6B7280'};return `<span style="background:${src.color}22;color:${src.color};padding:3px 8px;border-radius:12px;font-size:11px;font-weight:700">${src.label}: ${n}</span>`}).join('')}
+
+async function _reconLoadInvoices(){
+  const stat=document.getElementById('recon-status');
+  const month=_reconState.month||new Date().toISOString().slice(0,7);_reconState.month=month;
+  if(!window.fbFunctions){if(stat){stat.style.display='block';stat.style.background='#FEE2E2';stat.style.color='#991B1B';stat.textContent='Firebase Functions לא זמינים'}return}
+  try{
+    const months=_reconMonthList(month,3);
+    const fn=window.fbFunctions.httpsCallable('listinvoices');
+    const results=await Promise.all(months.map(m=>fn({month:m}).catch(_=>({data:{invoices:[]}}))));
+    const all=[];results.forEach(r=>{const inv=(r&&r.data&&r.data.invoices)||[];all.push(...inv)});
+    _reconState.invoices=all.filter(inv=>inv&&(inv.gardenName||inv.docNum)&&inv.paymentStatus!=='paid'&&inv.paymentStatus!=='cancelled');
+    _reconRender();
+  }catch(e){console.error('load invoices failed:',e);_reconState.invoices=[];_reconRender()}
+}
+
+/* --- Matching --- */
+function _reconIsCreditConfirmed(c){return !!_reconState.confirmed[_reconCreditKey(c)]}
+function _reconIsInvoiceConfirmed(inv){const id=String(inv.id||inv.morningDocId||'');for(const k in _reconState.confirmed){const c=_reconState.confirmed[k];if(c&&c.invoiceIds&&c.invoiceIds.includes(id))return true}return false}
+
+function _reconMatchSingle(credit,invoices,mapping,senderMap){
+  const amt=Math.abs(credit.amount||0);
+  const targets=invoices.filter(i=>!_reconIsInvoiceConfirmed(i));
+  const tol=Math.max(10,amt*0.01);
+  if(credit.account&&mapping[credit.account]){
+    const g=mapping[credit.account];
+    const forG=targets.filter(inv=>inv.gardenName===g);
+    const close=forG.find(inv=>Math.abs(_reconInvAmount(inv)-amt)<=tol);
+    if(close)return{invoices:[close],confidence:'auto',reason:'לפי חשבון מעביר שכבר תוייג ('+g+')',kind:'single'};
+    if(forG.length===1)return{invoices:[forG[0]],confidence:'medium',reason:'לפי חשבון (סכום שונה) → '+g,kind:'single'};
+  }
+  if(credit.name){
+    const key=_reconNormName(credit.name);
+    if(key&&senderMap[key]){
+      const g=senderMap[key];
+      const forG=targets.filter(inv=>inv.gardenName===g);
+      const close=forG.find(inv=>Math.abs(_reconInvAmount(inv)-amt)<=tol);
+      if(close)return{invoices:[close],confidence:'auto',reason:'לפי שם שולח שכבר תוייג ('+g+')',kind:'single'};
+      if(forG.length===1)return{invoices:[forG[0]],confidence:'medium',reason:'לפי שם שולח (סכום שונה) → '+g,kind:'single'};
+    }
+  }
+  const exact=targets.filter(inv=>Math.abs(_reconInvAmount(inv)-amt)<0.5);
+  if(exact.length===1)return{invoices:[exact[0]],confidence:'high',reason:'סכום זהה, יחיד',kind:'single'};
+  if(exact.length>1){
+    if(credit.name){const scored=exact.map(inv=>({inv,s:_reconNameSim(credit.name,inv.gardenName)})).sort((a,b)=>b.s-a.s);if(scored[0].s>=0.5)return{invoices:[scored[0].inv],confidence:'medium',reason:`סכום זהה + התאמת שם ${Math.round(scored[0].s*100)}%`,kind:'single'}}
+    return{invoices:[exact[0]],confidence:'medium',reason:`סכום זהה, ${exact.length} מועמדים`,kind:'single'};
+  }
+  const close=targets.filter(inv=>Math.abs(_reconInvAmount(inv)-amt)<=tol);
+  if(close.length===1)return{invoices:[close[0]],confidence:'medium',reason:`סכום קרוב (הפרש ₪${Math.abs(_reconInvAmount(close[0])-amt).toFixed(2)})`,kind:'single'};
+  if(close.length>1){if(credit.name){const scored=close.map(inv=>({inv,s:_reconNameSim(credit.name,inv.gardenName)})).sort((a,b)=>b.s-a.s);if(scored[0].s>=0.5)return{invoices:[scored[0].inv],confidence:'medium',reason:`סכום קרוב + התאמת שם`,kind:'single'}}return{invoices:[close[0]],confidence:'low',reason:`סכום קרוב, ${close.length} מועמדים`,kind:'single'}}
+  return null;
+}
+
+function _reconMatchSplit(credit,invoices){
+  const amt=Math.abs(credit.amount||0);
+  const targets=invoices.filter(i=>!_reconIsInvoiceConfirmed(i));
+  const tol=Math.max(1,amt*0.005);
+  const byGarden={};targets.forEach(inv=>{if(!inv.gardenName)return;(byGarden[inv.gardenName]=byGarden[inv.gardenName]||[]).push(inv)});
+  for(const g in byGarden){
+    const invs=byGarden[g];
+    for(let i=0;i<invs.length;i++)for(let j=i+1;j<invs.length;j++){
+      if(Math.abs(_reconInvAmount(invs[i])+_reconInvAmount(invs[j])-amt)<=tol)return{invoices:[invs[i],invs[j]],confidence:'medium',reason:`חיבור 2 חשבוניות ל-${g}`,kind:'split'};
+    }
+    if(invs.length>=3&&invs.length<=8){
+      for(let i=0;i<invs.length;i++)for(let j=i+1;j<invs.length;j++)for(let k=j+1;k<invs.length;k++){
+        if(Math.abs(_reconInvAmount(invs[i])+_reconInvAmount(invs[j])+_reconInvAmount(invs[k])-amt)<=tol)return{invoices:[invs[i],invs[j],invs[k]],confidence:'low',reason:`חיבור 3 חשבוניות ל-${g}`,kind:'split'};
+      }
+    }
+  }
+  return null;
+}
+
+function _reconMatch(credit,invoices,mapping,senderMap){return _reconMatchSingle(credit,invoices,mapping,senderMap)||_reconMatchSplit(credit,invoices)}
+
+/* --- Mapping persist --- */
+async function _reconSaveMappingRec(account,senderName,gardenName){
+  try{
+    const ref=fbDb.collection('meta').doc('paymentAccountMapping');
+    const doc=await ref.get();const cur=doc.exists?doc.data():{};
+    const mapping=cur.mapping||{};const senderMapping=cur.senderMapping||{};
+    if(account)mapping[account]=gardenName;
+    if(senderName){const key=_reconNormName(senderName);if(key)senderMapping[key]=gardenName}
+    await ref.set({mapping,senderMapping,updatedAt:new Date().toISOString()},{merge:true});
+    _reconState.mapping=mapping;_reconState.senderMapping=senderMapping;
+  }catch(e){console.warn('save mapping failed:',e)}
+}
+
+/* --- Session persist --- */
+async function _reconPersistSession(){
+  if(!_reconState.sessionUid||!window.fbDb)return;
+  try{await fbDb.collection('meta').doc('paymentReconciliationSession').collection('sessions').doc(_reconState.sessionUid).set({credits:_reconState.credits,month:_reconState.month,confirmed:_reconState.confirmed,savedAt:new Date().toISOString()},{merge:false})}
+  catch(e){console.warn('recon persist failed:',e)}
+}
+async function _reconOfferResume(silent){
+  if(!_reconState.sessionUid||!window.fbDb){if(!silent)alert('אין סשן שמור');return}
+  try{
+    const doc=await fbDb.collection('meta').doc('paymentReconciliationSession').collection('sessions').doc(_reconState.sessionUid).get();
+    if(!doc.exists){if(!silent)alert('לא נמצא סשן שמור');return}
+    const d=doc.data();const savedAt=d.savedAt?new Date(d.savedAt).toLocaleString('he-IL'):'?';
+    const credits=d.credits||[];const confirmed=d.confirmed||{};
+    if(!credits.length){if(!silent)alert('סשן ריק');return}
+    if(silent){const stat=document.getElementById('recon-status');if(stat){stat.style.display='block';stat.style.background='#EDE9FE';stat.style.color='#5B21B6';stat.innerHTML=`⤴ יש סשן שמור מ-${esc(savedAt)} · ${credits.length} תנועות · ${Object.keys(confirmed).length} מאושרות · חודש ${esc(d.month||'?')}. <button onclick="_reconResumeNow()" style="background:#7C3AED;color:white;border:0;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;margin-right:6px">שחזרי</button>`}return}
+    if(!confirm(`לשחזר סשן קודם?\n\n📅 נשמר: ${savedAt}\n💳 תנועות: ${credits.length}\n✓ מאושרות: ${Object.keys(confirmed).length}\n📆 חודש: ${d.month||'?'}`))return;
+    await _reconResumeNow();
+  }catch(e){if(!silent)alert('שגיאה בשחזור: '+(e.message||e));console.error(e)}
+}
+async function _reconResumeNow(){
+  try{
+    const doc=await fbDb.collection('meta').doc('paymentReconciliationSession').collection('sessions').doc(_reconState.sessionUid).get();
+    if(!doc.exists)return;
+    const d=doc.data();
+    _reconState.credits=d.credits||[];_reconState.confirmed=d.confirmed||{};
+    if(d.month){_reconState.month=d.month;const el=document.getElementById('recon-month');if(el)el.value=d.month}
+    _reconRenderBadges();await _reconLoadInvoices();
+  }catch(e){alert('שגיאה בשחזור: '+(e.message||e))}
+}
+
+/* --- Render --- */
+async function _reconRender(){
+  const el=document.getElementById('recon-table');if(!el)return;
+  const mapping=_reconState.mapping;const senderMap=_reconState.senderMapping;const inv=_reconState.invoices;const credits=_reconState.credits;
+  const rows=credits.map((c,i)=>({c,i,m:_reconIsCreditConfirmed(c)?null:_reconMatch(c,inv,mapping,senderMap)}));
+  const matchedCount=rows.filter(r=>_reconIsCreditConfirmed(r.c)||(r.m&&(r.m.confidence==='auto'||r.m.confidence==='high'))).length;
+  const confirmedCount=rows.filter(r=>_reconIsCreditConfirmed(r.c)).length;
+  const totalAmt=credits.reduce((s,c)=>s+c.amount,0);
+  const matchedAmt=rows.filter(r=>_reconIsCreditConfirmed(r.c)).reduce((s,r)=>s+r.c.amount,0);
+  const filter=_reconState.filter;const search=_reconState.search.toLowerCase();
+  const filteredRows=rows.filter(r=>{
+    if(filter==='confirmed'&&!_reconIsCreditConfirmed(r.c))return false;
+    if(filter==='unmatched'&&(r.m||_reconIsCreditConfirmed(r.c)))return false;
+    if(filter==='matched'&&(!r.m&&!_reconIsCreditConfirmed(r.c)))return false;
+    if(filter==='auto'&&!(r.m&&(r.m.confidence==='auto'||r.m.confidence==='high')))return false;
+    if(search){const hay=`${r.c.name} ${r.c.account} ${r.c.desc||''} ${r.c.ref||''} ${r.m?(r.m.invoices||[]).map(i=>i.gardenName).join(' '):''}`.toLowerCase();if(!hay.includes(search))return false}
+    return true;
+  });
+  const sum=document.getElementById('recon-summary');
+  if(sum){sum.style.display='block';sum.innerHTML=`<div style="display:flex;gap:6px;flex-wrap:wrap"><div style="flex:1;min-width:100px;padding:8px 10px;background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px"><div style="font-size:11px;color:var(--mut)">תנועות</div><div style="font-size:18px;font-weight:800;color:#111827">${credits.length}</div></div><div style="flex:1;min-width:100px;padding:8px 10px;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px"><div style="font-size:11px;color:#166534">מאושרות</div><div style="font-size:18px;font-weight:800;color:#166534">${confirmedCount}</div></div><div style="flex:1;min-width:100px;padding:8px 10px;background:#DBEAFE;border:1px solid #93C5FD;border-radius:8px"><div style="font-size:11px;color:#1E40AF">ממתינות אישור</div><div style="font-size:18px;font-weight:800;color:#1E40AF">${Math.max(0,matchedCount-confirmedCount)}</div></div><div style="flex:1;min-width:100px;padding:8px 10px;background:#FEE2E2;border:1px solid #FCA5A5;border-radius:8px"><div style="font-size:11px;color:#991B1B">לא הותאמו</div><div style="font-size:18px;font-weight:800;color:#991B1B">${credits.length-matchedCount}</div></div><div style="flex:1;min-width:130px;padding:8px 10px;background:#FEF3C7;border:1px solid #FCD34D;border-radius:8px"><div style="font-size:11px;color:#78350F">₪ סה"כ / מאושר</div><div style="font-size:13px;font-weight:800;color:#78350F">${totalAmt.toLocaleString('he-IL')} / ${matchedAmt.toLocaleString('he-IL')}</div></div><div style="flex:1;min-width:100px;padding:8px 10px;background:#F5F3FF;border:1px solid #C4B5FD;border-radius:8px"><div style="font-size:11px;color:#5B21B6">חש' פתוחות</div><div style="font-size:18px;font-weight:800;color:#5B21B6">${inv.length}</div></div></div>`}
+  const tb=document.getElementById('recon-toolbar');
+  if(tb){tb.style.display='flex';const chip=(v,l,cnt)=>{const active=filter===v;return `<button type="button" onclick="_reconSetFilter('${v}')" style="padding:5px 10px;border-radius:6px;border:1.5px solid ${active?'#D97706':'#E5E7EB'};background:${active?'#D97706':'white'};color:${active?'white':'#374151'};font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">${l}${cnt!=null?' ('+cnt+')':''}</button>`};tb.innerHTML=chip('all','הכל',credits.length)+chip('auto','אוטומטיות/גבוה',rows.filter(r=>r.m&&(r.m.confidence==='auto'||r.m.confidence==='high')).length)+chip('matched','עם הצעה',rows.filter(r=>r.m).length)+chip('unmatched','ללא הצעה',rows.filter(r=>!r.m&&!_reconIsCreditConfirmed(r.c)).length)+chip('confirmed','מאושרות',confirmedCount)+`<input type="text" id="recon-search" placeholder="🔍 חיפוש (שם / חשבון / גן / הערה)" value="${esc(search)}" oninput="_reconState.search=this.value;_reconRender()" style="flex:1;min-width:180px;padding:5px 8px;border:1.5px solid #E5E7EB;border-radius:6px;font-family:inherit;font-size:11px">`+`<button type="button" onclick="_reconBulkAutoConfirm()" style="background:#166534;color:white;border:0;padding:5px 12px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700" title="אשרי אוטומטית את כל ההתאמות ברמת ביטחון גבוהה או אוטומטית">✓✓ אשרי הכל (auto+high)</button>`+`<button type="button" onclick="_reconExportReport()" style="background:#6366F1;color:white;border:0;padding:5px 10px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700" title="ייצוא דוח CSV">📊 דוח CSV</button>`}
+  if(!credits.length){el.innerHTML='<div style="padding:30px;text-align:center;color:var(--mut);font-style:italic">העלי קבצי תנועות כדי להתחיל</div>';_reconRenderAged();return}
+  el.innerHTML=`<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#F3F4F6;color:#374151;position:sticky;top:0;z-index:1"><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">תאריך</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">מקור</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">סכום</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">מעביר</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:right">חשבונית מוצעת</th><th style="padding:8px;border:1px solid #E5E7EB;text-align:center">פעולה</th></tr></thead><tbody>${filteredRows.map(r=>_reconRenderRow(r)).join('')}</tbody></table>`;
+  _reconRenderAged();
+}
+function _reconSetFilter(f){_reconState.filter=f;_reconRender()}
+
+function _reconRenderRow(r){
+  const c=r.c,i=r.i,m=r.m;const confirmed=_reconIsCreditConfirmed(c);
+  const conf=confirmed?'done':(m?m.confidence:'none');
+  const bg=conf==='done'?'#DCFCE7':(conf==='auto'?'#D1FAE5':(conf==='high'?'#DBEAFE':(conf==='medium'?'#FEF3C7':(conf==='low'?'#FFEDD5':'#FEE2E2'))));
+  const src=_RECON_SOURCES[c.source]||{label:c.source||'?',color:'#6B7280'};
+  const srcBadge=`<span style="background:${src.color};color:white;padding:2px 6px;border-radius:8px;font-size:10px;font-weight:700">${src.label}</span>`;
+  let suggestion,btn;
+  if(confirmed){const cf=_reconState.confirmed[_reconCreditKey(c)]||{};const invLabels=(cf.invoiceLabels||[]).join(', ');const rec=cf.receiptDocNumber?`<br>🧾 קבלה #${esc(String(cf.receiptDocNumber))}`:'';const err=cf.error?`<br><span style="color:#991B1B;font-size:10px">⚠ ${esc(cf.error).slice(0,120)}</span>`:'';suggestion=`<b style="color:#166534">✓ אושר ל-${esc(cf.gardenName||'?')}</b><br><span style="font-size:10px;color:#166534">${esc(invLabels)}</span>${rec}${err}`;btn=`<button type="button" onclick="_reconUndo(${i})" style="background:#DC2626;color:white;border:0;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:10px;font-weight:700;font-family:inherit" title="בטלי סימון מקומי (הקבלה במורנינג לא נמחקת)">↶ בטלי</button>`}
+  else if(m){const invs=m.invoices||[];const invLines=invs.map(inv=>`<b>${esc(inv.gardenName||'?')}</b> · #${esc(inv.morningDocNumber||inv.docNum||inv.docNumber||'?')} · ${esc(inv.month||'')} · ₪${_reconInvAmount(inv).toLocaleString('he-IL')}`).join('<br>');const kindBadge=m.kind==='split'?`<span style="background:#8B5CF6;color:white;padding:1px 5px;border-radius:6px;font-size:9px;margin-left:4px">SPLIT ${invs.length}</span>`:'';suggestion=`${kindBadge}${invLines}<br><span style="font-size:10px;color:#666;font-style:italic">${esc(m.reason)}</span>`;const lbl=conf==='auto'?'✓ אשרי (auto)':'✓ אשרי';btn=`<button type="button" onclick="_reconConfirm(${i})" style="background:#166534;color:white;border:0;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit">${lbl}</button>`}
+  else{suggestion=`<span style="color:#991B1B;font-style:italic">אין הצעה</span> <button type="button" onclick="_reconManualPick(${i})" style="background:#6366F1;color:white;border:0;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:10px;font-weight:700;font-family:inherit;margin-right:4px">🔍 בחרי ידנית</button>`;btn='—'}
+  return `<tr style="background:${bg}"><td style="padding:6px 8px;border:1px solid #E5E7EB;font-size:10px;white-space:nowrap">${esc(c.date)}</td><td style="padding:6px 8px;border:1px solid #E5E7EB;text-align:center">${srcBadge}</td><td style="padding:6px 8px;border:1px solid #E5E7EB;font-weight:700;white-space:nowrap">₪${c.amount.toLocaleString('he-IL')}</td><td style="padding:6px 8px;border:1px solid #E5E7EB">${esc(c.name)}${c.account?`<br><span style="font-size:10px;color:var(--mut);direction:ltr">${esc(c.account)}</span>`:''}${c.ref?`<br><span style="font-size:10px;color:var(--mut)">ref: ${esc(c.ref)}</span>`:''}</td><td style="padding:6px 8px;border:1px solid #E5E7EB">${suggestion}</td><td style="padding:6px 8px;border:1px solid #E5E7EB;text-align:center;white-space:nowrap">${btn}</td></tr>`;
+}
+
+/* --- Confirm / Undo / Manual pick --- */
+async function _reconApplyConfirm(idx,invs,gardenName,mode){
+  const c=_reconState.credits[idx];if(!c)return{ok:false,error:'credit missing'};
+  const key=_reconCreditKey(c);
+  const src=_RECON_SOURCES[c.source]||{label:c.source||'?',morningPayType:4};
+  const invLabels=invs.map(i=>`#${i.morningDocNumber||i.docNum||'?'} ₪${_reconInvAmount(i).toLocaleString('he-IL')}`);
+  _reconState.confirmed[key]={invoiceIds:invs.map(i=>String(i.id||i.morningDocId||'')),invoiceLabels:invLabels,creditDate:c.date,amount:c.amount,gardenName,status:'processing',mode,at:new Date().toISOString()};
+  if(!window.fbFunctions){_reconState.confirmed[key].status='error';_reconState.confirmed[key].error='Firebase Functions לא זמינים';return{ok:false,error:'no fn'}}
+  const fn=window.fbFunctions.httpsCallable('markinvoicepaid');
+  const results=[];let anyErr=null;
+  for(let k=0;k<invs.length;k++){
+    const inv=invs[k];const invAmt=_reconInvAmount(inv);
+    const paidAmount=invs.length===1?c.amount:(k===invs.length-1?Math.max(0.01,c.amount-results.reduce((s,r)=>s+(r.paidAmount||0),0)):invAmt);
+    try{
+      const res=await fn({invoiceId:inv.id||inv.morningDocId,paidDate:c.date,paidAmount,note:`התאמת תשלומים · ${src.label}${c.ref?' · ref '+c.ref:''}${c.name?' · '+c.name:''}${mode==='manual'?' (ידני)':''}`,createReceipt:true,sendWhatsApp:false,mode:'full',paymentType:src.morningPayType,paymentAppName:src.label});
+      const d=res.data||{};
+      results.push({invId:inv.id,receiptDocNumber:d.receipt&&d.receipt.number,receiptDocUrl:d.receipt&&d.receipt.url,paidAmount,ok:true});
+    }catch(e){anyErr=e.message||String(e);results.push({invId:inv.id,ok:false,error:anyErr,paidAmount});break}
+  }
+  if(anyErr){_reconState.confirmed[key].status='error';_reconState.confirmed[key].error=anyErr;_reconState.confirmed[key].results=results;return{ok:false,error:anyErr}}
+  _reconState.confirmed[key].status='ok';
+  _reconState.confirmed[key].receiptDocNumber=results.map(r=>r.receiptDocNumber).filter(Boolean).join(', ');
+  _reconState.confirmed[key].results=results;
+  await _reconSaveMappingRec(c.account,c.name,gardenName);
+  _reconState.invoices=_reconState.invoices.filter(inv=>!invs.some(x=>String(x.id||x.morningDocId)===String(inv.id||inv.morningDocId)));
+  return{ok:true};
+}
+
+async function _reconConfirm(idx){
+  const c=_reconState.credits[idx];if(!c||_reconIsCreditConfirmed(c))return;
+  const m=_reconMatch(c,_reconState.invoices,_reconState.mapping,_reconState.senderMapping);
+  if(!m){alert('אין הצעה. בחרי ידנית.');return}
+  const invs=m.invoices;const garden=invs[0].gardenName;
+  const invLabels=invs.map(i=>`#${i.morningDocNumber||i.docNum||'?'} ₪${_reconInvAmount(i).toLocaleString('he-IL')}`);
+  const src=_RECON_SOURCES[c.source]||{label:c.source||'?',morningPayType:4};
+  const payLabel=src.morningPayType===10?'אפליקציית תשלום':(src.morningPayType===5?'ביט':'העברה בנקאית');
+  const msg=`✓ לאשר התאמה?\n\n💳 תנועה: ₪${c.amount.toLocaleString('he-IL')} מ-${c.name} (${c.date}, ${src.label})\n🎯 יעד: ${garden}\n🧾 חשבוניות (${invs.length}): ${invLabels.join(', ')}\n\n🏦 יווצרו במורנינג ${invs.length===1?'חשבונית מס-קבלה':`${invs.length} קבלות`} · סוג תשלום: ${payLabel}\n${c.account?`💾 יישמר מיפוי: חשבון ${c.account} → ${garden}\n`:''}${c.name?`💾 יישמר מיפוי: שולח "${c.name}" → ${garden}\n`:''}\nלהמשיך?`;
+  if(!confirm(msg))return;
+  const stat=document.getElementById('recon-status');
+  if(stat){stat.style.display='block';stat.style.background='#EDE9FE';stat.style.color='#5B21B6';stat.textContent=`⏳ יוצרת קבלה במורנינג ל-${garden}...`}
+  _reconRender();
+  const res=await _reconApplyConfirm(idx,invs,garden,'auto');
+  if(stat){if(res.ok){stat.style.background='#DCFCE7';stat.style.color='#166534';stat.textContent=`✓ נסגרה במורנינג · קבלה #${_reconState.confirmed[_reconCreditKey(c)].receiptDocNumber||'?'}`}else{stat.style.background='#FEE2E2';stat.style.color='#991B1B';stat.textContent='✗ '+res.error}}
+  _reconPersistSession();_reconRender();
+}
+
+async function _reconUndo(idx){
+  const c=_reconState.credits[idx];if(!c)return;
+  const key=_reconCreditKey(c);const cf=_reconState.confirmed[key];if(!cf)return;
+  if(!confirm('לבטל את האישור?\n\n⚠ שים לב: אם הקבלה נוצרה במורנינג, הפעולה מבטלת רק את הסימון המקומי — הקבלה במורנינג נשארת (יש לבטל אותה שם ידנית באם צריך).'))return;
+  delete _reconState.confirmed[key];
+  _reconPersistSession();
+  await _reconLoadInvoices();
+}
+
+async function _reconManualPick(idx){
+  const c=_reconState.credits[idx];if(!c)return;
+  const inv=_reconState.invoices;
+  const gardenName=prompt(`בחרי גן לקבלה של ₪${c.amount.toLocaleString('he-IL')} מ-${c.name}:\n\nגנים עם חשבוניות פתוחות:\n${[...new Set(inv.map(i=>i.gardenName).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'he')).join('\n')}\n\n(העתיקי שם גן במדויק)`);
+  if(!gardenName)return;
+  const matches=inv.filter(i=>i.gardenName===gardenName);
+  if(!matches.length){alert('לא נמצאה חשבונית פתוחה לגן זה בטווח החודשים');return}
+  const options=matches.map((m,k)=>`${k+1}. #${m.morningDocNumber||m.docNum} · ${m.month||'?'} · ₪${_reconInvAmount(m).toLocaleString('he-IL')}`).join('\n');
+  const idxStr=prompt(`חשבוניות פתוחות ל-${gardenName}:\n\n${options}\n\nהזיני מספר (לחיבור — פסיקים, למשל 1,2):`);
+  if(!idxStr)return;
+  const picks=idxStr.split(/[\s,]+/).map(s=>Number(s.trim())).filter(n=>n>=1&&n<=matches.length);
+  if(!picks.length){alert('בחירה לא חוקית');return}
+  const chosen=picks.map(n=>matches[n-1]);
+  const src=_RECON_SOURCES[c.source]||{label:c.source||'?',morningPayType:4};
+  if(!confirm(`ליצור ${chosen.length===1?'חשבונית מס-קבלה':chosen.length+' קבלות'} עבור ${gardenName}?\n\nסה"כ תנועה: ₪${c.amount.toLocaleString('he-IL')} (${src.label})`))return;
+  const stat=document.getElementById('recon-status');if(stat){stat.style.display='block';stat.style.background='#EDE9FE';stat.style.color='#5B21B6';stat.textContent=`⏳ יוצרת ${chosen.length} קבלה במורנינג...`}
+  const res=await _reconApplyConfirm(idx,chosen,gardenName,'manual');
+  if(stat){if(res.ok){stat.style.background='#DCFCE7';stat.style.color='#166534';stat.textContent=`✓ נסגרה במורנינג #${_reconState.confirmed[_reconCreditKey(c)].receiptDocNumber||'?'}`}else{stat.style.background='#FEE2E2';stat.style.color='#991B1B';stat.textContent='✗ '+res.error}}
+  _reconPersistSession();_reconRender();
+}
+
+async function _reconBulkAutoConfirm(){
+  const mapping=_reconState.mapping,senderMap=_reconState.senderMapping;
+  const stat=document.getElementById('recon-status');
+  // recompute at each step so newly-closed invoices vacate
+  let done=0,fail=0;let round=0;const targetsTotal=(()=>{const invLocal=_reconState.invoices;return _reconState.credits.filter(c=>{if(_reconIsCreditConfirmed(c))return false;const m=_reconMatch(c,invLocal,mapping,senderMap);return m&&(m.confidence==='auto'||m.confidence==='high')}).length})();
+  if(!targetsTotal){alert('אין התאמות ברמת ביטחון גבוהה/אוטומטית');return}
+  if(!confirm(`לאשר ${targetsTotal} התאמות אוטומטית?\n\n⚠ כל אחת תיצור קבלה במורנינג. פעולה זו לא ניתנת לביטול פשוט.`))return;
+  while(round<200){
+    round++;
+    const inv=_reconState.invoices;
+    const idx=_reconState.credits.findIndex(c=>{if(_reconIsCreditConfirmed(c))return false;const m=_reconMatch(c,inv,mapping,senderMap);return m&&(m.confidence==='auto'||m.confidence==='high')});
+    if(idx<0)break;
+    const c=_reconState.credits[idx];const m=_reconMatch(c,inv,mapping,senderMap);
+    if(stat){stat.style.display='block';stat.style.background='#EDE9FE';stat.style.color='#5B21B6';stat.textContent=`⏳ מאשרת ${done+fail+1}/${targetsTotal}: ${m.invoices[0].gardenName}...`}
+    const res=await _reconApplyConfirm(idx,m.invoices,m.invoices[0].gardenName,'bulk');
+    if(res.ok)done++;else fail++;
+    _reconRender();
+  }
+  await _reconPersistSession();
+  if(stat){stat.style.background=fail?'#FEF3C7':'#DCFCE7';stat.style.color=fail?'#78350F':'#166534';stat.textContent=`✓ סוכם: ${done} נסגרו, ${fail} כשלו`}
+  _reconRender();
+}
+
+/* --- Aged invoices report --- */
+function _reconRenderAged(){
+  const el=document.getElementById('recon-aged');if(!el)return;
+  const inv=_reconState.invoices;const now=Date.now();
+  const aged=inv.map(i=>{const d=i.date||i.createdAt||i.month+'-01';if(!d)return null;const dt=new Date(d);if(isNaN(dt))return null;const days=Math.floor((now-dt)/86400000);return{inv:i,days}}).filter(x=>x&&x.days>=60).sort((a,b)=>b.days-a.days);
+  if(!aged.length){el.style.display='none';el.innerHTML='';return}
+  el.style.display='block';
+  const byGarden={};aged.forEach(a=>{const g=a.inv.gardenName||'?';byGarden[g]=(byGarden[g]||0)+_reconInvAmount(a.inv)});
+  const bars=Object.entries(byGarden).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const max=bars[0]?bars[0][1]:1;
+  const totalDebt=aged.reduce((s,a)=>s+_reconInvAmount(a.inv),0);
+  el.innerHTML=`<div style="background:#FEE2E2;border:1px solid #FCA5A5;border-radius:10px;padding:12px 14px"><div style="font-size:14px;font-weight:800;color:#991B1B;margin-bottom:6px">⚠ חשבוניות פתוחות מעל 60 יום (${aged.length}) · ₪${totalDebt.toLocaleString('he-IL')} בגבייה פתוחה</div><div style="font-size:11px;color:#7F1D1D;margin-bottom:8px">אלה חובות שלא הותאמו לתשלום — כדאי לפתוח שיחת גבייה.</div><div style="margin-bottom:10px">${bars.map(([g,amt])=>{const pct=Math.round(amt/max*100);return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:11px"><span style="flex:0 0 160px;text-align:right;color:#7F1D1D;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(g)}">${esc(g)}</span><span style="flex:1;background:#FCA5A5;border-radius:6px;overflow:hidden;height:14px;position:relative"><span style="display:block;background:#DC2626;height:100%;width:${pct}%"></span></span><span style="flex:0 0 100px;color:#7F1D1D;font-weight:700">₪${amt.toLocaleString('he-IL')}</span></div>`}).join('')}</div><details><summary style="cursor:pointer;font-size:12px;font-weight:700;color:#7F1D1D">פירוט כל ${aged.length} החשבוניות</summary><div style="max-height:220px;overflow-y:auto;margin-top:6px"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:#FCA5A5;color:#7F1D1D"><th style="padding:4px 6px;text-align:right">גן</th><th style="padding:4px 6px;text-align:right">#</th><th style="padding:4px 6px;text-align:right">חודש</th><th style="padding:4px 6px;text-align:center">ימים</th><th style="padding:4px 6px;text-align:right">₪</th></tr></thead><tbody>${aged.map(a=>{const amt=_reconInvAmount(a.inv);return `<tr><td style="padding:3px 6px;border-bottom:1px solid #FEE2E2">${esc(a.inv.gardenName||'?')}</td><td style="padding:3px 6px;border-bottom:1px solid #FEE2E2">${esc(a.inv.morningDocNumber||a.inv.docNum||'?')}</td><td style="padding:3px 6px;border-bottom:1px solid #FEE2E2">${esc(a.inv.month||'?')}</td><td style="padding:3px 6px;border-bottom:1px solid #FEE2E2;text-align:center;font-weight:700;color:${a.days>=120?'#991B1B':'#B91C1C'}">${a.days}</td><td style="padding:3px 6px;border-bottom:1px solid #FEE2E2">₪${amt.toLocaleString('he-IL')}</td></tr>`}).join('')}</tbody></table></div></details></div>`;
+}
+
+/* --- Export CSV report --- */
+function _reconExportReport(){
+  const rows=[['תאריך','מקור','סכום','שם שולח','חשבון','אסמכתא','סטטוס','גן','חשבוניות','קבלה']];
+  _reconState.credits.forEach(c=>{
+    const key=_reconCreditKey(c);const cf=_reconState.confirmed[key];
+    const m=cf?null:_reconMatch(c,_reconState.invoices,_reconState.mapping,_reconState.senderMapping);
+    const status=cf?(cf.status==='ok'?'אושר':cf.status):(m?'הצעה: '+m.confidence:'ללא הצעה');
+    const garden=cf?cf.gardenName:(m?(m.invoices[0]&&m.invoices[0].gardenName)||'':'');
+    const invs=cf?(cf.invoiceLabels||[]).join(' | '):(m?m.invoices.map(i=>'#'+(i.morningDocNumber||i.docNum||'?')).join(' | '):'');
+    const rec=cf?(cf.receiptDocNumber||''):'';
+    rows.push([c.date,(_RECON_SOURCES[c.source]||{}).label||c.source||'',c.amount,c.name,c.account,c.ref,status,garden,invs,rec]);
+  });
+  const csv=rows.map(r=>r.map(cell=>{const s=String(cell==null?'':cell);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\n');
+  const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=`reconciliation_${_reconState.month||'report'}_${new Date().toISOString().slice(0,10)}.csv`;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+}
 async function executeSetNetworkMorningId(){const net=(document.getElementById('nmid-net')||{}).value;const id=(document.getElementById('nmid-id')||{}).value.trim();if(!net){alert('חובה לבחור רשת');return}if(!id){alert('חובה להזין מזהה מורנינג');return}const gardens=DB.get('gardens')||[];const matches=gardens.filter(g=>_moveNetGetGardenObj(g).networkName===net);if(!matches.length){alert('אין סניפים ברשת');return}const willChange=matches.filter(g=>{const o=_moveNetGetGardenObj(g);return String(o.morningClientId||'')!==String(id)}).length;if(!confirm(`לקבוע מזהה מורנינג "${id}" לכל ${matches.length} הסניפים של "${net}"?\n\n${willChange} מתוכם ישתנו · ${matches.length-willChange} כבר עם המזהה הזה.\n\n${window.fbDb?'📤 יישמר גם בענן.':'💾 יישמר מקומית בלבד.'}`))return;const updated=gardens.map(g=>{const o=_moveNetGetGardenObj(g);if(o.networkName!==net)return g;o.morningClientId=id;return o});DB.set('gardens',updated);document.getElementById('net-morning-mo').style.display='none';alert(`✓ מזהה מורנינג "${id}" הוחל על ${matches.length} סניפים ברשת "${net}".\n${willChange} עודכנו · ${matches.length-willChange} כבר היו עם המזהה.`);renderGrdList()}
 async function executeMoveNetwork(){const to=(document.getElementById('mv-net-to')||{}).value.trim();const stripPrefix=document.getElementById('mv-net-strip')?.checked;const from=(document.getElementById('mv-net-from')||{}).value.trim();if(!_mvSelected.size){alert('לא סימנת אף סניף. סמני check-box על הסניפים שברצונך להעביר.');return}if(!to){alert('חובה למלא רשת יעד');return}const gardens=DB.get('gardens')||[];const selectedNames=new Set(_mvSelected);const toMove=gardens.filter(g=>selectedNames.has(_moveNetGetGardenObj(g).name));if(!toMove.length){alert('לא נמצאו הסניפים המסומנים במאגר');return}const stripPreview=stripPrefix&&from?toMove.map(g=>{const o=_moveNetGetGardenObj(g);let newName=o.name;if(from&&newName.startsWith(from+' - '))newName=newName.slice(from.length+3);else if(from&&newName.startsWith(from+'-'))newName=newName.slice(from.length+1);return `${o.name}${newName!==o.name?'\n   → '+newName:''}`}).join('\n'):toMove.map(g=>_moveNetGetGardenObj(g).name).join('\n');if(!confirm(`להעביר ${toMove.length} סניפים לרשת "${to}"?\n\n${stripPreview}\n\n${stripPrefix&&from?'⚠ שמות של סניפים עם תחילית "'+from+'" יעודכנו!':''}\n\n${window.fbDb?'📤 יישמר גם בענן.':'💾 יישמר מקומית בלבד.'}`))return;const updated=gardens.map(g=>{const o=_moveNetGetGardenObj(g);if(!selectedNames.has(o.name))return g;o.networkName=to;if(stripPrefix&&from){if(o.name.startsWith(from+' - '))o.name=o.name.slice(from.length+3);else if(o.name.startsWith(from+'-'))o.name=o.name.slice(from.length+1)}return o});DB.set('gardens',updated);document.getElementById('move-net-mo').style.display='none';alert(`✓ הועברו ${toMove.length} סניפים לרשת "${to}"${stripPrefix&&from?' + שמות עודכנו':''}`);renderGrdList()}
 async function setAfterSchoolType(gardenName,type){const gardens=DB.get('gardens')||[];const idx=gardens.findIndex(g=>(typeof g==='string'?g:g.name)===gardenName);if(idx===-1)return;const gObj=typeof gardens[idx]==='object'?{...gardens[idx]}:{name:gardens[idx]};gObj.afterSchoolType=type||null;gardens[idx]=gObj;DB.set('gardens',gardens);if(window.fbDb){try{await fbDb.collection('meta').doc('gardens').set({items:gardens},{merge:true})}catch(e){console.error('save afterSchoolType',e)}}renderGrdList()}
