@@ -5013,7 +5013,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-08/v31-dedup-relaxed';
+  const _algoVersion='2026-09-09/v32-temporal-swap';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -5320,6 +5320,256 @@ function _crossRegionDedupSwap(perRegion, opts){
 }
 // Expose for Node harness testing (no-op in production; import via property assignment doesn't hurt).
 if(typeof window!=='undefined')window._crossRegionDedupSwap=_crossRegionDedupSwap;
+/* ===== TEMPORAL-SWAP DEDUP POST-PASS (v32) =====
+   Runs AFTER _crossRegionDedupSwap and picks up the leftovers: duplicates
+   where BOTH holders have zero free alternatives (all seasonally-fitting mats
+   already-seen-this-year for one/both instructors).
+
+   Insight: even with no free swap-in candidates, a duplicate can still be
+   resolved by TEMPORAL swap — take a mat the holder is scheduled for in a
+   DIFFERENT week and swap the two assignments between weeks. Iron rule
+   ("no material twice per year per instructor") is preserved by construction:
+   both mats are already in her calendar, just their dates change.
+
+   Example: 2026-10-04 שממית מנומרת dup between נאווה + נטלי, no free swap-ins
+   left in the pool. But נאווה is booked for a צב in a future week; swap
+   שממית↔צב between the two weeks and the current-week duplicate breaks.
+
+   Constraints — enforced:
+   - Rotation-group cells are OFF-LIMITS (their Latin-square cycle must stay
+     intact; a temporal swap on one member would desync the whole cluster).
+   - Season fit is STRICT for temporal swaps (no _matSeasonFitsRelaxed) — the
+     entire point is finding a legitimate future slot, not smearing one dup
+     across two weeks.
+   - Holiday-lockdown weeks (all regions holidayOnly/skipped) and Sukkot-style
+     `fullWeek:true` skips are excluded from both the current and future side.
+   - Category cooldown for the swapping instructor is preserved when both mats
+     are the same category (tier-1) or the same super-group (tier-2 feathered:
+     bird↔chick). Broader-tier fallbacks are not attempted — they risk breaking
+     the ±4-week cooldown around either endpoint.
+   - Cross-region collision check: the mat being moved into a week must not
+     already be present in another region on that week (for shared-physical
+     mats) — otherwise the swap creates a NEW cross-region duplicate.
+
+   Iterates to fixed point, max 3 passes. Mutates perRegion[*].proposal in
+   place; downstream merge picks up the new mats automatically. */
+function _temporalSwapDedup(perRegion, opts){
+  opts=opts||{};
+  const materials=opts.materials||((typeof getMaterials==='function'?getMaterials():[]).filter(m=>!m.excludeFromAuto));
+  const matById=new Map(materials.map(m=>[m.id,m]));
+  const holidayDates=opts.holidayDates||(typeof HOLIDAYS_5787!=='undefined'?HOLIDAYS_5787:{});
+  const seasonFits=opts.seasonFits||_matSeasonFits; // STRICT — never relaxed
+  const gardensByUid=opts.gardensByUid||(function(){
+    const g={};
+    const users=(typeof DB!=='undefined'&&DB.get?DB.get('users'):[])||[];
+    const virts=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]);
+    [...users,...virts].forEach(u=>{g[String(u.uid||u.id)]=(u.gardens||[]).slice()});
+    return g;
+  })();
+  const inGroupUids=opts.inGroupUids||(function(){
+    const s=new Set();
+    (typeof _rotGroups!=='undefined'?_rotGroups:[]).forEach(g=>(g.instructorUids||[]).forEach(uid=>s.add(String(uid))));
+    return s;
+  })();
+  const israeliHolidays=opts.israeliHolidays||(typeof ISRAELI_HOLIDAYS!=='undefined'?ISRAELI_HOLIDAYS:{});
+  // Feathered super-group (bird ~ chick) — task's `_CATEGORY_GROUP`. Extend if
+  // more supergroups are needed later.
+  const catGroupOf=(c)=>{
+    if(c==='bird'||c==='chick')return 'feathered';
+    return c||'other';
+  };
+  const uidToRR=new Map();
+  perRegion.forEach(rr=>{
+    (rr.proposal||[]).forEach(w=>{
+      Object.keys(w.assignments||{}).forEach(u=>uidToRR.set(String(u),rr));
+    });
+  });
+  const buildMerged=()=>{
+    const merged={};
+    perRegion.forEach(rr=>{
+      (rr.proposal||[]).forEach(w=>{
+        if(!merged[w.weekISO])merged[w.weekISO]={weekISO:w.weekISO,cells:{},weekMeta:{}};
+        merged[w.weekISO].weekMeta[rr.region]={holidayOnly:!!w.holidayOnly,skipped:!!w.skipped};
+        Object.entries(w.assignments||{}).forEach(([uid,mid])=>{
+          merged[w.weekISO].cells[String(uid)]={region:rr.region,matId:mid,weekRef:w};
+        });
+      });
+    });
+    return merged;
+  };
+  const _weekEligible=(weekISO,merged)=>{
+    const wk=merged[weekISO];if(!wk)return false;
+    const metas=Object.values(wk.weekMeta||{});
+    if(metas.length && metas.every(m=>m.holidayOnly||m.skipped))return false;
+    const ih=israeliHolidays[weekISO];
+    if(ih&&ih.fullWeek)return false; // e.g. Sukkot 2026-09-27, Pesach, summer full-skips
+    return true;
+  };
+  // Validate a proposed swap (uid, weekA <-> weekB, matA <-> matB):
+  //   matA leaves weekA, arrives at weekB. matB leaves weekB, arrives at weekA.
+  //   * seasonFits STRICT both directions
+  //   * no new intra-region collision at either endpoint
+  //   * no new cross-region collision for shared-physical mats at either endpoint
+  const _validateSwap=(uid,weekAISO,weekBISO,matAId,matBId,merged)=>{
+    const matA=matById.get(matAId);
+    const matB=matById.get(matBId);
+    if(!matA||!matB)return null;
+    if(!seasonFits(matA,weekBISO,holidayDates))return null;
+    if(!seasonFits(matB,weekAISO,holidayDates))return null;
+    const wkA=merged[weekAISO];const wkB=merged[weekBISO];
+    if(!wkA||!wkB)return null;
+    const rr=uidToRR.get(String(uid));if(!rr)return null;
+    const matAIsShared=_matIsSharedPhysical(matA);
+    const matBIsShared=_matIsSharedPhysical(matB);
+    // matB arriving at weekA — check collisions with other holders
+    for(const [otherUid,cell] of Object.entries(wkA.cells)){
+      if(String(otherUid)===String(uid))continue;
+      if(cell.matId===matBId){
+        if(cell.region===rr.region)return null; // same-region collision — always bad
+        if(matBIsShared)return null; // cross-region collision on shared physical — bad
+      }
+    }
+    // matA arriving at weekB — check collisions with other holders
+    for(const [otherUid,cell] of Object.entries(wkB.cells)){
+      if(String(otherUid)===String(uid))continue;
+      if(cell.matId===matAId){
+        if(cell.region===rr.region)return null;
+        if(matAIsShared)return null;
+      }
+    }
+    return {ok:true};
+  };
+  let _tsSwapCount=0;
+  let _tsPasses=0;
+  const _tsSwapEvents=[];
+  const MAX_PASSES=3;
+  let didSwap=true;
+  while(didSwap && _tsPasses<MAX_PASSES){
+    _tsPasses++;
+    didSwap=false;
+    const merged=buildMerged();
+    const weekISOs=Object.keys(merged).sort();
+    for(const weekISO of weekISOs){
+      if(!_weekEligible(weekISO,merged))continue;
+      const wk=merged[weekISO];
+      const matUse={};
+      Object.entries(wk.cells).forEach(([uid,cell])=>{
+        if(!cell.matId)return;
+        if(!matUse[cell.matId])matUse[cell.matId]=[];
+        matUse[cell.matId].push({uid,region:cell.region,weekRef:cell.weekRef});
+      });
+      const dupMatIds=Object.keys(matUse).filter(mid=>matUse[mid].length>=2);
+      if(!dupMatIds.length)continue;
+      for(const dupMatId of dupMatIds){
+        // Re-validate holders (weekRef.assignments may have been mutated by a prior dup this pass)
+        const holders=(matUse[dupMatId]||[]).filter(h=>(h.weekRef.assignments||{})[h.uid]===dupMatId);
+        if(holders.length<2)continue;
+        const dupMat=matById.get(dupMatId);
+        if(!_matIsSharedPhysical(dupMat))continue; // only shared physical mats are real problems
+        // Rotation-group cells are OFF-LIMITS for temporal swaps
+        const swappableHolders=holders.filter(h=>!inGroupUids.has(String(h.uid)));
+        if(!swappableHolders.length)continue;
+        const dupCat=dupMat.category||'other';
+        const dupCatGroup=catGroupOf(dupCat);
+        // Try each swappable holder; first successful swap breaks the dup (further passes handle remaining)
+        let swapDone=false;
+        for(const H of swappableHolders){
+          if(swapDone)break;
+          const hUid=String(H.uid);
+          const hRegionRR=uidToRR.get(hUid);
+          if(!hRegionRR)continue;
+          const proposal=hRegionRR.proposal||[];
+          let currentIdx=-1;
+          for(let i=0;i<proposal.length;i++){if(proposal[i].weekISO===weekISO){currentIdx=i;break}}
+          if(currentIdx<0)continue;
+          const candidates=[];
+          for(let fi=currentIdx+1;fi<proposal.length;fi++){
+            const fW=proposal[fi];
+            if(!fW||fW.skipped||fW.holidayOnly)continue;
+            if(!_weekEligible(fW.weekISO,merged))continue;
+            const futureMid=(fW.assignments||{})[hUid];
+            if(!futureMid)continue;
+            if(futureMid===dupMatId)continue; // paranoia — iron rule should prevent this already
+            const futureMat=matById.get(futureMid);
+            if(!futureMat)continue;
+            const fCat=futureMat.category||'other';
+            let tier=0;
+            if(fCat===dupCat)tier=1; // same category — cat-cooldown auto-preserved
+            else if(catGroupOf(fCat)===dupCatGroup && dupCatGroup!=='other')tier=2; // feathered super-group
+            else continue; // tier-3 broader fallback skipped: risks ±4w cooldown breakage
+            const val=_validateSwap(hUid,weekISO,fW.weekISO,dupMatId,futureMid,merged);
+            if(!val)continue;
+            const dist=fi-currentIdx;
+            let distScore=0;
+            if(dist>=2 && dist<=6)distScore=100;
+            else if(dist===1)distScore=30;
+            else if(dist<=12)distScore=60;
+            else distScore=10;
+            // Bonus if future week ALSO has a dup on futureMid — we'd break two dups at once
+            const fWkMerged=merged[fW.weekISO];
+            let futureDupCount=0;
+            if(fWkMerged){
+              for(const [otherUid,cell] of Object.entries(fWkMerged.cells||{})){
+                if(cell.matId===futureMid && String(otherUid)!==hUid)futureDupCount++;
+              }
+            }
+            const impactScore=futureDupCount>0?50:0;
+            const tierScore=tier===1?100:40;
+            candidates.push({fW,futureMid,futureMat,dist,tier,score:tierScore+distScore+impactScore});
+          }
+          if(!candidates.length)continue;
+          candidates.sort((a,b)=>b.score-a.score);
+          const best=candidates[0];
+          const currentAssigns=H.weekRef.assignments;
+          const futureAssigns=best.fW.assignments;
+          const dupName=(dupMat.name||String(dupMatId).slice(0,8));
+          const futureName=best.futureMat.name||String(best.futureMid).slice(0,8);
+          currentAssigns[hUid]=best.futureMid;
+          futureAssigns[hUid]=dupMatId;
+          _tsSwapCount++;
+          swapDone=true;
+          didSwap=true;
+          const tierLabel=best.tier===1?'same-cat':'feathered';
+          const msg=`⇄ temporal-swap: ${hUid.slice(0,8)} · ${weekISO} ↔ ${best.fW.weekISO} · "${dupName}" ↔ "${futureName}" [${tierLabel}, Δ${best.dist}w]`;
+          _tsSwapEvents.push({uid:hUid,region:H.region,weekA:weekISO,weekB:best.fW.weekISO,matA:dupMatId,matB:best.futureMid,tier:best.tier,dist:best.dist,msg});
+          hRegionRR.warnings=hRegionRR.warnings||[];
+          hRegionRR.warnings.push({weekISO,uid:hUid,type:'temporal_swap',msg});
+        }
+      }
+    }
+  }
+  // Diagnostic — count what's still duplicated (only real inventory-scarcity)
+  const finalMerged=buildMerged();
+  const _tsRemainingDups=[];
+  for(const weekISO of Object.keys(finalMerged).sort()){
+    if(!_weekEligible(weekISO,finalMerged))continue;
+    const wk=finalMerged[weekISO];
+    const matUse={};
+    Object.entries(wk.cells).forEach(([uid,cell])=>{
+      if(!cell.matId)return;
+      if(!matUse[cell.matId])matUse[cell.matId]=[];
+      matUse[cell.matId].push({uid,region:cell.region});
+    });
+    Object.entries(matUse).forEach(([mid,holders])=>{
+      if(holders.length<2)return;
+      const m=matById.get(mid);
+      if(!_matIsSharedPhysical(m))return;
+      const regionsSet=new Set(holders.map(h=>h.region));
+      _tsRemainingDups.push({weekISO,mat:(m&&m.name)||mid,uids:holders.length,regions:[...regionsSet],crossRegion:regionsSet.size>=2});
+    });
+  }
+  const summary=`⇄ temporal-swap post-pass: ${_tsSwapCount} החלפות זמניות ב-${_tsPasses} מעברים · כפילויות שנותרו: ${_tsRemainingDups.length}`;
+  try{console.log('[_temporalSwapDedup] '+summary,{swaps:_tsSwapCount,passes:_tsPasses,remainingDups:_tsRemainingDups,swapEvents:_tsSwapEvents.slice(0,20)})}catch(_){}
+  if(perRegion.length){
+    perRegion[0].warnings=perRegion[0].warnings||[];
+    perRegion[0].warnings.push({type:'temporal_swap_summary',msg:summary});
+    _tsRemainingDups.slice(0,5).forEach(d=>{
+      perRegion[0].warnings.push({type:'temporal_swap_leftover',msg:`⚠ כפילות שנותרה גם אחרי החלפה זמנית: ${d.weekISO} · "${d.mat}" · ${d.regions.join('+')} · ${d.uids} מדריכות`});
+    });
+  }
+  return {swaps:_tsSwapCount,passes:_tsPasses,remainingDups:_tsRemainingDups,swapEvents:_tsSwapEvents};
+}
+if(typeof window!=='undefined')window._temporalSwapDedup=_temporalSwapDedup;
 // Open the smart-rotation modal — select region, run algorithm, preview + apply.
 function openSmartRotationMo(){
   if(!cu||cu.role!=='admin')return;
@@ -5363,6 +5613,13 @@ async function _smartRotRun(){
         const _crRes=_crossRegionDedupSwap(perRegion);
         console.log('[_smartRotRun] cross-region dedup done:',{swaps:_crRes.swaps,passes:_crRes.passes,remaining:_crRes.remainingDups.length});
       }catch(_crErr){console.warn('[_smartRotRun] cross-region dedup failed:',_crErr&&_crErr.message||_crErr)}
+      /* TEMPORAL-SWAP DEDUP (v32 — 2026-09-09): mops up whatever v31 left behind,
+         swapping H's current-week duplicate with a same-category future-week mat
+         she already has. Preserves the iron rule by construction. */
+      try{
+        const _tsRes=_temporalSwapDedup(perRegion);
+        console.log('[_smartRotRun] temporal-swap dedup done:',{swaps:_tsRes.swaps,passes:_tsRes.passes,remaining:_tsRes.remainingDups.length});
+      }catch(_tsErr){console.warn('[_smartRotRun] temporal-swap dedup failed:',_tsErr&&_tsErr.message||_tsErr)}
       // Merge: for each week, combine assignments from all regions
       const mergedByWeek={};perRegion.forEach(rr=>{rr.proposal.forEach(w=>{if(!mergedByWeek[w.weekISO])mergedByWeek[w.weekISO]={weekISO:w.weekISO,assignments:{}};Object.assign(mergedByWeek[w.weekISO].assignments,w.assignments)})});
       const mergedProposal=Object.values(mergedByWeek).sort((a,b)=>a.weekISO.localeCompare(b.weekISO));
