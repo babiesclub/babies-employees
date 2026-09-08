@@ -3820,6 +3820,57 @@ function _matAllowedForGardens(mat, gardenNames, gardensSeen){
   }
   return true;
 }
+/* v31 (2026-09-08): Does this material represent a physically-shared item
+   whose duplication across regions in the same week is a real problem?
+   - Live animals (rodent/bird/chick/reptile/insect/fish) with an animal name → YES.
+     There's ONE physical animal shared across regions; two regions can't have it same week.
+   - Generic materials (paint, footprints, vet, מערך כללי) → NO. Each region has its own kit.
+   - Materials with no animal name → NO. Same reasoning as generic.
+   Used to skip cross-region dedup for "false positive" duplicates that don't cost inventory. */
+function _matIsSharedPhysical(mat){
+  if(!mat) return false;
+  if(mat.category === 'generic') return false;
+  const animal=(mat.animalName||'').trim();
+  if(!animal) return false;
+  return true;
+}
+/* v31 (2026-09-08): Relaxed seasonality — the strict `_matSeasonFits` blocks anything
+   outside a material's declared window. In post-pass dedup, we're already committed to
+   swapping (the alternative is leaving a real duplicate). This softens the window:
+   - Month-based seasonality: allow adjacent months too (winter ±1, spring ±1, etc.)
+   - Holiday-window seasonality (before_purim/pesach/etc.): extend from N days to N+21 days
+   - Holiday-only materials, end-of-year, holiday-lockdown weeks: still hard-blocked
+     (those are inventory-driven, not preference-driven)
+   - winter-risky category in winter: still blocked (physical safety, not preference)
+   Note: we do NOT relax `excludeFromAuto` — those mats (כלב) require the training
+   specialty which we cannot infer from mat data alone. Relaxation is season-only. */
+function _matSeasonFitsRelaxed(mat, weekISO, holidayDates){
+  // Keep hard rules that reflect physical/logical constraints (not preferences).
+  if(HOLIDAY_ONLY_WEEKS[weekISO] && (window._activeHolidayLockdown||new Set()).has(weekISO) && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
+  if(_matIsHolidayOnlyMaterial(mat) && !_matIsHolidayOnlyFor(mat, weekISO)) return false;
+  if(_matIsEndOfYear(mat) && !END_OF_YEAR_MONTHS.includes(_monthOfISO(weekISO))) return false;
+  const monthIdx=_monthOfISO(weekISO);
+  const catInfo=MAT_CATEGORIES[mat.category]||{};
+  if(catInfo.winterRisky && _isWinter(monthIdx)) return false;
+  const seas=mat.seasonality||'any';
+  if(seas==='any') return true;
+  // Relaxed date-relative holiday windows: extend by +21 days
+  if(SEASON_HOLIDAY_WINDOWS[seas]){
+    const w=SEASON_HOLIDAY_WINDOWS[seas];
+    const hDate=holidayDates[w.holidayKey];
+    if(!hDate) return true;
+    const daysUntil=_isoDiffDays(weekISO, hDate);
+    return daysUntil>=0 && daysUntil<=(w.daysBefore+21);
+  }
+  // Relaxed month-based seasonality: allow adjacent months (mod 12)
+  const seasDef=MAT_SEASONALITY[seas];
+  if(seasDef && seasDef.months){
+    const expanded=new Set();
+    seasDef.months.forEach(m=>{expanded.add(m);expanded.add((m+11)%12);expanded.add((m+1)%12)});
+    if(!expanded.has(monthIdx)) return false;
+  }
+  return true;
+}
 // Secondary rule: an instructor cannot repeat the same material in the same year — even if she has no gardens.
 // This is a safety net for cases where garden data is incomplete or the instructor is a placeholder (e.g., not yet assigned gardens).
 function _matAllowedForInstructor(matId, uid, instructorSeenMats){
@@ -4847,25 +4898,37 @@ async function computeAnnualRotation(region, opts){
           if((matUse[dupMatId]||0)<2)continue; // may have been resolved by earlier swap this iteration
           const uidsOnDup=Object.entries(assigns).filter(([,mid])=>mid===dupMatId).map(([u])=>u);
           if(uidsOnDup.length<2)continue;
-          // Only free-agent uids are swappable. Rotation-group cells are cycled by pipeline
-          // logic — swapping them breaks the Latin-square. A rotation-group uid on the
-          // duplicate is automatically the "keeper" (its mat is fixed).
-          const swappableUids=uidsOnDup.filter(u=>!inGroupUids.has(String(u)));
-          if(!swappableUids.length)continue; // all locked in pipelines
-          const hasGroupUid=uidsOnDup.some(u=>inGroupUids.has(String(u)));
+          /* v31 (2026-09-08): dedup relaxation ordering.
+             Prefer swapping free-agent cells first (least disruption to rotation groups).
+             If ALL holders are in groups, still try to swap ONE group cell — the iron
+             `seen` rule prevents same-instructor duplication, and one changed cell is
+             better than a real cross-week duplicate. Same-region duplicates that persist
+             after this pass are logged as data problems. */
+          const freeAgentUids=uidsOnDup.filter(u=>!inGroupUids.has(String(u)));
+          const groupUids=uidsOnDup.filter(u=>inGroupUids.has(String(u)));
+          const swappableUids=freeAgentUids.length ? freeAgentUids.slice() : groupUids.slice();
+          const swappingGroupCells=(freeAgentUids.length===0);
+          if(!swappableUids.length)continue;
           // Compute free alternatives per swappable uid. "Free" mirrors the openDupSwapMo
           // definition: never-seen by this uid this year + season-fits + garden-no-repeat
           // + NOT already in this week's assignments (would just move the duplicate).
           const globalGS=_gardensSeenExW(weekISO);
           const matsInWeekOccupied=new Set(Object.values(assigns).filter(Boolean));
-          const freeByUid=new Map();
-          for(const uid of swappableUids){
+          const buildCandsForUid=(uid,relaxed)=>{
             const gardens=gardensByUid[String(uid)]||[];
             const seen=_seenByUidExW(String(uid),weekISO);
-            const cands=materials.filter(m=>{
+            /* v31: tier-2 relaxation. We do NOT include excludeFromAuto materials
+               even at tier-2 — mats like "כלב" require the training specialty and
+               there's no clean way to detect specialty match from mat data. We
+               only relax SEASONALITY (adjacent months for month-based, +21 days
+               for holiday windows). Iron rules — seen, garden-repeat, no-current-
+               week-collision — stay strict. */
+            const pool=materials; // never widen to excludeFromAuto
+            const seasonCheck=relaxed?_matSeasonFitsRelaxed:_matSeasonFits;
+            return pool.filter(m=>{
               if(m.id===dupMatId)return false;
               if(seen.has(m.id))return false;
-              if(!_matSeasonFits(m,weekISO,holidayDates))return false;
+              if(!seasonCheck(m,weekISO,holidayDates))return false;
               const animal=(m.animalName||m.name||'').trim();
               if(animal){
                 for(const gn of gardens){if(globalGS[gn]&&globalGS[gn].has(animal))return false}
@@ -4873,15 +4936,27 @@ async function computeAnnualRotation(region, opts){
               if(matsInWeekOccupied.has(m.id))return false;
               return true;
             });
+          };
+          const freeByUid=new Map();
+          const relaxedFlagByUid=new Map();
+          for(const uid of swappableUids){
+            let cands=buildCandsForUid(uid,false);
+            if(!cands.length){
+              // Tier-2 relaxation: expand pool to excludeFromAuto + adjacent-season materials
+              cands=buildCandsForUid(uid,true);
+              if(cands.length)relaxedFlagByUid.set(String(uid),true);
+            }
             freeByUid.set(String(uid),cands);
           }
           // Sort swappable uids by free-count DESCENDING — most flexible swaps first,
           // so the least-flexible stays on the duplicate.
           swappableUids.sort((a,b)=>freeByUid.get(String(b)).length-freeByUid.get(String(a)).length);
           // Decide who keeps the duplicate:
-          //  - If any rotation-group uid is on the dup, it's locked as the keeper.
-          //  - Otherwise: the swappable uid with FEWEST free alternatives (last after sort).
-          const keeperSwappable=hasGroupUid?null:swappableUids[swappableUids.length-1];
+          //  - If any free-agent uid was on the dup AND we're only swapping free agents,
+          //    least-flexible free agent keeps it.
+          //  - Otherwise (swapping group cells because everyone's in a group): least-flexible
+          //    group uid keeps it.
+          const keeperSwappable=swappableUids[swappableUids.length-1];
           for(const uid of swappableUids){
             if(uid===keeperSwappable)continue;
             const cands=freeByUid.get(String(uid));
@@ -4905,7 +4980,9 @@ async function computeAnnualRotation(region, opts){
             _ddSwapCount++;
             didSwap=true;
             const oldName=(_matById_dd.get(oldMid)||{}).name||String(oldMid).slice(0,8);
-            warnings.push({weekISO,uid:String(uid),type:'dedup_swap',msg:`🔀 dedup-swap: ${String(uid).slice(0,8)} הוחלף מ-"${oldName}" ל-"${chosen.name}" (מתוך ${cands.length} אלטרנטיבות פנויות; ${uidsOnDup.length} מדריכות היו על אותו מערך)`});
+            const relaxedMark=relaxedFlagByUid.get(String(uid))?' (⚠ עונה מורחבת)':'';
+            const groupMark=swappingGroupCells?' [🔗 תא רוטציה — כל המחזיקות בקבוצות]':'';
+            warnings.push({weekISO,uid:String(uid),type:'dedup_swap',msg:`🔀 dedup-swap: ${String(uid).slice(0,8)} הוחלף מ-"${oldName}" ל-"${chosen.name}"${relaxedMark}${groupMark} (מתוך ${cands.length} אלטרנטיבות; ${uidsOnDup.length} מדריכות היו על אותו מערך)`});
           }
         }
       }
@@ -4936,7 +5013,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-08/v30-crossregion-dedup';
+  const _algoVersion='2026-09-08/v31-dedup-relaxed';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -5110,22 +5187,38 @@ function _crossRegionDedupSwap(perRegion, opts){
         // Only care about CROSS-region — same-region duplicates are already handled by the intra-region pass.
         const regionsSet=new Set(holders.map(h=>h.region));
         if(regionsSet.size<2)continue;
-        // Swappable = not locked in a rotation group
-        const swappable=holders.filter(h=>!inGroupUids.has(String(h.uid)));
-        if(!swappable.length)continue; // all locked
-        const hasGroupHolder=holders.some(h=>inGroupUids.has(String(h.uid)));
+        /* v31 (2026-09-08): skip dedup entirely for non-shared-physical materials.
+           Generic materials (paint, footprints, vet) and materials without an
+           animalName have no physical scarcity — each region has its own kit, so
+           two regions using them the same week is fine. Dropping ~10-30% of the
+           dup list keeps the pass focused on real inventory conflicts. */
+        const dupMat=matById.get(dupMatId);
+        if(!_matIsSharedPhysical(dupMat))continue;
+        /* v31: prefer swapping free-agent cells first; fall back to group cells
+           when everyone's in a rotation group (as in the classic Tali+Gita on
+           2026-10-11 case — Tali in "טלי - גאיה" and Gita in "באר שבע" would leave
+           the pre-v31 pass with swappable=[] and nothing done). Swapping one group
+           cell is safe (iron `seen` rule prevents same-instructor duplication);
+           the swap is logged so admin can review. */
+        const freeAgentHolders=holders.filter(h=>!inGroupUids.has(String(h.uid)));
+        const groupHolders=holders.filter(h=>inGroupUids.has(String(h.uid)));
+        const swappable=freeAgentHolders.length ? freeAgentHolders.slice() : groupHolders.slice();
+        const swappingGroupCells=(freeAgentHolders.length===0);
+        if(!swappable.length)continue;
         // Compute free alternatives per swappable uid
         const globalGS=_gardensSeenExW(weekISO);
         const matsInWeekOccupied=new Set();
         Object.values(wk.cells).forEach(c=>{if(c.matId)matsInWeekOccupied.add(c.matId)});
-        const freeByUid=new Map();
-        for(const h of swappable){
-          const gardens=gardensByUid[String(h.uid)]||[];
-          const seen=_seenByUidExW(String(h.uid),weekISO);
-          const cands=materials.filter(m=>{
+        const buildCandsForUid=(uid,relaxed)=>{
+          const gardens=gardensByUid[String(uid)]||[];
+          const seen=_seenByUidExW(String(uid),weekISO);
+          // v31: seasonality relaxation only; never widen to excludeFromAuto (specialty gate).
+          const pool=materials;
+          const seasonCheck=relaxed?(typeof _matSeasonFitsRelaxed==='function'?_matSeasonFitsRelaxed:seasonFits):seasonFits;
+          return pool.filter(m=>{
             if(m.id===dupMatId)return false;
             if(seen.has(m.id))return false;
-            if(!seasonFits(m,weekISO,holidayDates))return false;
+            if(!seasonCheck(m,weekISO,holidayDates))return false;
             const animal=(m.animalName||m.name||'').trim();
             if(animal){
               for(const gn of gardens){if(globalGS[gn]&&globalGS[gn].has(animal))return false}
@@ -5133,11 +5226,20 @@ function _crossRegionDedupSwap(perRegion, opts){
             if(matsInWeekOccupied.has(m.id))return false;
             return true;
           });
+        };
+        const freeByUid=new Map();
+        const relaxedFlagByUid=new Map();
+        for(const h of swappable){
+          let cands=buildCandsForUid(String(h.uid),false);
+          if(!cands.length){
+            cands=buildCandsForUid(String(h.uid),true);
+            if(cands.length)relaxedFlagByUid.set(String(h.uid),true);
+          }
           freeByUid.set(String(h.uid),cands);
         }
         // Sort by free-count DESC → most flexible swaps out first; least-flexible stays.
         swappable.sort((a,b)=>(freeByUid.get(String(b.uid))||[]).length-(freeByUid.get(String(a.uid))||[]).length);
-        const keeperSwappable=hasGroupHolder?null:swappable[swappable.length-1];
+        const keeperSwappable=swappable[swappable.length-1];
         // Build sharedThisWeek Map so scoring penalizes candidates already used cross-region this week.
         const sharedThisWeek=new Map();
         Object.values(wk.cells).forEach(c=>{if(c.matId)sharedThisWeek.set(c.matId,(sharedThisWeek.get(c.matId)||0)+1)});
@@ -5161,8 +5263,10 @@ function _crossRegionDedupSwap(perRegion, opts){
           _crSwapCount++;
           didSwap=true;
           const oldName=(matById.get(oldMid)||{}).name||String(oldMid).slice(0,8);
-          const msg=`🌍 cross-region dedup: ${String(h.uid).slice(0,8)} (${h.region}) הוחלף מ-"${oldName}" ל-"${chosen.name}" — היה משוכפל ב-${holders.length} אזורים (${[...regionsSet].join(', ')})`;
-          _crSwapEvents.push({region:h.region,weekISO,uid:String(h.uid),oldMid,newMid:chosen.id,msg});
+          const relaxedMark=relaxedFlagByUid.get(String(h.uid))?' (⚠ עונה מורחבת)':'';
+          const groupMark=swappingGroupCells?' [🔗 תא רוטציה — כל המחזיקות בקבוצות]':'';
+          const msg=`🌍 cross-region dedup: ${String(h.uid).slice(0,8)} (${h.region}) הוחלף מ-"${oldName}" ל-"${chosen.name}"${relaxedMark}${groupMark} — היה משוכפל ב-${holders.length} אזורים (${[...regionsSet].join(', ')})`;
+          _crSwapEvents.push({region:h.region,weekISO,uid:String(h.uid),oldMid,newMid:chosen.id,relaxed:!!relaxedFlagByUid.get(String(h.uid)),groupCell:swappingGroupCells,msg});
           const rr=perRegion.find(x=>x.region===h.region);
           if(rr){rr.warnings=rr.warnings||[];rr.warnings.push({weekISO,uid:String(h.uid),type:'cross_region_dedup_swap',msg})}
           // Keep in-memory tracking consistent for subsequent iterations THIS pass
@@ -5178,6 +5282,7 @@ function _crossRegionDedupSwap(perRegion, opts){
      so admin can see whether the fix ran and what's left (locked-only clusters,
      or 0-free-alt clusters — both are data problems, not algo problems). */
   const _crRemainingDups=[];
+  let _crSafeDupsSkipped=0;
   const finalMerged=buildMergedByWeek();
   for(const weekISO of Object.keys(finalMerged).sort()){
     const wk=finalMerged[weekISO];
@@ -5194,12 +5299,15 @@ function _crossRegionDedupSwap(perRegion, opts){
       if(holders.length<2)return;
       const regionsSet=new Set(holders.map(h=>h.region));
       if(regionsSet.size<2)return;
+      // v31: don't count "safe duplicates" (generic materials, no shared physical item)
+      // as remaining problems — they're intentionally OK to duplicate cross-region.
+      if(!_matIsSharedPhysical(matById.get(mid))){_crSafeDupsSkipped++;return}
       const matNm=(matById.get(mid)||{}).name||mid;
       const swappable=holders.filter(h=>!inGroupUids.has(String(h.uid))).length;
       _crRemainingDups.push({weekISO,mat:matNm,regions:[...regionsSet],uids:holders.length,swappable});
     });
   }
-  const summary=`🌍 cross-region dedup post-pass: ${_crSwapCount} החלפות ב-${_crPasses} מעברים · כפילויות בין-אזוריות שנותרו: ${_crRemainingDups.length}`;
+  const summary=`🌍 cross-region dedup post-pass: ${_crSwapCount} החלפות ב-${_crPasses} מעברים · כפילויות בין-אזוריות שנותרו: ${_crRemainingDups.length}${_crSafeDupsSkipped?` (+${_crSafeDupsSkipped} כפילויות בטוחות — מערך כללי)`:''}`;
   try{console.log('[_crossRegionDedupSwap] '+summary,{swaps:_crSwapCount,passes:_crPasses,remainingDups:_crRemainingDups,swapEvents:_crSwapEvents.slice(0,20)})}catch(_){}
   if(perRegion.length){
     perRegion[0].warnings=perRegion[0].warnings||[];
@@ -6526,7 +6634,12 @@ async function openDupSwapMo(weekId, uid, currentMatId){
     const cat=(typeof MAT_CATEGORIES!=='undefined'&&MAT_CATEGORIES[c.m.category])||{color:'#64748B',emoji:'📦',label:''};
     return `<div style="background:white;border:1.5px solid ${c.ok?(c.score>0?'#059669':'#F59E0B'):'#DC2626'};border-radius:8px;padding:10px;margin-bottom:6px;${c.ok?'cursor:pointer':''}" ${c.ok?`onclick="confirmDupSwap('${weekId}','${uid}','${c.m.id}')"`:''}><div style="display:flex;align-items:center;gap:8px"><span style="background:${cat.color};color:white;padding:3px 10px;border-radius:8px;font-size:12px;font-weight:700">${cat.emoji} ${esc(c.m.name||'?')}</span><span style="font-size:11px;color:${c.ok?(c.score>0?'#059669':'#B45309'):'#991B1B'};margin-right:auto">${esc(c.reason)}</span></div></div>`;
   };
-  mo.innerHTML=`<div class="md" style="max-width:640px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>⚠ מערך משוכפל · ${esc(u.name)}</span><span class="mc" onclick="document.getElementById('dup-swap-mo').classList.remove('open');document.getElementById('dup-swap-mo').style.display='none'">×</span></div><div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:10px;padding:12px 14px;margin-bottom:12px"><div style="font-size:13px;color:#78350F;line-height:1.6"><b>שבוע ${weekId}</b> — המערך <b>${esc((curMat||{}).name||'?')}</b> משובץ אצל ${1+dupNames.length} מדריכות:${dupNames.length?'<br>• '+esc(u.name)+' (כאן)<br>• '+dupNames.map(esc).join('<br>• '):''}</div></div><div style="font-size:12px;font-weight:700;color:#059669;margin-bottom:8px">✅ ${good.filter(c=>c.score>0).length} אלטרנטיבות פנויות (מקטינות שיכפול):</div>${good.filter(c=>c.score>0).slice(0,30).map(chip).join('')||'<div style="font-size:12px;color:var(--mut);font-style:italic">אין מערך פנוי שיקטין שיכפול</div>'}${good.filter(c=>c.score<=0).length?`<div style="font-size:12px;font-weight:700;color:#B45309;margin:12px 0 8px">⚠ ${good.filter(c=>c.score<=0).length} אלטרנטיבות שגם הן משוכפלות (תעביר שיכפול):</div>${good.filter(c=>c.score<=0).slice(0,10).map(chip).join('')}`:''}${bad.length?`<details style="margin-top:12px"><summary style="font-size:12px;color:var(--mut);cursor:pointer">🚫 ${bad.length} מערכים חסומים (חוקים)</summary><div style="margin-top:6px">${bad.slice(0,20).map(chip).join('')}</div></details>`:''}<div style="background:#F0F9FF;border-radius:8px;padding:8px 12px;font-size:11px;color:#0369A1;margin-top:12px;line-height:1.5">💡 לחיצה על מערך פנוי (ירוק) — יחליף כאן ויינעל אוטומטית. הצבעים: 🟢 פנוי (מקטין שיכפול) · 🟡 גם משוכפל · 🔴 חסום ע"י חוק.</div></div>`;
+  /* v31 (2026-09-08): show a "safe duplicate" green banner when the material is generic /
+     has no live animal — cross-region duplication of paint/vet/footprints costs no inventory,
+     so the alarm is false. Otherwise show the standard swap picker. */
+  const _safeDup=(typeof _matIsSharedPhysical==='function')?!_matIsSharedPhysical(curMat):false;
+  const _safeBanner=_safeDup?`<div style="background:#DCFCE7;border:1.5px solid #16A34A;border-radius:10px;padding:10px 14px;margin-bottom:12px"><div style="font-size:12px;color:#14532D;line-height:1.5"><b>ℹ כפילות בטוחה</b> — המערך "${esc((curMat||{}).name||'?')}" הוא מערך כללי (אין חיה משותפת פיזית). כל אזור מפעיל את הערכה שלו — אפשר להשאיר את זה כמו שהוא. אם בכל זאת תרצי לגוון, האלטרנטיבות למטה זמינות.</div></div>`:'';
+  mo.innerHTML=`<div class="md" style="max-width:640px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>${_safeDup?'ℹ כפילות בטוחה':'⚠ מערך משוכפל'} · ${esc(u.name)}</span><span class="mc" onclick="document.getElementById('dup-swap-mo').classList.remove('open');document.getElementById('dup-swap-mo').style.display='none'">×</span></div>${_safeBanner}<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:10px;padding:12px 14px;margin-bottom:12px"><div style="font-size:13px;color:#78350F;line-height:1.6"><b>שבוע ${weekId}</b> — המערך <b>${esc((curMat||{}).name||'?')}</b> משובץ אצל ${1+dupNames.length} מדריכות:${dupNames.length?'<br>• '+esc(u.name)+' (כאן)<br>• '+dupNames.map(esc).join('<br>• '):''}</div></div><div style="font-size:12px;font-weight:700;color:#059669;margin-bottom:8px">✅ ${good.filter(c=>c.score>0).length} אלטרנטיבות פנויות (מקטינות שיכפול):</div>${good.filter(c=>c.score>0).slice(0,30).map(chip).join('')||'<div style="font-size:12px;color:var(--mut);font-style:italic">אין מערך פנוי שיקטין שיכפול</div>'}${good.filter(c=>c.score<=0).length?`<div style="font-size:12px;font-weight:700;color:#B45309;margin:12px 0 8px">⚠ ${good.filter(c=>c.score<=0).length} אלטרנטיבות שגם הן משוכפלות (תעביר שיכפול):</div>${good.filter(c=>c.score<=0).slice(0,10).map(chip).join('')}`:''}${bad.length?`<details style="margin-top:12px"><summary style="font-size:12px;color:var(--mut);cursor:pointer">🚫 ${bad.length} מערכים חסומים (חוקים)</summary><div style="margin-top:6px">${bad.slice(0,20).map(chip).join('')}</div></details>`:''}<div style="background:#F0F9FF;border-radius:8px;padding:8px 12px;font-size:11px;color:#0369A1;margin-top:12px;line-height:1.5">💡 לחיצה על מערך פנוי (ירוק) — יחליף כאן ויינעל אוטומטית. הצבעים: 🟢 פנוי (מקטין שיכפול) · 🟡 גם משוכפל · 🔴 חסום ע"י חוק.</div></div>`;
   mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
 }
 async function confirmDupSwap(weekId, uid, newMatId){
