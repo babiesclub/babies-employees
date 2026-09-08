@@ -3405,9 +3405,7 @@ const MAT_SEASONALITY={
 const ISRAELI_HOLIDAYS={
   '2026-09-13':{name:'🍎 ראש השנה',fullWeek:false},
   '2026-09-20':{name:'✡ יום כיפור',fullWeek:false},
-  '2026-09-27':{name:'✡ יום כיפור + לפני סוכות',fullWeek:true},
-  '2026-10-04':{name:'🛖 סוכות (חג + חול המועד)',fullWeek:true},
-  '2026-10-11':{name:'🛖 שמיני עצרת + שמחת תורה',fullWeek:true},
+  '2026-09-27':{name:'🛖 סוכות (חול המועד)',fullWeek:true},
   '2026-11-29':{name:'🕎 חנוכה — הדלקת נר',fullWeek:false},
   '2026-12-06':{name:'🕎 חנוכה',fullWeek:false},
   '2027-01-31':{name:'👨‍👩‍👧 יום המשפחה',fullWeek:false},
@@ -3580,7 +3578,7 @@ async function submitVirtualInstructor(id){const name=document.getElementById('a
 // - Score-based selection for free-agent instructors (individual rotation)
 // - Per-garden no-repeat rule tracked via plan state
 // - 2-week freeze from today (current week + next stay untouched when applying)
-const SCHOOL_YEAR = { start: '2026-09-20', end: '2027-08-06' }; // Sept 20 2026 (Sun) — first activity week (RH Mon-Tue Sep 21-22 falls in this week) → end of Jul 2027. Weeks 6.9 + 13.9 are BEFORE the material rotation starts per user rule (2026-09-08).
+const SCHOOL_YEAR = { start: '2026-09-06', end: '2027-08-06' }; // Sept 6 2026 (Sun) → end of Jul 2027
 const HOLIDAYS_5787 = {
   rosh_hashana: '2026-09-12',
   purim: '2027-03-02',
@@ -3604,7 +3602,9 @@ function _isWinter(monthIdx){return monthIdx===11||monthIdx===0||monthIdx===1}
 // Match by seasonality tag (matchSeasons) OR by keyword in material name (matchKeywords). Either one is enough.
 // Duplicates are allowed — all instructors in a region can share the same holiday material so all gardens get it.
 const HOLIDAY_ONLY_WEEKS = {
-  /* 2026-09-06 + 13 + 20 REMOVED per user rule (2026-09-08): material rotation starts 20.9 with ALL materials (Rosh Hashana specials + regular pool). No holiday-only weeks at the start of the year. Sukkot weeks (27.9, 4.10, 11.10) are handled by ISRAELI_HOLIDAYS.fullWeek=true (algorithm skips them entirely). */
+  /* Per user rule (2026-09-08): 6.9 + 13.9 are holiday-only (Rosh Hashana specials only). 20.9 uses ALL materials (RH specials + regular rotation). Sukkot skip = week 27.9 (only that week is fullWeek=true in ISRAELI_HOLIDAYS; user's Sukkot dates: 25.9-3.10). */
+  '2026-09-06': {name:'שבוע פתיחה — ראש השנה', matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
+  '2026-09-13': {name:'ראש השנה',              matchSeasons:['near_rosh_hashana','around_rosh_hashana_week'], matchKeywords:['דבורה','ראש השנה']},
   '2027-02-28': {name:'פורים (3 שבועות לפני)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-07': {name:'פורים (2 שבועות לפני)', matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
   '2027-03-14': {name:'מתחפשים פורים',         matchSeasons:['near_purim','before_purim'],           matchKeywords:['פורים','טווס']},
