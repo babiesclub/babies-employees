@@ -4910,14 +4910,33 @@ async function computeAnnualRotation(region, opts){
         }
       }
     }
-    if(_ddSwapCount){
-      warnings.push({type:'dedup_summary',msg:`🎯 dedup-swap post-pass: הוספו ${_ddSwapCount} החלפות ב-${_ddPasses} מעברים לפתרון שיכפולים באזור`});
-      console.log('[computeAnnualRotation] dedup-swap post-pass: '+_ddSwapCount+' swaps in '+_ddPasses+' passes for region '+region);
+    /* DIAGNOSTIC: always report post-pass outcome, even when 0 swaps — helps trace why known dups aren't broken. */
+    {
+      const _ddDupsFound=[];const _ddNoSwapReasons=[];
+      for(const p of proposal){
+        if(!p||p.skipped||p.holidayOnly)continue;
+        const use={};for(const mid of Object.values(p.assignments||{})){if(mid)use[mid]=(use[mid]||0)+1}
+        const dups=Object.keys(use).filter(mid=>use[mid]>=2);
+        if(!dups.length)continue;
+        for(const dupMid of dups){
+          const uidsOnDup=Object.entries(p.assignments||{}).filter(([,mid])=>mid===dupMid).map(([u])=>u);
+          const swappable=uidsOnDup.filter(u=>!inGroupUids.has(String(u)));
+          const matNm=(_matById_dd.get(dupMid)||{}).name||dupMid;
+          _ddDupsFound.push({week:p.weekISO,mat:matNm,uids:uidsOnDup.length,swappable:swappable.length});
+          if(!swappable.length)_ddNoSwapReasons.push(`${p.weekISO} "${matNm}": כל ${uidsOnDup.length} המדריכות בקבוצת רוטציה (נעולות)`);
+        }
+      }
+      const _msg=`🎯 dedup-swap post-pass · ${region}: ${_ddSwapCount} החלפות ב-${_ddPasses} מעברים · כפילויות שנותרו: ${_ddDupsFound.length}`;
+      warnings.push({type:'dedup_summary',msg:_msg});
+      console.log('[computeAnnualRotation] '+_msg,{swaps:_ddSwapCount,passes:_ddPasses,dupsFound:_ddDupsFound,noSwapReasons:_ddNoSwapReasons});
+      if(_ddDupsFound.length){
+        _ddDupsFound.slice(0,5).forEach(d=>warnings.push({type:'dedup_leftover',msg:`⚠ נותרה כפילות: ${d.week} · "${d.mat}" · ${d.uids} מדריכות (${d.swappable} ניתנות להחלפה)`}));
+      }
     }
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-08/v29-dedup-swap-pass';
+  const _algoVersion='2026-09-08/v29b-dedup-diagnostic';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
