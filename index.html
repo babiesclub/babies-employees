@@ -3434,7 +3434,19 @@ function matColorFor(matId){if(!matId)return'#F5F5F5';if(!_matColorMap)rebuildMa
 function getSunday(d){const dt=new Date(d);const day=dt.getDay();dt.setDate(dt.getDate()-day);dt.setHours(0,0,0,0);return dt}
 function formatDateISO(d){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return`${y}-${m}-${day}`}
 function formatDateDisplay(d){const day=String(d.getDate()).padStart(2,'0');const m=String(d.getMonth()+1).padStart(2,'0');return`${day}/${m}`}
-async function syncWeeklySchedule(){if(!window.fbDb||!cu)return false;try{const snap=await fbDb.collection('weeklySchedule').get();const recs={};snap.forEach(d=>{recs[d.id]=d.data()});localStorage.setItem('bz3_weeklySchedule',JSON.stringify(recs));return true}catch(e){console.error('weekly schedule sync failed:',e);return false}}
+async function syncWeeklySchedule(){if(!window.fbDb||!cu)return false;try{const snap=await fbDb.collection('weeklySchedule').get();const recs={};snap.forEach(d=>{recs[d.id]=d.data()});localStorage.setItem('bz3_weeklySchedule',JSON.stringify(recs));
+  // Silent defense-in-depth: after each sync, scan for stale invalid assignments
+  // (RH mats leaked into non-RH weeks, end-of-year mats outside summer). If any are
+  // found, strip them (locally + Firestore) and log the count. This means a plain
+  // page refresh is enough for the admin to see a clean grid — she doesn't have to
+  // re-run "חשב שיבוצים + החל". Only runs for admin (write permission required).
+  try{
+    if(cu && cu.role==='admin' && typeof _cleanInvalidAssignments==='function' && typeof getMaterials==='function' && getMaterials().length){
+      const _cr=await _cleanInvalidAssignments();
+      if(_cr && _cr.cleaned){console.warn('[syncWeeklySchedule] auto-stripped '+_cr.cleaned+' stale invalid assignments across '+_cr.weeks+' weeks:',_cr.details.slice(0,10))}
+    }
+  }catch(_e){console.warn('[syncWeeklySchedule] auto-clean skipped:',_e&&_e.message)}
+  return true}catch(e){console.error('weekly schedule sync failed:',e);return false}}
 let _subAssignments=[];
 async function syncSubstituteAssignments(){if(!window.fbDb)return false;try{const snap=await fbDb.collection('substituteAssignments').get();_subAssignments=snap.docs.map(d=>({id:d.id,...d.data()}));return true}catch(e){console.error('subs sync:',e);return false}}
 function getSubbedGardensForUserOnDate(uid,date){if(!uid||!date)return [];const matches=(_subAssignments||[]).filter(s=>String(s.substituteUid)===String(uid)&&s.date===date);const result=[];matches.forEach(s=>{let gardens=Array.isArray(s.gardens)?s.gardens:null;if(!gardens||!gardens.length){const users=DB.get('users')||[];const orig=users.find(u=>String(u.uid||u.id)===String(s.originalUid));gardens=orig?(orig.gardens||[]):[]}gardens.forEach(g=>{if(!result.find(r=>r.garden===g))result.push({garden:g,originalUid:s.originalUid,originalName:s.originalName,subId:s.id,notes:s.notes||''})})});return result}
@@ -3633,6 +3645,70 @@ function _matIsHolidayOnlyMaterial(mat){
     if(_matIsHolidayOnlyFor(mat, wISO)) return true;
   }
   return false;
+}
+/* Pure static check: is `mat` invalid for `weekISO` under HARD constraints?
+   Unlike `_matSeasonFits`, this does NOT depend on `window._activeHolidayLockdown`
+   (which is only populated by `computeAnnualRotation`), so it can be called from
+   `applyRotationProposal` / `renderWschGrid` / `syncWeeklySchedule` to detect stale
+   invalid assignments in Firestore and strip them.
+   Checks:
+   1. Reverse holiday-only rule (RH mat outside RH weeks, Purim outside Purim weeks, …)
+   2. End-of-year rule (דגים / לובסטר only in June-August)
+   Accepts a material object; returns true when the assignment is DEFINITELY WRONG.
+   Returns false (safe) when mat is unknown or the check can't be made. */
+function _matIsInvalidForWeek(mat, weekISO){
+  if(!mat || !weekISO) return false;
+  if(_matIsHolidayOnlyMaterial(mat) && !_matIsHolidayOnlyFor(mat, weekISO)) return true;
+  if(_matIsEndOfYear(mat) && !END_OF_YEAR_MONTHS.includes(_monthOfISO(weekISO))) return true;
+  return false;
+}
+/* Scan an entire weekly-schedule snapshot for invalid stale assignments (holiday mat
+   outside its window, end-of-year mat outside summer). Returns
+   {invalidCount, weeksAffected, byWeek:{weekISO:[{uid,matId,matName,reason},...]}}.
+   Pure — does not mutate. Used by `applyRotationProposal` cleanup pass, sync-time
+   auto-clean, and admin diagnostics.  */
+function _scanInvalidAssignments(schedule){
+  const result={invalidCount:0,weeksAffected:0,byWeek:{}};
+  const materials=(typeof getMaterials==='function')?getMaterials():[];
+  const matById=new Map(materials.map(m=>[m.id,m]));
+  for(const weekISO of Object.keys(schedule||{})){
+    const wk=schedule[weekISO];
+    if(!wk||!wk.assignments)continue;
+    const bad=[];
+    for(const [uid,matId] of Object.entries(wk.assignments)){
+      if(!matId)continue;
+      const mat=matById.get(matId);
+      if(!mat)continue; // unknown mat — leave alone
+      if(!_matIsInvalidForWeek(mat,weekISO))continue;
+      const reason=_matIsHolidayOnlyMaterial(mat)?'holiday_out_of_window':'end_of_year_out_of_summer';
+      bad.push({uid,matId,matName:mat.name||'?',reason});
+    }
+    if(bad.length){result.byWeek[weekISO]=bad;result.invalidCount+=bad.length;result.weeksAffected++}
+  }
+  return result;
+}
+/* Strip invalid stale assignments from a schedule (mutates + persists to Firestore).
+   Called at the start of applyRotationProposal, and available for manual invocation
+   via `_cleanInvalidAssignments()` in the console.
+   Bypasses the freeze window entirely — an invalid assignment is by definition wrong
+   and the instructor should NOT keep seeing it, even if today+14 protects the week. */
+async function _cleanInvalidAssignments(){
+  const schedule=(typeof getWeeklySchedule==='function')?getWeeklySchedule():{};
+  const scan=_scanInvalidAssignments(schedule);
+  if(!scan.invalidCount) return {cleaned:0,weeks:0,details:[]};
+  const details=[];
+  for(const weekISO of Object.keys(scan.byWeek)){
+    const wk=schedule[weekISO]; if(!wk||!wk.assignments)continue;
+    for(const bad of scan.byWeek[weekISO]){
+      delete wk.assignments[bad.uid];
+      if(Array.isArray(wk.lockedUids))wk.lockedUids=wk.lockedUids.filter(u=>String(u)!==String(bad.uid));
+      details.push({weekISO,...bad});
+    }
+    wk.lastUpdated=Date.now();
+    if(window.fbDb){try{await fbDb.collection('weeklySchedule').doc(weekISO).set(wk)}catch(e){console.warn('clean invalid save failed for',weekISO,e.message)}}
+  }
+  try{localStorage.setItem('bz3_weeklySchedule',JSON.stringify(schedule))}catch(e){}
+  return {cleaned:scan.invalidCount,weeks:scan.weeksAffected,details};
 }
 // End-of-year materials: must only appear in the final stretch of the school year (June-August).
 // דגים = summer fish, לובסטר = summer lobster (memory: 'סוף שנה, קיץ' / 'אזור מאי-יולי').
@@ -4155,7 +4231,12 @@ async function computeAnnualRotation(region, opts){
             const pair0Mats=pair0Uids.map(u=>weekAssignmentsH[u]);
             const pair1Mats=pair1Uids.map(u=>weekAssignmentsH[u]);
             // Don't seed with holiday-only mats — they'd leak past their window when pipeline shifts.
-            const _noHoli=arr=>arr.every(m=>m && !_matIsHolidayOnlyMaterial(m));
+            // BUGFIX 2026-09-08: pair*Mats arrays hold matIds (strings), not material
+            // objects — _matIsHolidayOnlyMaterial on a string always returns false, so
+            // the guard silently let holiday-only mats leak into the pipeline and get
+            // shifted into non-holiday weeks. Look up the object first.
+            const _matById_ph=new Map(materials.map(m=>[m.id,m]));
+            const _noHoli=arr=>arr.every(mid=>{const mm=mid&&_matById_ph.get(mid);return !!mm && !_matIsHolidayOnlyMaterial(mm)});
             if(pair0Mats[0]&&pair0Mats[1]&&pair1Mats[0]&&pair1Mats[1]&&_noHoli(pair0Mats)&&_noHoli(pair1Mats)){
               state.pairSlots[0]=pair0Mats;
               state.pairSlots[1]=pair1Mats;
@@ -4174,7 +4255,10 @@ async function computeAnnualRotation(region, opts){
             const mats1=(cluster[1].instructorUids||[]).map(u=>weekAssignmentsH[String(u)]);
             const mats2=(cluster[2].instructorUids||[]).map(u=>weekAssignmentsH[String(u)]);
             // Don't seed with holiday-only mats — they'd leak past their window.
-            const _noHoli3=arr=>arr.every(m=>m && !_matIsHolidayOnlyMaterial(m));
+            // BUGFIX 2026-09-08: mats* arrays hold matIds (strings), not material objects.
+            // Look up the object before passing to _matIsHolidayOnlyMaterial (see BUGFIX above).
+            const _matById_t3=new Map(materials.map(m=>[m.id,m]));
+            const _noHoli3=arr=>arr.every(mid=>{const mm=mid&&_matById_t3.get(mid);return !!mm && !_matIsHolidayOnlyMaterial(mm)});
             if(mats0.every(Boolean)&&mats1.every(Boolean)&&mats2.every(Boolean)&&_noHoli3(mats0)&&_noHoli3(mats1)&&_noHoli3(mats2)){
               state.pairs[0]=mats0;
               state.pairs[1]=mats1;
@@ -4696,7 +4780,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-01/v27-instructor-active-window';
+  const _algoVersion='2026-09-08/v28-strip-invalid-holiday-mats-on-apply';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -4877,7 +4961,7 @@ async function _smartRotApply(forceOverwriteFreeze){
     else if(r.region){clearRegionDirty(r.region)}
     if(window._lastRotProposalRegionForClear){clearRegionDirty(window._lastRotProposalRegionForClear);window._lastRotProposalRegionForClear=null}
     _logAudit('compute','schedule',r.region||'all',`חישוב רוטציה: ${r.allRegions?'כל האזורים':r.region} · ${res.written} נכתבו · ${res.cleared||0} נוקו · ${res.lockedSkipped||0} נעולים נשמרו${forceOverwriteFreeze?' · דריסה מלאה':''}`);
-    alert(`✓ הוחל בהצלחה!\n\n✍ נכתבו ${res.written} שיבוצים חדשים${res.filledFrozen?` (מתוכם ${res.filledFrozen} מילאו תאים ריקים בחלון ההקפאה)`:''}${res.overwroteFrozen?`\n🔥 ${res.overwroteFrozen} שיבוצים בחלון הקפאה נדרסו (כי בחרת 'דרוס')`:''}\n🧹 נוקו ${res.cleared||0} שיבוצים ישנים ("רפאים")${res.lockedSkipped?`\n🔒 ${res.lockedSkipped} תאים נעולים נשמרו (עריכות ידניות)`:''}\n❄ ${res.frozenSkipped} שבועות בחלון הקפאה — שיבוצים קיימים ${forceOverwriteFreeze?'נדרסו':'נשמרו'}${res.errors.length?`\n⚠ ${res.errors.length} שגיאות`:''}`);
+    alert(`✓ הוחל בהצלחה!\n\n✍ נכתבו ${res.written} שיבוצים חדשים${res.filledFrozen?` (מתוכם ${res.filledFrozen} מילאו תאים ריקים בחלון ההקפאה)`:''}${res.overwroteFrozen?`\n🔥 ${res.overwroteFrozen} שיבוצים בחלון הקפאה נדרסו (כי בחרת 'דרוס')`:''}\n🧹 נוקו ${res.cleared||0} שיבוצים ישנים ("רפאים")${res.invalidCleaned?`\n🍎 נוקו ${res.invalidCleaned} מערכי חג שהיו בשבוע לא-חג (נקוי אוטומטי, גם בחלון הקפאה)`:''}${res.lockedSkipped?`\n🔒 ${res.lockedSkipped} תאים נעולים נשמרו (עריכות ידניות)`:''}\n❄ ${res.frozenSkipped} שבועות בחלון הקפאה — שיבוצים קיימים ${forceOverwriteFreeze?'נדרסו':'נשמרו'}${res.errors.length?`\n⚠ ${res.errors.length} שגיאות`:''}`);
     document.getElementById('smart-rot-mo').style.display='none';
     renderWschGrid();
   }catch(e){alert('שגיאה: '+(e.message||e));btn.disabled=false;btn.textContent='✓ החל שיבוץ'}
@@ -5173,6 +5257,23 @@ async function applyRotationProposal(result, opts){
   if(!result||!result.proposal||!result.proposal.length) throw new Error('אין הצעה להחיל');
   const today=formatDateISO(new Date());
   const cutoff=opts.freezeUntil||_isoAddDays(today,14);
+  // Cache material lookup for the freeze-validity check below.
+  const _apMaterials=(typeof getMaterials==='function')?getMaterials():[];
+  const _apMatById=new Map(_apMaterials.map(m=>[m.id,m]));
+  // Step 0 — Full-schedule cleanup pass: strip STALE INVALID assignments (RH mat on
+  // non-RH week, end-of-year mat outside summer, …) from EVERY week in Firestore,
+  // bypassing the freeze window. An invalid mat is wrong by definition — the instructor
+  // should never keep seeing it, even in the freeze window. Prevents the classic
+  // "algorithm was fixed but Firestore still has the old bad data + freeze protects it"
+  // failure mode. Silent no-op when nothing is invalid.
+  let invalidCleaned=0;
+  try{
+    const _cleanRes=await _cleanInvalidAssignments();
+    invalidCleaned=_cleanRes.cleaned||0;
+    if(invalidCleaned){
+      console.warn('[applyRotationProposal] stripped '+invalidCleaned+' invalid stale assignments across '+_cleanRes.weeks+' weeks:',_cleanRes.details.slice(0,20));
+    }
+  }catch(e){console.error('[applyRotationProposal] invalid-cleanup failed:',e)}
   // Collect ALL uids that appear in the new proposal anywhere — these are "covered" by this recompute
   const coveredUids=new Set();
   result.proposal.forEach(w=>Object.keys(w.assignments||{}).forEach(uid=>coveredUids.add(String(uid))));
@@ -5180,6 +5281,15 @@ async function applyRotationProposal(result, opts){
   const newAssignedByWeek={};
   result.proposal.forEach(w=>{newAssignedByWeek[w.weekISO]=new Set(Object.keys(w.assignments||{}).map(String))});
   const forceOverwriteFreeze=!!opts.forceOverwriteFreeze;
+  // Freeze semantics: an assignment inside the freeze window is preserved ONLY if the
+  // material is still VALID for that week. Invalid stale mats (already covered by
+  // Step 0 above, but we double-check per-week here too) always yield to a rewrite.
+  const _existingIsValidForWeek=(matId,weekISO)=>{
+    if(!matId)return false;
+    const mat=_apMatById.get(matId);
+    if(!mat)return true; // unknown mat — assume caller knows better than we do
+    return !_matIsInvalidForWeek(mat,weekISO);
+  };
   let written=0,cleared=0,filledFrozen=0,overwroteFrozen=0;const frozenSkipped=[];const errors=[];
   // Phase 1: iterate the proposal weeks — clear covered uids' old assignments + write new.
   // Freeze semantics (weekISO < cutoff): per-uid, not per-week — protect uids that ALREADY have
@@ -5200,22 +5310,27 @@ async function applyRotationProposal(result, opts){
     for(const existingUid of Object.keys(existingAssigns)){
       if(!coveredUids.has(String(existingUid)))continue;
       if(lockedSet.has(String(existingUid))){lockedSkipped++;continue}
-      if(isFrozenWeek && existingAssigns[existingUid])continue;
+      // Freeze protects only VALID existing assignments. Invalid ones (RH mat on
+      // non-RH week, end-of-year mat outside summer) are stripped even inside the
+      // freeze — the instructor should never keep seeing a bad mat.
+      if(isFrozenWeek && existingAssigns[existingUid] && _existingIsValidForWeek(existingAssigns[existingUid],w.weekISO))continue;
       try{await setWschAssignment(w.weekISO,existingUid,'');cleared++}
       catch(e){errors.push({weekISO:w.weekISO,uid:existingUid,err:'clear: '+(e.message||String(e))})}
     }
-    // Write new assignments — in frozen weeks, skip uids that already had a value. Also skip LOCKED uids.
+    // Write new assignments — in frozen weeks, skip uids that already had a VALID value.
+    // Also skip LOCKED uids. Invalid existing (RH mat leaking) is treated as absent →
+    // the fresh algorithm-picked mat wins, closing the "stale bad data preserved by freeze" bug.
     const _isForcedOverwriteWeek=forceOverwriteFreeze && w.weekISO<cutoff;
     for(const[uid,matId] of Object.entries(w.assignments||{})){
       if(lockedSet.has(String(uid))){lockedSkipped++;continue}
-      if(isFrozenWeek && existingAssigns[uid])continue;
+      if(isFrozenWeek && existingAssigns[uid] && _existingIsValidForWeek(existingAssigns[uid],w.weekISO))continue;
       if(_isForcedOverwriteWeek && existingAssigns[uid] && existingAssigns[uid]!==matId)overwroteFrozen++;
       try{await setWschAssignment(w.weekISO,uid,matId);written++;if(isFrozenWeek)filledFrozen++}
       catch(e){errors.push({weekISO:w.weekISO,uid,err:e.message||String(e)})}
     }
     if(isFrozenWeek)frozenSkipped.push(w.weekISO);
   }
-  return {written,cleared,frozenSkipped:frozenSkipped.length,filledFrozen,overwroteFrozen,lockedSkipped,errors};
+  return {written,cleared,frozenSkipped:frozenSkipped.length,filledFrozen,overwroteFrozen,lockedSkipped,errors,invalidCleaned};
 }
 // Yellow card for virtual/pending instructor rows in the admin instructor list. Distinct from real instructor rows.
 function renderVirtualInstructorRow(v){const isArchived=(v.status==='archived');const bg=isArchived?'#F3F4F6':'#FEF3C7';const border=isArchived?'#9CA3AF':'#F59E0B';const fg=isArchived?'#4B5563':'#7B5C00';const icon=isArchived?'📦':'🕐';const statusTag=isArchived?'<span style="font-size:10px;color:white;background:#6B7280;padding:2px 7px;border-radius:8px;font-weight:700">📦 בארכיון</span>':'<span style="font-size:10px;color:white;background:#F59E0B;padding:2px 7px;border-radius:8px;font-weight:700">🕐 עתידית</span>';const regionBadge=v.region?`<span style="font-size:10px;color:white;background:${REGION_COLORS[v.region]||'#1565C0'};padding:2px 7px;border-radius:8px;font-weight:700">📍 ${esc(v.region)}</span>`:'<span style="font-size:10px;color:white;background:#DC2626;padding:2px 7px;border-radius:8px;font-weight:700">⚠ אין אזור</span>';const specLabel=v.specialty&&SPEC_LABELS[v.specialty]?`<span style="font-size:10px;color:${(SPEC_COLORS[v.specialty]||{}).fg||'white'};background:${(SPEC_COLORS[v.specialty]||{}).bg||'#888'};padding:2px 7px;border-radius:8px;font-weight:700">${SPEC_LABELS[v.specialty]}</span>`:'';const gCount=(v.gardens||[]).length;const gBadge=`<span style="font-size:10px;font-weight:700;background:${gCount>0?'#D8F3DC':'#FFEBEE'};color:${gCount>0?'#1B4332':'#C62828'};padding:2px 7px;border-radius:10px">🏫 ${gCount} גנים</span>`;const label=v.pendingLabel?`<div style="font-size:11px;color:${fg};margin-top:4px;font-style:italic">📝 ${esc(v.pendingLabel)}</div>`:'';const actions=isArchived?`<button class="btn-ed" style="background:#DCFCE7;border-color:#86EFAC;color:#166534;font-weight:700" onclick="restoreVirtualInstructor('${esc(v.id)}')" title="שחזור מהארכיון">↩ שחזור</button><button class="btn-dn" onclick="deleteVirtualInstructorHard('${esc(v.id)}')" title="מחיקה סופית">🗑</button>`:`<button class="btn-ed" style="background:#D1FAE5;border-color:#10B981;color:#065F46;font-weight:800" onclick="openConvertVirtualMo('${esc(v.id)}')" title="גייסת מדריכה — המירי לפעילה">🎉 גייסתי</button><button class="btn-ed" onclick="openAddVirtualInstructorMo('${esc(v.id)}')">✏</button><button class="btn-ed" style="background:#F3F4F6;border-color:#9CA3AF;color:#4B5563;font-weight:700" onclick="archiveVirtualInstructor('${esc(v.id)}')" title="העברה לארכיון">📦</button>`;return`<div style="background:${bg};border:1.5px solid ${border};border-radius:10px;padding:10px;margin-bottom:8px;position:relative"><div style="display:flex;align-items:center;gap:10px"><div style="width:36px;height:36px;background:${border};color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${icon}</div><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-weight:700;font-size:14px;color:${fg}">${esc(v.name||'ללא שם')}</span>${statusTag}${regionBadge}${specLabel}</div>${label}</div><div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${actions}</div></div><div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:5px">${gBadge}<span style="font-size:10px;font-weight:700;background:#EDE9FE;color:#5B21B6;padding:2px 7px;border-radius:10px" title="לא משתתפת בשכר, WhatsApp, או פרונט לקוחות">🚫 מוסתרת ממערכות תפעוליות</span></div></div>`}
