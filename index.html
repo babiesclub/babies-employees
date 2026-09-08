@@ -4936,7 +4936,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-08/v29b-dedup-diagnostic';
+  const _algoVersion='2026-09-08/v30-crossregion-dedup';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -4972,6 +4972,246 @@ async function computeAnnualRotation(region, opts){
     }
   };
 }
+/* ===== CROSS-REGION DEDUP-SWAP POST-PASS =====
+   The intra-region dedup pass inside `computeAnnualRotation` only sees ONE
+   region at a time; it can't detect when the SAME physical material (e.g.
+   שוגר גליידר) was picked simultaneously for a Tali-in-North + a Gita-in-
+   South on 2026-10-11. Both per-region picks scored highest locally, so
+   neither region's post-pass touched them. Result: the WSCH warning triangle
+   (openDupSwapMo) lights up cross-region duplicates but nothing in the auto-
+   compute pipeline had fixed them.
+
+   This pass runs AFTER all regions are computed, right before merge:
+   1. Collects all (region, week, uid, matId) triples.
+   2. Groups by week; for each mat used ≥2× across ≥2 regions in a non-
+      holiday week — that's a cross-region duplicate.
+   3. Splits holders into swappable (free-agent) vs locked (rotation-group).
+      Rotation-group cells stay put — their Latin-square cycle is precomputed.
+   4. For each swappable uid, computes free alternatives with the same rules
+      as the intra-region pass PLUS: the "already occupied this week" filter
+      is the CROSS-REGION week occupancy, so a swap can't just shuffle the
+      duplicate to another region.
+   5. Sorts swappable uids by free-count DESC; least-flexible uid keeps the
+      duplicate; others swap to their best-scored free alternative (scored
+      by _scoreMaterial with sharedThisWeek reflecting ALL regions' usage).
+   6. Iterates to fixed point (max 5 passes).
+
+   Mutates each region's proposal.assignments in place — the merge downstream
+   picks up the new mats automatically, and applyRotationProposal writes them
+   to Firestore unchanged.
+
+   Options bag lets a Node harness inject stubs for the globals it depends on
+   (materials, gardensByUid, inGroupUids, _matSeasonFits, _scoreMaterial,
+   _monthOfISO, holidayDates). Production callers use the globals. */
+function _crossRegionDedupSwap(perRegion, opts){
+  opts=opts||{};
+  const materials=opts.materials||((typeof getMaterials==='function'?getMaterials():[]).filter(m=>!m.excludeFromAuto));
+  const matById=new Map(materials.map(m=>[m.id,m]));
+  const holidayDates=opts.holidayDates||(typeof HOLIDAYS_5787!=='undefined'?HOLIDAYS_5787:{});
+  const seasonFits=opts.seasonFits||_matSeasonFits;
+  const scoreMaterial=opts.scoreMaterial||_scoreMaterial;
+  const monthOfISO=opts.monthOfISO||_monthOfISO;
+  const gardensByUid=opts.gardensByUid||(function(){
+    const g={};
+    const users=(typeof DB!=='undefined'&&DB.get?DB.get('users'):[])||[];
+    const virts=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]);
+    [...users,...virts].forEach(u=>{g[String(u.uid||u.id)]=(u.gardens||[]).slice()});
+    return g;
+  })();
+  const inGroupUids=opts.inGroupUids||(function(){
+    const s=new Set();
+    (typeof _rotGroups!=='undefined'?_rotGroups:[]).forEach(g=>(g.instructorUids||[]).forEach(uid=>s.add(String(uid))));
+    return s;
+  })();
+  // uid → its region's rr (a uid only appears in one region's proposal)
+  const uidToRR=new Map();
+  perRegion.forEach(rr=>{
+    (rr.proposal||[]).forEach(w=>{
+      Object.keys(w.assignments||{}).forEach(u=>uidToRR.set(String(u),rr));
+    });
+  });
+  const _seenByUidExW=(uid,excludeWeekISO)=>{
+    const s=new Set();
+    const rr=uidToRR.get(String(uid));
+    if(!rr)return s;
+    for(const p of (rr.proposal||[])){
+      if(!p||p.skipped)continue;
+      if(p.weekISO===excludeWeekISO)continue;
+      const mid=(p.assignments||{})[uid];
+      if(mid)s.add(mid);
+    }
+    return s;
+  };
+  // Cross-region gardens-seen index — an animal seen at garden G by ANY instructor
+  // in ANY region blocks it. Same physical animal visits are counted once per garden.
+  const _gardensSeenExW=(excludeWeekISO)=>{
+    const gs={};
+    for(const rr of perRegion){
+      for(const p of (rr.proposal||[])){
+        if(!p||p.skipped)continue;
+        if(p.weekISO===excludeWeekISO)continue;
+        const assigns=p.assignments||{};
+        for(const[assignUid,mid] of Object.entries(assigns)){
+          const mat=matById.get(mid);if(!mat)continue;
+          const animal=(mat.animalName||mat.name||'').trim();if(!animal)continue;
+          (gardensByUid[String(assignUid)]||[]).forEach(gn=>{if(!gs[gn])gs[gn]=new Set();gs[gn].add(animal)});
+        }
+      }
+    }
+    return gs;
+  };
+  const buildGloballyUsed=()=>{
+    const s=new Set();
+    perRegion.forEach(rr=>(rr.proposal||[]).forEach(w=>{
+      Object.values(w.assignments||{}).forEach(mid=>{if(mid)s.add(mid)});
+    }));
+    return s;
+  };
+  const buildMergedByWeek=()=>{
+    const m={};
+    perRegion.forEach(rr=>{
+      (rr.proposal||[]).forEach(w=>{
+        if(!m[w.weekISO])m[w.weekISO]={weekISO:w.weekISO,cells:{},weekMeta:{}};
+        m[w.weekISO].weekMeta[rr.region]={holidayOnly:!!w.holidayOnly,skipped:!!w.skipped};
+        Object.entries(w.assignments||{}).forEach(([uid,matId])=>{
+          m[w.weekISO].cells[String(uid)]={region:rr.region,matId,weekRef:w};
+        });
+      });
+    });
+    return m;
+  };
+  let _crSwapCount=0;
+  let _crPasses=0;
+  const _crSwapEvents=[];
+  let didSwap=true;
+  while(didSwap && _crPasses<5){
+    didSwap=false;_crPasses++;
+    const merged=buildMergedByWeek();
+    const globallyUsed=buildGloballyUsed();
+    for(const weekISO of Object.keys(merged).sort()){
+      const wk=merged[weekISO];
+      // Skip if EVERY region treats this week as holiday-only or skipped.
+      const wkMetas=Object.values(wk.weekMeta);
+      const allHoliday=wkMetas.length && wkMetas.every(m=>m.holidayOnly||m.skipped);
+      if(allHoliday)continue;
+      // Tally cross-region material usage — matId → [{uid,region,weekRef}]
+      const matUse={};
+      Object.entries(wk.cells).forEach(([uid,cell])=>{
+        if(!cell.matId)return;
+        if(!matUse[cell.matId])matUse[cell.matId]=[];
+        matUse[cell.matId].push({uid,region:cell.region,weekRef:cell.weekRef});
+      });
+      const dupMatIds=Object.keys(matUse).filter(mid=>matUse[mid].length>=2);
+      if(!dupMatIds.length)continue;
+      for(const dupMatId of dupMatIds){
+        // Re-validate holders (weekRef.assignments may have been mutated by a prior dup in this iteration)
+        const holders=(matUse[dupMatId]||[]).filter(h=>(h.weekRef.assignments||{})[h.uid]===dupMatId);
+        if(holders.length<2)continue;
+        // Only care about CROSS-region — same-region duplicates are already handled by the intra-region pass.
+        const regionsSet=new Set(holders.map(h=>h.region));
+        if(regionsSet.size<2)continue;
+        // Swappable = not locked in a rotation group
+        const swappable=holders.filter(h=>!inGroupUids.has(String(h.uid)));
+        if(!swappable.length)continue; // all locked
+        const hasGroupHolder=holders.some(h=>inGroupUids.has(String(h.uid)));
+        // Compute free alternatives per swappable uid
+        const globalGS=_gardensSeenExW(weekISO);
+        const matsInWeekOccupied=new Set();
+        Object.values(wk.cells).forEach(c=>{if(c.matId)matsInWeekOccupied.add(c.matId)});
+        const freeByUid=new Map();
+        for(const h of swappable){
+          const gardens=gardensByUid[String(h.uid)]||[];
+          const seen=_seenByUidExW(String(h.uid),weekISO);
+          const cands=materials.filter(m=>{
+            if(m.id===dupMatId)return false;
+            if(seen.has(m.id))return false;
+            if(!seasonFits(m,weekISO,holidayDates))return false;
+            const animal=(m.animalName||m.name||'').trim();
+            if(animal){
+              for(const gn of gardens){if(globalGS[gn]&&globalGS[gn].has(animal))return false}
+            }
+            if(matsInWeekOccupied.has(m.id))return false;
+            return true;
+          });
+          freeByUid.set(String(h.uid),cands);
+        }
+        // Sort by free-count DESC → most flexible swaps out first; least-flexible stays.
+        swappable.sort((a,b)=>(freeByUid.get(String(b.uid))||[]).length-(freeByUid.get(String(a.uid))||[]).length);
+        const keeperSwappable=hasGroupHolder?null:swappable[swappable.length-1];
+        // Build sharedThisWeek Map so scoring penalizes candidates already used cross-region this week.
+        const sharedThisWeek=new Map();
+        Object.values(wk.cells).forEach(c=>{if(c.matId)sharedThisWeek.set(c.matId,(sharedThisWeek.get(c.matId)||0)+1)});
+        for(const h of swappable){
+          if(h===keeperSwappable)continue;
+          const cands=freeByUid.get(String(h.uid));
+          if(!cands||!cands.length)continue;
+          const gardens=gardensByUid[String(h.uid)]||[];
+          const scored=cands.map(m=>({m,score:scoreMaterial(m,{
+            gardens,gardensSeen:globalGS,
+            lastCategory:null,
+            globallyUsed,weekISO,
+            weekMonthIdx:monthOfISO(weekISO),
+            sharedThisWeek,
+          })}));
+          scored.sort((a,b)=>b.score-a.score);
+          const chosen=scored[0].m;
+          const oldMid=h.weekRef.assignments[h.uid];
+          h.weekRef.assignments[h.uid]=chosen.id;
+          globallyUsed.add(chosen.id);
+          _crSwapCount++;
+          didSwap=true;
+          const oldName=(matById.get(oldMid)||{}).name||String(oldMid).slice(0,8);
+          const msg=`🌍 cross-region dedup: ${String(h.uid).slice(0,8)} (${h.region}) הוחלף מ-"${oldName}" ל-"${chosen.name}" — היה משוכפל ב-${holders.length} אזורים (${[...regionsSet].join(', ')})`;
+          _crSwapEvents.push({region:h.region,weekISO,uid:String(h.uid),oldMid,newMid:chosen.id,msg});
+          const rr=perRegion.find(x=>x.region===h.region);
+          if(rr){rr.warnings=rr.warnings||[];rr.warnings.push({weekISO,uid:String(h.uid),type:'cross_region_dedup_swap',msg})}
+          // Keep in-memory tracking consistent for subsequent iterations THIS pass
+          wk.cells[String(h.uid)]={region:h.region,matId:chosen.id,weekRef:h.weekRef};
+          sharedThisWeek.set(oldMid,(sharedThisWeek.get(oldMid)||1)-1);
+          sharedThisWeek.set(chosen.id,(sharedThisWeek.get(chosen.id)||0)+1);
+          matsInWeekOccupied.add(chosen.id);
+        }
+      }
+    }
+  }
+  /* DIAGNOSTIC: enumerate CROSS-region duplicates that survived all passes,
+     so admin can see whether the fix ran and what's left (locked-only clusters,
+     or 0-free-alt clusters — both are data problems, not algo problems). */
+  const _crRemainingDups=[];
+  const finalMerged=buildMergedByWeek();
+  for(const weekISO of Object.keys(finalMerged).sort()){
+    const wk=finalMerged[weekISO];
+    const wkMetas=Object.values(wk.weekMeta);
+    const allHoliday=wkMetas.length&&wkMetas.every(m=>m.holidayOnly||m.skipped);
+    if(allHoliday)continue;
+    const matUse={};
+    Object.entries(wk.cells).forEach(([uid,cell])=>{
+      if(!cell.matId)return;
+      if(!matUse[cell.matId])matUse[cell.matId]=[];
+      matUse[cell.matId].push({uid,region:cell.region});
+    });
+    Object.entries(matUse).forEach(([mid,holders])=>{
+      if(holders.length<2)return;
+      const regionsSet=new Set(holders.map(h=>h.region));
+      if(regionsSet.size<2)return;
+      const matNm=(matById.get(mid)||{}).name||mid;
+      const swappable=holders.filter(h=>!inGroupUids.has(String(h.uid))).length;
+      _crRemainingDups.push({weekISO,mat:matNm,regions:[...regionsSet],uids:holders.length,swappable});
+    });
+  }
+  const summary=`🌍 cross-region dedup post-pass: ${_crSwapCount} החלפות ב-${_crPasses} מעברים · כפילויות בין-אזוריות שנותרו: ${_crRemainingDups.length}`;
+  try{console.log('[_crossRegionDedupSwap] '+summary,{swaps:_crSwapCount,passes:_crPasses,remainingDups:_crRemainingDups,swapEvents:_crSwapEvents.slice(0,20)})}catch(_){}
+  if(perRegion.length){
+    perRegion[0].warnings=perRegion[0].warnings||[];
+    perRegion[0].warnings.push({type:'cross_region_dedup_summary',msg:summary});
+    _crRemainingDups.slice(0,5).forEach(d=>{
+      perRegion[0].warnings.push({type:'cross_region_dedup_leftover',msg:`⚠ כפילות בין-אזורית: ${d.weekISO} · "${d.mat}" · ${d.regions.join('+')} · ${d.uids} מדריכות (${d.swappable} להחלפה)`});
+    });
+  }
+  return {swaps:_crSwapCount,passes:_crPasses,remainingDups:_crRemainingDups,swapEvents:_crSwapEvents};
+}
+// Expose for Node harness testing (no-op in production; import via property assignment doesn't hurt).
+if(typeof window!=='undefined')window._crossRegionDedupSwap=_crossRegionDedupSwap;
 // Open the smart-rotation modal — select region, run algorithm, preview + apply.
 function openSmartRotationMo(){
   if(!cu||cu.role!=='admin')return;
@@ -5007,6 +5247,14 @@ async function _smartRotRun(){
         });
       }
       if(!perRegion.length){resultEl.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;color:#991B1B;padding:12px;border-radius:8px;font-size:13px">⚠ לא נמצאו מדריכות חוגי חיות באף אזור.<br><br><b>אזורים שדולגו:</b><br>${skippedRegions.map(s=>`• ${esc(s.region)}: ${esc(s.error)}`).join('<br>')}</div>`;return}
+      /* CROSS-REGION DEDUP-SWAP: after every region is computed, sweep for the
+         same physical material assigned in the same week across multiple regions
+         (e.g. שוגר גליידר landing on both Tali-in-North + Gita-in-South on 26.10.11).
+         Intra-region passes can't see this. Mutates perRegion[*].proposal in place. */
+      try{
+        const _crRes=_crossRegionDedupSwap(perRegion);
+        console.log('[_smartRotRun] cross-region dedup done:',{swaps:_crRes.swaps,passes:_crRes.passes,remaining:_crRes.remainingDups.length});
+      }catch(_crErr){console.warn('[_smartRotRun] cross-region dedup failed:',_crErr&&_crErr.message||_crErr)}
       // Merge: for each week, combine assignments from all regions
       const mergedByWeek={};perRegion.forEach(rr=>{rr.proposal.forEach(w=>{if(!mergedByWeek[w.weekISO])mergedByWeek[w.weekISO]={weekISO:w.weekISO,assignments:{}};Object.assign(mergedByWeek[w.weekISO].assignments,w.assignments)})});
       const mergedProposal=Object.values(mergedByWeek).sort((a,b)=>a.weekISO.localeCompare(b.weekISO));
