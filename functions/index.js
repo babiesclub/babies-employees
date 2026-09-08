@@ -3465,10 +3465,16 @@ exports.markinvoicepaid = onCall(
       if (!callerDoc.exists || callerDoc.data().role !== "admin") {
         throw new HttpsError("permission-denied", "Admin only");
       }
-      const { invoiceId, paidDate, paidAmount, note, createReceipt, sendWhatsApp, mode: modeRaw, discountAmount: discountAmountRaw } = request.data || {};
+      const { invoiceId, paidDate, paidAmount, note, createReceipt, sendWhatsApp, mode: modeRaw, discountAmount: discountAmountRaw, paymentType: paymentTypeRaw, paymentAppName } = request.data || {};
       if (!invoiceId) throw new HttpsError("invalid-argument", "invoiceId required");
       if (!paidDate) throw new HttpsError("invalid-argument", "paidDate required");
       const mode = (modeRaw === "partial" || modeRaw === "discount") ? modeRaw : "full";
+      // Morning payment-type enum: 1=cash, 2=check, 3=credit card, 4=bank transfer,
+      // 5=bit, 10=payment app (PayBox / Bit-via-app). Default 4 keeps existing
+      // callers unchanged.
+      const _ALLOWED_PAY_TYPES = new Set([1, 2, 3, 4, 5, 10]);
+      const _payTypeN = Number(paymentTypeRaw);
+      const paymentType = _ALLOWED_PAY_TYPES.has(_payTypeN) ? _payTypeN : 4;
 
       const invoiceRef = admin.firestore().collection("invoices").doc(String(invoiceId));
       const invoiceSnap = await invoiceRef.get();
@@ -3618,10 +3624,11 @@ exports.markinvoicepaid = onCall(
             {
               date: paidDate,
               price: finalAmount,
-              type: 4, // bank transfer
+              type: paymentType, // 4=bank transfer (default), 5=bit, 10=payment app (PayBox / Bit)
             },
           ],
           remarks: "מבוסס על חשבון עסקה מס׳ " + (invoice.morningDocNumber || "") +
+            (paymentAppName ? " | תשלום דרך " + paymentAppName : "") +
             remarksSuffix + (note ? " | " + note : ""),
         };
         // Income lines only for 320 (חשבונית מס/קבלה). Type 400 (קבלה) shouldn't
@@ -3706,6 +3713,8 @@ exports.markinvoicepaid = onCall(
           receiptDocNumber: receipt.number,
           receiptDocType: receipt.type,
           receiptDocUrl: receipt.url,
+          receiptPaymentType: paymentType,
+          receiptPaymentAppName: paymentAppName || null,
           receiptCreatedAt: new Date().toISOString(),
           receiptHistory: admin.firestore.FieldValue.arrayUnion({
             id: receipt.id,
