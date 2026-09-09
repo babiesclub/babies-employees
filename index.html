@@ -4106,6 +4106,18 @@ async function computeAnnualRotation(region, opts){
      the next non-full working week (4.10) should get (d,c) — as if Sukkot didn't happen.
      Each entry: {uidA, uidB, matA, matB}. Consumed on first non-full-week after RH. */
   const _postClusterPairSwaps=[];
+  /* v33 (2026-09-10): pipeline-protected uids — members of a 3-pair super-cluster
+     (or the 2-pair+triple pipeline) whose weekly assignment is the ONLY correct
+     answer under the Latin-square swap pattern. Dedup passes must skip these
+     cells: swapping one member's mat desyncs the whole cluster's rotation and
+     produces the classic "one member correct swap, the other gets a fresh mat"
+     bug (see task ac8c0d62). Populated when the pipeline branch runs; consumed
+     by both intra-region dedup (below) and the cross-region + temporal-swap
+     dedup passes (via the return object).
+     NOTE: single-group Latin squares and unlinked pairs are NOT added — v31
+     free-agent-fallback still applies there because a one-cell swap there
+     doesn't destroy a coordinated Latin cycle across sub-groups. */
+  const _pipelineProtectedUids=new Set();
   const groupPipelines={};
   // State per group: {batch:[matId,...], batchStartWeekIdx:N|null}
   // Latin Square rotation: batch of N materials, cycled N weeks (each instructor sees each material once).
@@ -4369,6 +4381,9 @@ async function computeAnnualRotation(region, opts){
         const superId=superIdOf(_actCluster);
         if(!groupPipelines[superId+'::triple'])groupPipelines[superId+'::triple']={pairs:[null,null,null],lastShiftIdx:-1,runCount:0};
         const state=groupPipelines[superId+'::triple'];
+        // v33: mark ALL uids in this 3-pair super-cluster as pipeline-protected
+        // (idempotent across weeks — Set semantics). Dedup passes skip them.
+        _actCluster.forEach(g=>(g.instructorUids||[]).forEach(u=>_pipelineProtectedUids.add(String(u))));
         /* Count only weeks where THIS code actually runs — holiday-full weeks and
            holiday-only-lockdown weeks skip before reaching here, and shouldn't
            consume "shift" slots. First real working week starts the pipeline. */
@@ -4483,6 +4498,10 @@ async function computeAnnualRotation(region, opts){
           const superId=superIdOf(cluster);
           const stateKey=superId+'::pairpipe';
           if(!groupPipelines[stateKey])groupPipelines[stateKey]={pairSlots:[null,null],tripleMats:null,pairRunCount:0,tripleRunCount:0,lastPairShiftIdx:-1,lastTripleShiftIdx:-1,retiredQueue:[]};
+          // v33: mark ALL uids in this 2+2+3 super-cluster as pipeline-protected — same
+          // Latin-square desync risk as the 3-pair pipeline (dedup swap on one cell
+          // breaks the pair-swap coordination or the triple's rotation).
+          cluster.forEach(g=>(g.instructorUids||[]).forEach(u=>_pipelineProtectedUids.add(String(u))));
           const state=groupPipelines[stateKey];
           /* Split skip logic: PAIR skip if pair uids are pre-assigned (continuity swap wins),
              TRIPLE always runs (its uids never in _preAssignedUids). This ensures triple gets
@@ -4906,7 +4925,12 @@ async function computeAnnualRotation(region, opts){
              after this pass are logged as data problems. */
           const freeAgentUids=uidsOnDup.filter(u=>!inGroupUids.has(String(u)));
           const groupUids=uidsOnDup.filter(u=>inGroupUids.has(String(u)));
-          const swappableUids=freeAgentUids.length ? freeAgentUids.slice() : groupUids.slice();
+          // v33: 3-pair super-cluster (and 2+2+3 pipeline) members are OFF-LIMITS.
+          // Their weekly assignment is the ONLY correct answer under the coordinated
+          // Latin-square swap; swapping one desyncs the whole cluster. Group cells
+          // OUTSIDE those protected super-clusters remain fallback-swappable (v31).
+          const groupUidsSwappable=groupUids.filter(u=>!_pipelineProtectedUids.has(String(u)));
+          const swappableUids=freeAgentUids.length ? freeAgentUids.slice() : groupUidsSwappable.slice();
           const swappingGroupCells=(freeAgentUids.length===0);
           if(!swappableUids.length)continue;
           // Compute free alternatives per swappable uid. "Free" mirrors the openDupSwapMo
@@ -5013,7 +5037,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-09/v32-temporal-swap';
+  const _algoVersion='2026-09-10/v33-supergroup-latin';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -5038,6 +5062,8 @@ async function computeAnnualRotation(region, opts){
     weeksCount:weeks.length,
     proposal,warnings,
     algoVersion:_algoVersion,
+    // v33: exposed for cross-region + temporal-swap dedup passes to honor.
+    pipelineProtectedUids:[..._pipelineProtectedUids],
     holidayPoolSnapshot:_holidayPoolSnapshot,
     stats:{
       instructorsTotal:allInRegion.length,
@@ -5098,6 +5124,14 @@ function _crossRegionDedupSwap(perRegion, opts){
   const inGroupUids=opts.inGroupUids||(function(){
     const s=new Set();
     (typeof _rotGroups!=='undefined'?_rotGroups:[]).forEach(g=>(g.instructorUids||[]).forEach(uid=>s.add(String(uid))));
+    return s;
+  })();
+  /* v33 (2026-09-10): uids inside a 3-pair super-cluster (or the 2+2+3 pipeline) —
+     coordinated Latin-square swap; a single swap here desyncs the whole cluster.
+     Aggregated from each rr.pipelineProtectedUids (see computeAnnualRotation). */
+  const _pipelineProtectedUids=opts.pipelineProtectedUids||(function(){
+    const s=new Set();
+    (perRegion||[]).forEach(rr=>((rr&&rr.pipelineProtectedUids)||[]).forEach(u=>s.add(String(u))));
     return s;
   })();
   // uid → its region's rr (a uid only appears in one region's proposal)
@@ -5202,7 +5236,11 @@ function _crossRegionDedupSwap(perRegion, opts){
            the swap is logged so admin can review. */
         const freeAgentHolders=holders.filter(h=>!inGroupUids.has(String(h.uid)));
         const groupHolders=holders.filter(h=>inGroupUids.has(String(h.uid)));
-        const swappable=freeAgentHolders.length ? freeAgentHolders.slice() : groupHolders.slice();
+        // v33: 3-pair super-cluster / 2+2+3 pipeline members are protected —
+        // a swap here breaks the coordinated Latin-square swap across sub-groups.
+        // Group cells OUTSIDE those pipelines stay v31-fallback-swappable.
+        const groupHoldersSwappable=groupHolders.filter(h=>!_pipelineProtectedUids.has(String(h.uid)));
+        const swappable=freeAgentHolders.length ? freeAgentHolders.slice() : groupHoldersSwappable.slice();
         const swappingGroupCells=(freeAgentHolders.length===0);
         if(!swappable.length)continue;
         // Compute free alternatives per swappable uid
