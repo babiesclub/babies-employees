@@ -5071,7 +5071,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-10/v36-safe-tiered-dedup';
+  const _algoVersion='2026-09-10/v37-ripple-bidirectional';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -7330,17 +7330,20 @@ async function openDupSwapMo(weekId, uid, currentMatId){
   mo.innerHTML=`<div class="md" style="max-width:640px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>${_safeDup?'ℹ כפילות בטוחה':'⚠ מערך משוכפל'} · ${esc(u.name)}</span><span class="mc" onclick="document.getElementById('dup-swap-mo').classList.remove('open');document.getElementById('dup-swap-mo').style.display='none'">×</span></div>${_safeBanner}<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:10px;padding:12px 14px;margin-bottom:12px"><div style="font-size:13px;color:#78350F;line-height:1.6"><b>שבוע ${weekId}</b> — המערך <b>${esc((curMat||{}).name||'?')}</b> משובץ אצל ${1+dupNames.length} מדריכות:${dupNames.length?'<br>• '+esc(u.name)+' (כאן)<br>• '+dupNames.map(esc).join('<br>• '):''}</div></div><div style="font-size:12px;font-weight:700;color:#059669;margin-bottom:8px">✅ ${good.filter(c=>c.score>0).length} אלטרנטיבות פנויות (מקטינות שיכפול):</div>${good.filter(c=>c.score>0).slice(0,30).map(chip).join('')||'<div style="font-size:12px;color:var(--mut);font-style:italic">אין מערך פנוי שיקטין שיכפול</div>'}${good.filter(c=>c.score<=0).length?`<div style="font-size:12px;font-weight:700;color:#B45309;margin:12px 0 8px">⚠ ${good.filter(c=>c.score<=0).length} אלטרנטיבות שגם הן משוכפלות (תעביר שיכפול):</div>${good.filter(c=>c.score<=0).slice(0,10).map(chip).join('')}`:''}${bad.length?`<details style="margin-top:12px"><summary style="font-size:12px;color:var(--mut);cursor:pointer">🚫 ${bad.length} מערכים חסומים (חוקים)</summary><div style="margin-top:6px">${bad.slice(0,20).map(chip).join('')}</div></details>`:''}<div style="background:#F0F9FF;border-radius:8px;padding:8px 12px;font-size:11px;color:#0369A1;margin-top:12px;line-height:1.5">💡 לחיצה על מערך פנוי (ירוק) — יחליף כאן ויינעל אוטומטית. הצבעים: 🟢 פנוי (מקטין שיכפול) · 🟡 גם משוכפל · 🔴 חסום ע"י חוק.</div></div>`;
   mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
 }
-/* v35 (2026-09-10): Ripple-forward swap for manual dup-swap picker.
-   When admin picks M2 to replace M1 at (uid, weekA), look for a FUTURE cell in the
-   same region where M2 is already scheduled. If found, do a two-way swap:
+/* v37 (2026-09-10): Bi-directional ripple swap for manual dup-swap picker.
+   When admin picks M2 to replace M1 at (uid, weekA), look for ANY cell in the same
+   region (past OR future) where M2 is already scheduled. If found, do a two-way swap:
      - (uid, weekA) : M1 → M2   (what admin picked)
      - (uid2, weekB): M2 → M1   (M1 gets a new home instead of being deleted)
-   Preferences: same instructor's own future cell first; then any other instructor
-   in the same region who currently holds M2. Skip rotation-group cells (Latin-square
-   pipeline) and Sukkot fullWeek skips. Validate iron rule + season fit + category
-   cooldown (no 3+ consecutive same-category-group weeks) for BOTH sides.
-   Returns { uid2, weekB } or null. */
-function _rippleForwardSwap(uid, weekA, oldMatId, newMatId){
+   Preferences:
+     1. Same instructor (uid2 === uid) first, past OR future, smallest |Δweeks|.
+     2. Cross-instructor in same region, smallest |Δweeks|.
+   Skip rotation-group cells (Latin-square pipeline) and Sukkot fullWeek skips.
+   Validate iron rule + season fit + holiday-only compat + category cooldown
+   (no 3+ consecutive same-category-group weeks) for BOTH sides.
+   Returns { uid2, weekB } or null.
+   Prior v35 exported `_rippleForwardSwap`; that name is kept as an alias below. */
+function _rippleSwap(uid, weekA, oldMatId, newMatId){
   try{
     if(!uid||!weekA||!oldMatId||!newMatId||String(oldMatId)===String(newMatId))return null;
     const schedule=getWeeklySchedule();
@@ -7363,10 +7366,18 @@ function _rippleForwardSwap(uid, weekA, oldMatId, newMatId){
     (typeof _rotGroups!=='undefined'?_rotGroups:[]).filter(g=>g.regionName===region).forEach(g=>(g.instructorUids||[]).forEach(u=>groupUids.add(String(u))));
     // Feathered super-group: bird ~ chick (mirrors _temporalSwapDedup's `catGroupOf`)
     const catGroup=(c)=>{ if(c==='bird'||c==='chick')return 'feathered'; return c||'other'; };
-    // Ordered future weeks (strictly after weekA, inside school year, non-fullWeek-holiday)
+    // All weeks in the school year (except weekA), sorted by |Δ| from weekA — closest first.
     const yStart=(typeof SCHOOL_YEAR!=='undefined'&&SCHOOL_YEAR.start)||'0000-00-00';
     const yEnd=(typeof SCHOOL_YEAR!=='undefined'&&SCHOOL_YEAR.end)||'9999-99-99';
-    const weekISOs=Object.keys(schedule).filter(w=>w>weekA&&w>=yStart&&w<=yEnd).sort();
+    const _tA=Date.parse(weekA);
+    const weekISOs=Object.keys(schedule)
+      .filter(w=>w!==weekA&&w>=yStart&&w<=yEnd)
+      .sort((a,b)=>{
+        const dA=Math.abs(Date.parse(a)-_tA);
+        const dB=Math.abs(Date.parse(b)-_tA);
+        if(dA!==dB)return dA-dB;
+        return a<b?-1:(a>b?1:0);
+      });
     const isSkipWeek=(wISO)=>{
       const h=typeof getHolidayForWeek==='function'?getHolidayForWeek(wISO):(typeof ISRAELI_HOLIDAYS!=='undefined'?ISRAELI_HOLIDAYS[wISO]:null);
       return !!(h&&h.fullWeek);
@@ -7417,7 +7428,9 @@ function _rippleForwardSwap(uid, weekA, oldMatId, newMatId){
       }
       return true;
     };
-    // Two passes: same-instructor first (preference 1), then cross-instructor (preference 2)
+    // Two passes: same-instructor first (preference 1), then cross-instructor (preference 2).
+    // Within each pass, weekISOs is already sorted by |Δ| from weekA — closest first
+    // regardless of past/future direction.
     for(const pass of ['self','other']){
       for(const wISO of weekISOs){
         if(isSkipWeek(wISO))continue;
@@ -7447,7 +7460,11 @@ function _rippleForwardSwap(uid, weekA, oldMatId, newMatId){
       }
     }
     return null;
-  }catch(e){console.warn('_rippleForwardSwap error:',e);return null}
+  }catch(e){console.warn('_rippleSwap error:',e);return null}
+}
+// Back-compat alias for any callers still referencing v35's function name.
+function _rippleForwardSwap(uid, weekA, oldMatId, newMatId){
+  return _rippleSwap(uid, weekA, oldMatId, newMatId);
 }
 async function confirmDupSwap(weekId, uid, newMatId){
   const mats=getMaterials();const m=mats.find(x=>x.id===newMatId);
@@ -7456,28 +7473,34 @@ async function confirmDupSwap(weekId, uid, newMatId){
   const oldMatId=((schedule[weekId]||{}).assignments||{})[uid]||'';
   const oldMat=mats.find(x=>x.id===oldMatId);
   const oldName=(oldMat&&oldMat.name)||(oldMatId?String(oldMatId).slice(0,8):'—');
-  if(!confirm(`להחליף למערך "${m.name}"?\n\nהאלגוריתם ינסה קודם למצוא מיקום עתידי ל-"${oldName}" באזור (ripple-forward). אם יימצא — שני התאים יתעדכנו וייעלו. אם לא — "${oldName}" יוסר מהמערכת השבועית.`))return;
-  const ripple=(oldMatId&&typeof _rippleForwardSwap==='function')?_rippleForwardSwap(uid,weekId,oldMatId,newMatId):null;
+  if(!confirm(`להחליף למערך "${m.name}"?\n\nהאלגוריתם ינסה קודם למצוא מיקום אחר ל-"${oldName}" באזור — עתיד או עבר (ripple דו-כיווני, הכי קרוב קודם). אם יימצא — שני התאים יתעדכנו וייעלו. אם לא — "${oldName}" יוסר מהמערכת השבועית.`))return;
+  const ripple=(oldMatId&&typeof _rippleSwap==='function')?_rippleSwap(uid,weekId,oldMatId,newMatId):((oldMatId&&typeof _rippleForwardSwap==='function')?_rippleForwardSwap(uid,weekId,oldMatId,newMatId):null);
   if(ripple&&ripple.uid2&&ripple.weekB){
     const users=[...(DB.get('users')||[]),...(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[])];
     const u2=users.find(x=>String(x.uid||x.id)===String(ripple.uid2));
     const u2Name=(u2&&u2.name)||String(ripple.uid2).slice(0,8);
+    const isPast=ripple.weekB<weekId;
     // Apply weekA first, then weekB (both locked so recompute won't undo).
     await setWschAssignment(weekId,uid,newMatId,true);
     await setWschAssignment(ripple.weekB,ripple.uid2,oldMatId,true);
     if(cu&&cu.role==='admin'&&typeof _logAudit==='function'){
       const u1=users.find(x=>String(x.uid||x.id)===String(uid));
       const u1Name=(u1&&u1.name)||String(uid).slice(0,8);
-      _logAudit('swap','schedule',`ripple/${weekId}/${uid}`,`ripple-forward · ${weekId}/${u1Name}: "${oldName}"→"${m.name}" ⇄ ${ripple.weekB}/${u2Name}: "${m.name}"→"${oldName}"`);
+      const dirLbl=isPast?'ripple-bi (past)':'ripple-forward';
+      _logAudit('swap','schedule',`ripple/${weekId}/${uid}`,`${dirLbl} · ${weekId}/${u1Name}: "${oldName}"→"${m.name}" ⇄ ${ripple.weekB}/${u2Name}: "${m.name}"→"${oldName}"`);
     }
-    alert(`🔀 ripple-forward בוצע!\n\n"${m.name}" הועבר לשבוע ${weekId}\n"${oldName}" הועבר לשבוע ${ripple.weekB} (${u2Name})\n\nשני התאים נעולים — האלגוריתם לא ידרוס.`);
+    if(isPast){
+      alert(`🔀 ripple בי-כיווני!\n\n"${m.name}" הועבר לשבוע ${weekId}\n"${oldName}" הועבר לשבוע ${ripple.weekB} (בעבר · ${u2Name})\n\nשני התאים נעולים.`);
+    } else {
+      alert(`🔀 ripple-forward בוצע!\n\n"${m.name}" הועבר לשבוע ${weekId}\n"${oldName}" הועבר לשבוע ${ripple.weekB} (${u2Name})\n\nשני התאים נעולים — האלגוריתם לא ידרוס.`);
+    }
   } else {
     // Fallback — original behavior (oldMat disappears from the region's weekly schedule)
     await setWschAssignment(weekId,uid,newMatId,true);
     if(cu&&cu.role==='admin'&&typeof _logAudit==='function'){
-      _logAudit('swap','schedule',`dupswap/${weekId}/${uid}`,`dup-swap ללא ripple · ${weekId}/${uid.slice(0,8)}: "${oldName}"→"${m.name}" (הוסר "${oldName}" — לא נמצא מיקום עתידי)`);
+      _logAudit('swap','schedule',`dupswap/${weekId}/${uid}`,`dup-swap ללא ripple · ${weekId}/${uid.slice(0,8)}: "${oldName}"→"${m.name}" (הוסר "${oldName}" — לא נמצא מיקום אחר בעתיד או בעבר)`);
     }
-    alert(`⚠ "${oldName}" הוסר מהמערכת השבועית באזור — לא נמצא מיקום עתידי מתאים.\n\n"${m.name}" שובץ בשבוע ${weekId}.`);
+    alert(`⚠ "${oldName}" הוסר מהמערכת השבועית באזור — לא נמצא מיקום מתאים בעתיד או בעבר.\n\n"${m.name}" שובץ בשבוע ${weekId}.`);
   }
   const moEl=document.getElementById('dup-swap-mo');if(moEl){moEl.classList.remove('open');moEl.style.display='none'}
   renderWschGrid();
