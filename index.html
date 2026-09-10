@@ -5071,7 +5071,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-10/v37-ripple-bidirectional';
+  const _algoVersion='2026-09-11/v38-pipeline-cascade';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -7330,6 +7330,164 @@ async function openDupSwapMo(weekId, uid, currentMatId){
   mo.innerHTML=`<div class="md" style="max-width:640px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>${_safeDup?'ℹ כפילות בטוחה':'⚠ מערך משוכפל'} · ${esc(u.name)}</span><span class="mc" onclick="document.getElementById('dup-swap-mo').classList.remove('open');document.getElementById('dup-swap-mo').style.display='none'">×</span></div>${_safeBanner}<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:10px;padding:12px 14px;margin-bottom:12px"><div style="font-size:13px;color:#78350F;line-height:1.6"><b>שבוע ${weekId}</b> — המערך <b>${esc((curMat||{}).name||'?')}</b> משובץ אצל ${1+dupNames.length} מדריכות:${dupNames.length?'<br>• '+esc(u.name)+' (כאן)<br>• '+dupNames.map(esc).join('<br>• '):''}</div></div><div style="font-size:12px;font-weight:700;color:#059669;margin-bottom:8px">✅ ${good.filter(c=>c.score>0).length} אלטרנטיבות פנויות (מקטינות שיכפול):</div>${good.filter(c=>c.score>0).slice(0,30).map(chip).join('')||'<div style="font-size:12px;color:var(--mut);font-style:italic">אין מערך פנוי שיקטין שיכפול</div>'}${good.filter(c=>c.score<=0).length?`<div style="font-size:12px;font-weight:700;color:#B45309;margin:12px 0 8px">⚠ ${good.filter(c=>c.score<=0).length} אלטרנטיבות שגם הן משוכפלות (תעביר שיכפול):</div>${good.filter(c=>c.score<=0).slice(0,10).map(chip).join('')}`:''}${bad.length?`<details style="margin-top:12px"><summary style="font-size:12px;color:var(--mut);cursor:pointer">🚫 ${bad.length} מערכים חסומים (חוקים)</summary><div style="margin-top:6px">${bad.slice(0,20).map(chip).join('')}</div></details>`:''}<div style="background:#F0F9FF;border-radius:8px;padding:8px 12px;font-size:11px;color:#0369A1;margin-top:12px;line-height:1.5">💡 לחיצה על מערך פנוי (ירוק) — יחליף כאן ויינעל אוטומטית. הצבעים: 🟢 פנוי (מקטין שיכפול) · 🟡 גם משוכפל · 🔴 חסום ע"י חוק.</div></div>`;
   mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
 }
+/* v38 (2026-09-11): Pipeline Logistics Cascade — physical-inventory-aware swap
+   for cells inside a super-cluster (linked rotation groups whose sub-groups share
+   a driver-transported material pool).
+
+   Motivation. v35/v37's ripple treats every cell as independent: when admin picks
+   newMat to replace oldMat at (uid, weekA), it looks for another cell where newMat
+   is already scheduled and does a two-way trade. That's fine for free-agent cells,
+   but wrong for super-cluster cells — those cells are members of a shared 2-mat
+   BATCH that the driver physically transports through the pipeline. If Maayan's
+   4/10 no longer holds שרקן, then Gita's 20/9 (previous pipeline position that
+   originally provided that physical animal) shouldn't hold שרקן either, and the
+   whole batch should re-form around a coherent new pool.
+
+   Algorithm.
+     1. Detect super-cluster: find uid's rotation group, follow linkedGroupIds via
+        BFS. If the connected component has ≥ 2 sub-groups → super-cluster branch.
+        Otherwise return null → caller falls back to v37 _rippleSwap.
+     2. Identify uid's sub-group (must be a 2-uid pair for v38 initial ship;
+        triples fall back to v37).
+     3. Compute batch pool at weekA: {oldMatId, partnerMatId} where partnerMatId
+        is uid's pair-mate's assignment at weekA.
+     4. Find all "pipeline cells" — all cells within the super-cluster (any uid,
+        any week) whose current mat ∈ pool. Iron rule ensures the pool's mat set
+        appears only in the batch's cells inside the super-cluster.
+     5. Substitution: cells with oldMatId → newMatId; cells with partnerMatId →
+        unchanged. Latin square within each pair-week is preserved by construction
+        (each pair still holds {newMatId, partnerMatId} across its 2 weeks).
+     6. Validate:
+        - Iron rule for EVERY affected uid — newMatId must not appear anywhere in
+          that uid's year outside the pipeline cells being changed.
+        - Season fit + holiday-only compat for newMatId at each changed week.
+        - No cross-region collision: newMatId not already assigned to any uid
+          outside the super-cluster at any of the changed weeks.
+     7. On any failure → return null → caller falls back to v37 _rippleSwap.
+
+   Returns { changes: [{uid, week, oldMat, newMat}, ...], poolBefore, poolAfter }
+   or null. Caller applies changes atomically and locks them so recompute won't
+   undo. All lookups pure; no DOM/Firestore side effects here. */
+function _pipelineCascadeSwap(uid, weekA, oldMatId, newMatId){
+  try{
+    if(!uid||!weekA||!oldMatId||!newMatId||String(oldMatId)===String(newMatId))return null;
+    const schedule=getWeeklySchedule();
+    const materials=getMaterials();
+    const matById=Object.fromEntries(materials.map(m=>[m.id,m]));
+    const oldMat=matById[oldMatId], newMat=matById[newMatId];
+    if(!oldMat||!newMat)return null;
+    const uidStr=String(uid);
+    const rotGroups=(typeof _rotGroups!=='undefined')?_rotGroups:[];
+    // Find uid's rotation group
+    const mySubGroup=rotGroups.find(g=>(g.instructorUids||[]).map(String).includes(uidStr));
+    if(!mySubGroup)return null;
+    // Must be linked (part of a super-cluster). Unlinked single groups defer to v37.
+    if(!(mySubGroup.linkedGroupIds||[]).length)return null;
+    // BFS the connected component within the same region
+    const groupsInRegion=rotGroups.filter(g=>g.regionName===mySubGroup.regionName);
+    const groupById=Object.fromEntries(groupsInRegion.map(g=>[g.id,g]));
+    const clusterIds=new Set();
+    const q=[mySubGroup.id];
+    while(q.length){
+      const gid=q.shift();
+      if(clusterIds.has(gid))continue;
+      clusterIds.add(gid);
+      const grp=groupById[gid];
+      if(!grp)continue;
+      (grp.linkedGroupIds||[]).forEach(other=>{if(!clusterIds.has(other)&&groupById[other])q.push(other)});
+    }
+    if(clusterIds.size<2)return null; // Not actually linked to anyone
+    // Collect all uids in the super-cluster
+    const clusterUids=new Set();
+    clusterIds.forEach(gid=>{const grp=groupById[gid];if(grp)(grp.instructorUids||[]).forEach(u=>clusterUids.add(String(u)))});
+    if(!clusterUids.has(uidStr))return null;
+    // v38 initial ship: only pair sub-groups (cycleLen=2). Triple sub-groups (size 3)
+    // in 2+2+3 super-clusters have a 3-mat pool + shifted-diagonal Latin square that
+    // needs richer bookkeeping — defer to v37 there.
+    const subGroupUids=(mySubGroup.instructorUids||[]).map(String);
+    if(subGroupUids.length!==2)return null;
+    const partnerUid=subGroupUids.find(u=>u!==uidStr);
+    if(!partnerUid)return null;
+    // Batch pool at weekA = {my mat @ weekA, partner mat @ weekA}. If the partner has
+    // no mat at weekA or the pool would degenerate → bail.
+    const weekAAssigns=(schedule[weekA]||{}).assignments||{};
+    if(String(weekAAssigns[uidStr])!==String(oldMatId))return null; // Sanity — caller's oldMatId matches
+    const partnerMatId=weekAAssigns[partnerUid];
+    if(!partnerMatId)return null;
+    if(String(partnerMatId)===String(oldMatId))return null; // Pool would collapse
+    if(String(partnerMatId)===String(newMatId))return null; // newMat already in pool → dup within pool
+    const poolBefore=[String(oldMatId),String(partnerMatId)];
+    const poolAfter=[String(newMatId),String(partnerMatId)];
+    // Find all pipeline cells: (u,w) in super-cluster where cur mat ∈ pool. Iron rule
+    // makes this equivalent to "all cells this batch occupies during its lifetime".
+    const yStart=(typeof SCHOOL_YEAR!=='undefined'&&SCHOOL_YEAR.start)||'0000-00-00';
+    const yEnd=(typeof SCHOOL_YEAR!=='undefined'&&SCHOOL_YEAR.end)||'9999-99-99';
+    const affected=[]; // {uid, week, currentMat}
+    Object.entries(schedule).forEach(([wISO,wk])=>{
+      if(!wk||!wk.assignments)return;
+      if(wISO<yStart||wISO>yEnd)return;
+      Object.entries(wk.assignments).forEach(([u,mid])=>{
+        if(!clusterUids.has(String(u)))return;
+        const midS=String(mid);
+        if(midS===String(oldMatId)||midS===String(partnerMatId)){
+          affected.push({uid:String(u),week:wISO,currentMat:midS});
+        }
+      });
+    });
+    if(!affected.length)return null;
+    // Substitution: oldMatId → newMatId; partnerMatId → keep.
+    const changes=affected
+      .filter(c=>c.currentMat===String(oldMatId))
+      .map(c=>({uid:c.uid,week:c.week,oldMat:String(oldMatId),newMat:String(newMatId)}));
+    if(!changes.length)return null;
+    // Iron rule: for every uid whose assignment is changing, newMatId must not appear
+    // anywhere else in that uid's year. Cells being changed are treated as freed.
+    const changeKey=new Set(changes.map(c=>c.uid+'|'+c.week));
+    const changedUids=new Set(changes.map(c=>c.uid));
+    for(const u of changedUids){
+      for(const wISO of Object.keys(schedule)){
+        if(wISO<yStart||wISO>yEnd)continue;
+        if(changeKey.has(u+'|'+wISO))continue;
+        const mid=((schedule[wISO]||{}).assignments||{})[u];
+        if(!mid)continue;
+        if(String(mid)===String(newMatId))return null; // Iron rule violation
+      }
+    }
+    // Season fit + holiday-only compat for newMatId at every changed week.
+    const seasonOK=(mat,wISO)=>{
+      if(typeof _matSeasonFits!=='function')return true;
+      return _matSeasonFits(mat,wISO,(typeof HOLIDAYS_5787!=='undefined'?HOLIDAYS_5787:{}));
+    };
+    const holidayCompat=(mat,wISO)=>{
+      const isHoli=(typeof _matIsHolidayOnlyMaterial==='function')?_matIsHolidayOnlyMaterial(mat):false;
+      if(isHoli){
+        return (typeof _matIsHolidayOnlyFor==='function')?_matIsHolidayOnlyFor(mat,wISO):false;
+      }
+      if(typeof HOLIDAY_ONLY_WEEKS!=='undefined'&&HOLIDAY_ONLY_WEEKS[wISO])return false;
+      return true;
+    };
+    const isSkipWeek=(wISO)=>{
+      const h=(typeof getHolidayForWeek==='function')?getHolidayForWeek(wISO):((typeof ISRAELI_HOLIDAYS!=='undefined'?ISRAELI_HOLIDAYS[wISO]:null));
+      return !!(h&&h.fullWeek);
+    };
+    for(const c of changes){
+      if(isSkipWeek(c.week))return null; // Sukkot skip cell shouldn't hold an assignment
+      if(!seasonOK(newMat,c.week))return null;
+      if(!holidayCompat(newMat,c.week))return null;
+    }
+    // Cross-region collision: newMatId not already assigned to any uid OUTSIDE the
+    // super-cluster at any of the changed weeks.
+    for(const c of changes){
+      const wk=schedule[c.week];
+      if(!wk||!wk.assignments)continue;
+      for(const [u,mid] of Object.entries(wk.assignments)){
+        if(clusterUids.has(String(u)))continue; // Same super-cluster — fine
+        if(String(mid)===String(newMatId))return null; // Cross-region duplicate would surface
+      }
+    }
+    return {changes,poolBefore,poolAfter,superClusterSize:clusterUids.size,affectedCount:affected.length};
+  }catch(e){console.warn('_pipelineCascadeSwap error:',e);return null}
+}
 /* v37 (2026-09-10): Bi-directional ripple swap for manual dup-swap picker.
    When admin picks M2 to replace M1 at (uid, weekA), look for ANY cell in the same
    region (past OR future) where M2 is already scheduled. If found, do a two-way swap:
@@ -7473,6 +7631,46 @@ async function confirmDupSwap(weekId, uid, newMatId){
   const oldMatId=((schedule[weekId]||{}).assignments||{})[uid]||'';
   const oldMat=mats.find(x=>x.id===oldMatId);
   const oldName=(oldMat&&oldMat.name)||(oldMatId?String(oldMatId).slice(0,8):'—');
+  /* v38 (2026-09-11): try pipeline cascade FIRST for super-cluster cells.
+     Cascade returns an atomic multi-cell change that keeps the driver-transported
+     batch pool consistent. Only super-cluster pair cells qualify — for anything
+     else (free agents, single-group Latin square, triples) `_pipelineCascadeSwap`
+     returns null and we fall through to v37 ripple. */
+  const cascade=(oldMatId&&typeof _pipelineCascadeSwap==='function')?_pipelineCascadeSwap(uid,weekId,oldMatId,newMatId):null;
+  if(cascade&&cascade.changes&&cascade.changes.length){
+    const users=[...(DB.get('users')||[]),...(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[])];
+    const userNameOf=(u2)=>{const usr=users.find(x=>String(x.uid||x.id)===String(u2));return (usr&&usr.name)||String(u2).slice(0,8)};
+    const matNameOf=(mid)=>{const mm=mats.find(x=>String(x.id)===String(mid));return (mm&&mm.name)||String(mid).slice(0,8)};
+    // Preview lines — one per changed cell. Highlight the admin's specific pick first.
+    const primary=cascade.changes.find(c=>String(c.uid)===String(uid)&&c.week===weekId);
+    const others=cascade.changes.filter(c=>!(String(c.uid)===String(uid)&&c.week===weekId));
+    const _fmt=(c,mark)=>`  ${mark||'•'} ${userNameOf(c.uid)} · ${c.week}: "${matNameOf(c.oldMat)}" → "${matNameOf(c.newMat)}"`;
+    const lines=[];
+    if(primary)lines.push(_fmt(primary,'✱'));
+    others.forEach(c=>lines.push(_fmt(c,'•')));
+    const msg=
+      `🔀 שרשור פייפליין (v38): כדי לשים "${m.name}" ב-${userNameOf(uid)} ${weekId},\n`+
+      `הפול של הבאטש בסופר-קלסטר (${cascade.superClusterSize} מדריכות) מתעדכן:\n`+
+      `  לפני: {"${matNameOf(cascade.poolBefore[0])}", "${matNameOf(cascade.poolBefore[1])}"}\n`+
+      `  אחרי: {"${matNameOf(cascade.poolAfter[0])}", "${matNameOf(cascade.poolAfter[1])}"}\n\n`+
+      `${cascade.changes.length} תאים משתנים (יעל שרשרת הנהג):\n`+lines.join('\n')+
+      `\n\nכל התאים ינעלו — האלגוריתם לא ידרוס. חוק ברזל / עונתיות / כפילות בין-אזורית — נבדקו ועברו.\n\nלאשר?`;
+    if(!confirm(msg)){
+      const moEl=document.getElementById('dup-swap-mo');if(moEl){moEl.classList.remove('open');moEl.style.display='none'}
+      return;
+    }
+    // Apply all changes, each locked. Primary first for auditability.
+    if(primary)await setWschAssignment(primary.week,primary.uid,primary.newMat,true);
+    for(const c of others)await setWschAssignment(c.week,c.uid,c.newMat,true);
+    if(cu&&cu.role==='admin'&&typeof _logAudit==='function'){
+      const label=`pipeline-cascade · pool {${matNameOf(cascade.poolBefore[0])},${matNameOf(cascade.poolBefore[1])}} → {${matNameOf(cascade.poolAfter[0])},${matNameOf(cascade.poolAfter[1])}} · ${cascade.changes.length} תאים`;
+      _logAudit('swap','schedule',`cascade/${weekId}/${uid}`,label,{changes:cascade.changes});
+    }
+    alert(`✅ שרשור פייפליין בוצע!\n\n${cascade.changes.length} תאים עודכנו ונעולים.\n\nהבאטש הפיזי של הנהג עכשיו: "${matNameOf(cascade.poolAfter[0])}" + "${matNameOf(cascade.poolAfter[1])}".`);
+    const moEl=document.getElementById('dup-swap-mo');if(moEl){moEl.classList.remove('open');moEl.style.display='none'}
+    renderWschGrid();
+    return;
+  }
   if(!confirm(`להחליף למערך "${m.name}"?\n\nהאלגוריתם ינסה קודם למצוא מיקום אחר ל-"${oldName}" באזור — עתיד או עבר (ripple דו-כיווני, הכי קרוב קודם). אם יימצא — שני התאים יתעדכנו וייעלו. אם לא — "${oldName}" יוסר מהמערכת השבועית.`))return;
   const ripple=(oldMatId&&typeof _rippleSwap==='function')?_rippleSwap(uid,weekId,oldMatId,newMatId):((oldMatId&&typeof _rippleForwardSwap==='function')?_rippleForwardSwap(uid,weekId,oldMatId,newMatId):null);
   if(ripple&&ripple.uid2&&ripple.weekB){
