@@ -4483,6 +4483,9 @@ async function computeAnnualRotation(region, opts){
             if(!matId)return;
             if(!_uidActiveInWeek(uid,weekISO))return;
             weekAssignments[uid]=matId;
+            // v36: record pipeline pool metadata for this uid+week (3-pair pipeline)
+            if(!_pipelinePoolByWeek[weekISO])_pipelinePoolByWeek[weekISO]={};
+            _pipelinePoolByWeek[weekISO][uid]={superId,subGroupId:pair.id,subGroupUids:uids.slice(),poolMatIds:mats.slice(),shiftIdx,weekInShift,pIdx,cycleLen:2,pipelineKind:'3pair'};
             const mat=materials.find(m=>m.id===matId);
             if(mat){
               const animal=(mat.animalName||mat.name||'').trim();
@@ -4584,7 +4587,12 @@ async function computeAnnualRotation(region, opts){
               uids.forEach((uid,pos)=>{
                 const matIdx=(pos+pairWeekInShift)%2;
                 const matId=mats[matIdx];
-                if(matId)_recordPipe(uid,matId);
+                if(matId){
+                  _recordPipe(uid,matId);
+                  // v36: pool metadata for pair sub-group of 2+2+3 pipeline
+                  if(!_pipelinePoolByWeek[weekISO])_pipelinePoolByWeek[weekISO]={};
+                  _pipelinePoolByWeek[weekISO][uid]={superId,subGroupId:pairG.id,subGroupUids:uids.slice(),poolMatIds:mats.slice(),shiftIdx:pairShiftIdx,weekInShift:pairWeekInShift,pIdx:slotIdx,cycleLen:2,pipelineKind:'pair2p3'};
+                }
               });
             });
           }
@@ -4611,7 +4619,12 @@ async function computeAnnualRotation(region, opts){
           tripleUids.forEach((uid,pos)=>{
             const matIdx=((pos-tripleWeekInBatch)%3+3)%3;
             const matId=state.tripleMats&&state.tripleMats[matIdx];
-            if(matId)_recordPipe(uid,matId);
+            if(matId){
+              _recordPipe(uid,matId);
+              // v36: pool metadata for triple sub-group of 2+2+3 pipeline
+              if(!_pipelinePoolByWeek[weekISO])_pipelinePoolByWeek[weekISO]={};
+              _pipelinePoolByWeek[weekISO][uid]={superId,subGroupId:tripleG.id,subGroupUids:tripleUids.slice(),poolMatIds:(state.tripleMats||[]).slice(),shiftIdx:tripleShiftIdx,weekInShift:tripleWeekInBatch,pIdx:2,cycleLen:3,pipelineKind:'triple2p3'};
+            }
           });
           continue; // handled
         }
@@ -5058,7 +5071,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-10/v35-ripple-forward-swap';
+  const _algoVersion='2026-09-10/v36-safe-tiered-dedup';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -5085,6 +5098,11 @@ async function computeAnnualRotation(region, opts){
     algoVersion:_algoVersion,
     // v33: exposed for cross-region + temporal-swap dedup passes to honor.
     pipelineProtectedUids:[..._pipelineProtectedUids],
+    // v36: pool metadata per (weekISO, uid) — enables Tier 1 (♻ pool-internal
+    // swap) and Tier 2 (⇄ pool temporal-swap) in cross-region dedup so
+    // super-cluster cells can resolve dups WITHOUT breaking their Latin square.
+    // Consumed by `_crossRegionDedupSwap` — see there for the tier semantics.
+    pipelinePoolByWeek:_pipelinePoolByWeek,
     holidayPoolSnapshot:_holidayPoolSnapshot,
     stats:{
       instructorsTotal:allInRegion.length,
@@ -5150,10 +5168,44 @@ function _crossRegionDedupSwap(perRegion, opts){
   /* v33 (2026-09-10): uids inside a 3-pair super-cluster (or the 2+2+3 pipeline) —
      coordinated Latin-square swap; a single swap here desyncs the whole cluster.
      Aggregated from each rr.pipelineProtectedUids (see computeAnnualRotation). */
-  const _pipelineProtectedUids=opts.pipelineProtectedUids||(function(){
+  const _pipelineProtectedUids=(function(){
     const s=new Set();
+    const src=opts.pipelineProtectedUids;
+    if(src){
+      if(src instanceof Set)src.forEach(u=>s.add(String(u)));
+      else if(Array.isArray(src))src.forEach(u=>s.add(String(u)));
+      else if(typeof src==='object')Object.values(src).forEach(u=>s.add(String(u)));
+      return s;
+    }
     (perRegion||[]).forEach(rr=>((rr&&rr.pipelineProtectedUids)||[]).forEach(u=>s.add(String(u))));
     return s;
+  })();
+  /* v36 (2026-09-10): per-week per-uid pipeline pool metadata — enables SAFE
+     tiered swap for pipeline-protected cells. Both tiers preserve every uid's
+     Latin square within the sub-group (v34's destructive T3 is OMITTED):
+       T1 (♻ pool-internal swap): for THIS cycle, swap uid↔pair-mate assignments
+         at every cycle week. Latin square holds because both uids still see the
+         same 2-mat pool over the cycle, just at flipped dates.
+       T2 (⇄ pool temporal-swap): swap the ENTIRE pool of the current cycle with
+         a FUTURE cycle's pool for the same sub-group. Iron rule holds because
+         each uid's total set of pool mats over the year is unchanged.
+     If both fail → NO SWAP (v33 fallback). Dup stays, admin resolves manually
+     via v35 ripple-forward modal.
+     Shape:
+       _poolByWeek[weekISO][uidStr] = {superId, subGroupId, subGroupUids,
+         poolMatIds, shiftIdx, weekInShift, pIdx, cycleLen, pipelineKind}
+     Empty object when no super-cluster pipeline exists → dedup behaves as v33. */
+  const _poolByWeek=opts.pipelinePoolByWeek||(function(){
+    const m={};
+    (perRegion||[]).forEach(rr=>{
+      const pbw=rr&&rr.pipelinePoolByWeek;
+      if(!pbw)return;
+      Object.keys(pbw).forEach(wISO=>{
+        if(!m[wISO])m[wISO]={};
+        Object.entries(pbw[wISO]||{}).forEach(([uid,meta])=>{m[wISO][String(uid)]=meta});
+      });
+    });
+    return m;
   })();
   // uid → its region's rr (a uid only appears in one region's proposal)
   const uidToRR=new Map();
@@ -5212,9 +5264,271 @@ function _crossRegionDedupSwap(perRegion, opts){
     });
     return m;
   };
+  /* v36: pipeline-aware SAFE tier helpers — preserve Latin square by construction.
+     Given a duplicate at (holderUid, weekISO, dupMatId), try:
+       T1 → swap holder↔pair-mate assignments across ALL cycle weeks (column swap).
+       T2 → swap ENTIRE current-cycle pool with a future cycle's pool (same sub-group).
+     Return {tier:1|2, swaps:N, msg} on success, null on failure. Mutates
+     perRegion[*].proposal in place on success. */
+  const _seasonFitsAt=(matId,weekISO)=>{
+    const m=matById.get(matId);if(!m)return false;
+    return seasonFits(m,weekISO,holidayDates);
+  };
+  // List of weekISOs in the same cycle as (uidStr, weekISO): same superId/subGroupId/shiftIdx.
+  const _cycleWeeksFor=(uidStr,weekISO)=>{
+    const meta=_poolByWeek[weekISO]&&_poolByWeek[weekISO][uidStr];
+    if(!meta)return null;
+    const weeks=[];
+    Object.keys(_poolByWeek).sort().forEach(w=>{
+      const m=_poolByWeek[w]&&_poolByWeek[w][uidStr];
+      if(m && m.superId===meta.superId && m.subGroupId===meta.subGroupId && m.shiftIdx===meta.shiftIdx){
+        weeks.push(w);
+      }
+    });
+    return weeks;
+  };
+  // Future cycles for (uidStr, weekISO), sorted by shiftIdx ASC.
+  const _futureCyclesFor=(uidStr,weekISO)=>{
+    const meta=_poolByWeek[weekISO]&&_poolByWeek[weekISO][uidStr];
+    if(!meta)return [];
+    const byCycle={};
+    Object.keys(_poolByWeek).sort().forEach(w=>{
+      const m=_poolByWeek[w]&&_poolByWeek[w][uidStr];
+      if(m && m.superId===meta.superId && m.subGroupId===meta.subGroupId && m.shiftIdx>meta.shiftIdx){
+        if(!byCycle[m.shiftIdx])byCycle[m.shiftIdx]={shiftIdx:m.shiftIdx,weeks:[],poolMatIds:m.poolMatIds.slice()};
+        byCycle[m.shiftIdx].weeks.push(w);
+      }
+    });
+    return Object.values(byCycle).sort((a,b)=>a.shiftIdx-b.shiftIdx);
+  };
+  /* Tier 1 (♻ pool-internal): swap holder↔pair-mate across the WHOLE current
+     cycle. Latin square preserved: for each cycle week, the 2 mats stay the
+     same (just relabeled between holder & pair-mate).
+     Works when:
+       - Sub-group has cycleLen 2 (pair). Triple sub-groups (cycleLen 3) skipped
+         because a "column swap" needs a chosen partner + rotation direction —
+         out of scope for T1's simple pair swap.
+       - Pair-mate is in the same region as holder.
+       - The candidate mat (holder's new mat = pair-mate's current mat) is NOT
+         dupMatId at holder's week (else swap is a no-op).
+       - No new same-region or cross-region shared-physical collision at ANY
+         cycle week after the swap. */
+  const _tryTier1=(holderUid,weekISO,dupMatId,holderRegion)=>{
+    const meta=_poolByWeek[weekISO]&&_poolByWeek[weekISO][holderUid];
+    if(!meta)return null;
+    if(meta.cycleLen!==2)return null;
+    const subUids=meta.subGroupUids||[];
+    if(subUids.length!==2)return null;
+    const partnerUid=subUids.map(String).find(u=>u!==String(holderUid));
+    if(!partnerUid)return null;
+    const cycleWeeks=_cycleWeeksFor(String(holderUid),weekISO);
+    if(!cycleWeeks||!cycleWeeks.length)return null;
+    // Build fresh merged snapshot each attempt so earlier same-pass mutations are visible.
+    const merged=buildMergedByWeek();
+    const plan=[];
+    for(const cw of cycleWeeks){
+      const cwWk=merged[cw];if(!cwWk)return null;
+      const hCell=cwWk.cells[String(holderUid)];const pCell=cwWk.cells[String(partnerUid)];
+      if(!hCell||!pCell)continue; // one of them inactive that week
+      if(hCell.region!==pCell.region)return null; // pair members must share region
+      const newHolderMat=pCell.matId;const newPartnerMat=hCell.matId;
+      if(!newHolderMat||!newPartnerMat)continue;
+      if(newHolderMat===newPartnerMat)return null; // pool would degenerate to single mat
+      if(!_seasonFitsAt(newHolderMat,cw))return null;
+      if(!_seasonFitsAt(newPartnerMat,cw))return null;
+      plan.push({weekISO:cw,holderNew:newHolderMat,partnerNew:newPartnerMat,
+                 holderOld:hCell.matId,partnerOld:pCell.matId,
+                 weekRef:hCell.weekRef,partnerWeekRef:pCell.weekRef});
+    }
+    if(!plan.length)return null;
+    // T1 must actually resolve THIS week's dup — holder's new mat must NOT equal dupMatId
+    const targetStep=plan.find(s=>s.weekISO===weekISO);
+    if(!targetStep||targetStep.holderNew===dupMatId)return null;
+    // Validate: after the swap, no new same-region dups and no new cross-region
+    // shared-physical dups at any cycle week.
+    const cellsCopy={};
+    Object.keys(merged).forEach(w=>{
+      cellsCopy[w]={};
+      Object.entries(merged[w].cells||{}).forEach(([u,c])=>{cellsCopy[w][u]={region:c.region,matId:c.matId}});
+    });
+    plan.forEach(step=>{
+      cellsCopy[step.weekISO][String(holderUid)].matId=step.holderNew;
+      cellsCopy[step.weekISO][String(partnerUid)].matId=step.partnerNew;
+    });
+    for(const step of plan){
+      const wCells=cellsCopy[step.weekISO];
+      const hRegion=wCells[String(holderUid)].region;
+      const pRegion=wCells[String(partnerUid)].region;
+      // Check holder's new mat
+      for(const[ouid,c] of Object.entries(wCells)){
+        if(String(ouid)===String(holderUid))continue;
+        if(c.matId!==step.holderNew)continue;
+        if(c.region===hRegion)return null; // same-region dup
+        const mm=matById.get(step.holderNew);
+        if(_matIsSharedPhysical(mm)&&_matIsSharedPhysical(matById.get(c.matId)))return null;
+      }
+      // Check partner's new mat
+      for(const[ouid,c] of Object.entries(wCells)){
+        if(String(ouid)===String(partnerUid))continue;
+        if(c.matId!==step.partnerNew)continue;
+        if(c.region===pRegion)return null;
+        const mm=matById.get(step.partnerNew);
+        if(_matIsSharedPhysical(mm)&&_matIsSharedPhysical(matById.get(c.matId)))return null;
+      }
+    }
+    // Apply for real
+    plan.forEach(step=>{
+      step.weekRef.assignments[String(holderUid)]=step.holderNew;
+      step.partnerWeekRef.assignments[String(partnerUid)]=step.partnerNew;
+    });
+    return {tier:1,swaps:plan.length*2,partnerUid:String(partnerUid),cycleWeeks:cycleWeeks.slice(),
+            msg:`♻ pool-internal swap · ${String(holderUid).slice(0,8)}↔${String(partnerUid).slice(0,8)} · cycle=[${cycleWeeks.join(', ')}]`};
+  };
+  /* Tier 2 (⇄ pool temporal-swap): swap the ENTIRE pool of the current cycle
+     with a FUTURE cycle's pool for the SAME sub-group. Iron rule preserved by
+     construction: each uid still sees the same total set of pool mats over the
+     year, just at swapped calendar positions.
+     Requirements:
+       - Future cycle's pool must NOT contain dupMatId (else same-week dup stays).
+       - Future pool must be DISJOINT from current pool (else some uid sees the
+         same mat twice — iron-rule violation).
+       - Seasonal fit: future pool mats must season-fit every current cycle week;
+         current pool mats must season-fit every future cycle week.
+       - No new same-region or cross-region collision at any affected week.
+       - Neither the current nor future cycle weeks may be full-skip (Sukkot etc).
+         Handled implicitly: full-skip weeks don't populate _poolByWeek entries. */
+  const _tryTier2=(holderUid,weekISO,dupMatId,holderRegion)=>{
+    const meta=_poolByWeek[weekISO]&&_poolByWeek[weekISO][holderUid];
+    if(!meta)return null;
+    const subUids=(meta.subGroupUids||[]).map(String);
+    if(!subUids.length)return null;
+    const currentPool=(meta.poolMatIds||[]).slice();
+    if(!currentPool.length)return null;
+    const currentCycleWeeks=_cycleWeeksFor(String(holderUid),weekISO);
+    if(!currentCycleWeeks||!currentCycleWeeks.length)return null;
+    const futureCycles=_futureCyclesFor(String(holderUid),weekISO);
+    if(!futureCycles.length)return null;
+    for(const fc of futureCycles){
+      const futurePool=fc.poolMatIds.slice();
+      if(futurePool.includes(dupMatId))continue; // future has dup mat too — swap wouldn't help
+      const overlap=futurePool.some(m=>currentPool.includes(m));
+      if(overlap)continue; // iron-rule risk if pools overlap
+      // Season fit both directions
+      let seasonOK=true;
+      for(const cw of currentCycleWeeks){
+        for(const fm of futurePool){if(!_seasonFitsAt(fm,cw)){seasonOK=false;break}}
+        if(!seasonOK)break;
+      }
+      if(!seasonOK)continue;
+      for(const fw of fc.weeks){
+        for(const cm of currentPool){if(!_seasonFitsAt(cm,fw)){seasonOK=false;break}}
+        if(!seasonOK)break;
+      }
+      if(!seasonOK)continue;
+      // Iron rule extended: no uid in sub-group should already have a future-pool
+      // mat scheduled OUTSIDE this cycle+future-cycle window (else swap creates a
+      // duplicate for that uid). Symmetric for current-pool at future weeks.
+      const _uidHasMatOutsideWindow=(uid,matId,inWindow)=>{
+        const rr=uidToRR.get(String(uid));if(!rr)return false;
+        for(const p of (rr.proposal||[])){
+          if(!p||p.skipped)continue;
+          if(inWindow(p.weekISO))continue;
+          if((p.assignments||{})[String(uid)]===matId)return true;
+        }
+        return false;
+      };
+      const windowSet=new Set([...currentCycleWeeks,...fc.weeks]);
+      const inWin=w=>windowSet.has(w);
+      let ironOK=true;
+      for(const su of subUids){
+        for(const fm of futurePool){
+          if(_uidHasMatOutsideWindow(su,fm,inWin)){ironOK=false;break}
+        }
+        if(!ironOK)break;
+        for(const cm of currentPool){
+          if(_uidHasMatOutsideWindow(su,cm,inWin)){ironOK=false;break}
+        }
+        if(!ironOK)break;
+      }
+      if(!ironOK)continue;
+      // Simulate the swap on a merged copy
+      const merged=buildMergedByWeek();
+      const cellsCopy={};
+      Object.keys(merged).forEach(w=>{
+        cellsCopy[w]={};
+        Object.entries(merged[w].cells||{}).forEach(([u,c])=>{cellsCopy[w][u]={region:c.region,matId:c.matId,weekRef:c.weekRef}});
+      });
+      const planCurrent=[];const planFuture=[];
+      for(const cw of currentCycleWeeks){
+        for(const su of subUids){
+          const cell=cellsCopy[cw]&&cellsCopy[cw][su];
+          if(!cell)continue;
+          const pos=currentPool.indexOf(cell.matId);
+          if(pos<0)continue; // uid at this cycle week wasn't on a current-pool mat
+          const newMid=futurePool[pos];if(!newMid)continue;
+          planCurrent.push({weekISO:cw,uid:su,oldMid:cell.matId,newMid,region:cell.region,weekRef:cell.weekRef});
+        }
+      }
+      for(const fw of fc.weeks){
+        for(const su of subUids){
+          const cell=cellsCopy[fw]&&cellsCopy[fw][su];
+          if(!cell)continue;
+          const pos=futurePool.indexOf(cell.matId);
+          if(pos<0)continue;
+          const newMid=currentPool[pos];if(!newMid)continue;
+          planFuture.push({weekISO:fw,uid:su,oldMid:cell.matId,newMid,region:cell.region,weekRef:cell.weekRef});
+        }
+      }
+      if(!planCurrent.length||!planFuture.length)continue;
+      // Apply to simulation
+      [...planCurrent,...planFuture].forEach(step=>{
+        if(cellsCopy[step.weekISO][step.uid])cellsCopy[step.weekISO][step.uid].matId=step.newMid;
+      });
+      // Validate no new collisions at any affected week
+      const affectedWeeks=[...currentCycleWeeks,...fc.weeks];
+      let ok=true;
+      for(const w of affectedWeeks){
+        const wCells=cellsCopy[w];
+        const byMat={};
+        Object.entries(wCells).forEach(([u,c])=>{if(!c.matId)return;if(!byMat[c.matId])byMat[c.matId]=[];byMat[c.matId].push({uid:u,region:c.region})});
+        for(const[mid,arr] of Object.entries(byMat)){
+          if(arr.length<2)continue;
+          // Same-region dup?
+          const regionPairs=arr.some((a,i)=>arr.some((b,j)=>i<j&&a.region===b.region));
+          if(regionPairs){ok=false;break}
+          // Cross-region shared-physical dup?
+          const mm=matById.get(mid);
+          const isShared=_matIsSharedPhysical(mm);
+          const regs=new Set(arr.map(a=>a.region));
+          if(isShared&&regs.size>=2){
+            // Allow only if the pre-swap state ALSO had this dup with equal/more scope
+            const originalByMat={};
+            Object.entries(merged[w]&&merged[w].cells||{}).forEach(([u,c])=>{if(!c.matId)return;if(!originalByMat[c.matId])originalByMat[c.matId]=[];originalByMat[c.matId].push({uid:u,region:c.region})});
+            const originalArr=originalByMat[mid]||[];
+            const originalRegs=new Set(originalArr.map(a=>a.region));
+            if(originalArr.length<arr.length||originalRegs.size<regs.size){ok=false;break}
+          }
+        }
+        if(!ok)break;
+      }
+      if(!ok)continue;
+      // Apply for real
+      [...planCurrent,...planFuture].forEach(step=>{
+        if(step.weekRef&&step.weekRef.assignments)step.weekRef.assignments[step.uid]=step.newMid;
+      });
+      const currentNames=currentPool.map(m=>{const mm=matById.get(m);return mm?mm.name:m}).join('+');
+      const futureNames=futurePool.map(m=>{const mm=matById.get(m);return mm?mm.name:m}).join('+');
+      return {tier:2,swaps:planCurrent.length+planFuture.length,
+              currentWeeks:currentCycleWeeks.slice(),futureWeeks:fc.weeks.slice(),
+              msg:`⇄ pool temporal-swap · שבועות [${currentCycleWeeks.join(', ')}] ↔ [${fc.weeks.join(', ')}] · pool [${currentNames}] ↔ [${futureNames}]`};
+    }
+    return null;
+  };
   let _crSwapCount=0;
   let _crPasses=0;
   const _crSwapEvents=[];
+  // v36: per-tier counters
+  const _v36TierCounts={T1:0,T2:0};
   let didSwap=true;
   while(didSwap && _crPasses<5){
     didSwap=false;_crPasses++;
@@ -5263,6 +5577,62 @@ function _crossRegionDedupSwap(perRegion, opts){
         const groupHoldersSwappable=groupHolders.filter(h=>!_pipelineProtectedUids.has(String(h.uid)));
         const swappable=freeAgentHolders.length ? freeAgentHolders.slice() : groupHoldersSwappable.slice();
         const swappingGroupCells=(freeAgentHolders.length===0);
+        /* v36: pipeline-aware SAFE fallback — try T1/T2 on protected holders when
+           the regular v33 path can't help. Two triggers:
+             (a) no regular-swappable holder at all (all in protected pipeline), OR
+             (b) every regular-swappable holder has ZERO free alternatives.
+           This preserves v33 semantics for dups regular can fix cleanly, and only
+           activates the safe tier logic for stuck cases (the classic Tali+Gita
+           2026-10-11 שוגר גליידר scenario). If T1+T2 BOTH fail → leave dup, v35
+           ripple-forward modal lets admin resolve manually. */
+        const protectedHolders=holders.filter(h=>_pipelineProtectedUids.has(String(h.uid)));
+        let _v36Resolved=false;
+        let _v36ShouldTry=false;
+        if(protectedHolders.length){
+          if(!swappable.length){
+            _v36ShouldTry=true;
+          } else {
+            // Cheap pre-scan: does ANY swappable have a free alternative?
+            const globalGS_pre=_gardensSeenExW(weekISO);
+            const matsInWeekOccupied_pre=new Set();
+            Object.values(wk.cells).forEach(c=>{if(c.matId)matsInWeekOccupied_pre.add(c.matId)});
+            const hasAnyAlt=swappable.some(h=>{
+              const gardens=gardensByUid[String(h.uid)]||[];
+              const seen=_seenByUidExW(String(h.uid),weekISO);
+              for(const m of materials){
+                if(m.id===dupMatId)continue;
+                if(seen.has(m.id))continue;
+                if(!seasonFits(m,weekISO,holidayDates))continue;
+                const animal=(m.animalName||m.name||'').trim();
+                if(animal){let g=false;for(const gn of gardens){if(globalGS_pre[gn]&&globalGS_pre[gn].has(animal)){g=true;break}}if(g)continue}
+                if(matsInWeekOccupied_pre.has(m.id))continue;
+                return true;
+              }
+              return false;
+            });
+            if(!hasAnyAlt)_v36ShouldTry=true;
+          }
+        }
+        if(_v36ShouldTry){
+          for(const ph of protectedHolders){
+            if(_v36Resolved)break;
+            const phUid=String(ph.uid);
+            let tRes=_tryTier1(phUid,weekISO,dupMatId,ph.region);
+            if(!tRes)tRes=_tryTier2(phUid,weekISO,dupMatId,ph.region);
+            if(tRes){
+              _v36TierCounts['T'+tRes.tier]++;
+              _crSwapCount+=tRes.swaps;
+              didSwap=true;
+              _v36Resolved=true;
+              const tierEmoji={1:'♻',2:'⇄'}[tRes.tier];
+              const finalMsg=`${tierEmoji} v36 T${tRes.tier} · ${phUid.slice(0,8)} (${ph.region}) · ${weekISO} · dup was "${(matById.get(dupMatId)||{}).name||dupMatId}" · ${tRes.msg}`;
+              _crSwapEvents.push({region:ph.region,weekISO,uid:phUid,oldMid:dupMatId,newMid:'(tier)',tier:tRes.tier,groupCell:true,msg:finalMsg});
+              const rr=perRegion.find(x=>x.region===ph.region);
+              if(rr){rr.warnings=rr.warnings||[];rr.warnings.push({weekISO,uid:phUid,type:'v36_pipeline_tier_'+tRes.tier,msg:finalMsg})}
+            }
+          }
+          if(_v36Resolved)continue; // next dup — tier resolved it
+        }
         if(!swappable.length)continue;
         // Compute free alternatives per swappable uid
         const globalGS=_gardensSeenExW(weekISO);
@@ -5366,8 +5736,10 @@ function _crossRegionDedupSwap(perRegion, opts){
       _crRemainingDups.push({weekISO,mat:matNm,regions:[...regionsSet],uids:holders.length,swappable});
     });
   }
-  const summary=`🌍 cross-region dedup post-pass: ${_crSwapCount} החלפות ב-${_crPasses} מעברים · כפילויות בין-אזוריות שנותרו: ${_crRemainingDups.length}${_crSafeDupsSkipped?` (+${_crSafeDupsSkipped} כפילויות בטוחות — מערך כללי)`:''}`;
-  try{console.log('[_crossRegionDedupSwap] '+summary,{swaps:_crSwapCount,passes:_crPasses,remainingDups:_crRemainingDups,swapEvents:_crSwapEvents.slice(0,20)})}catch(_){}
+  const _tierBreakdown=(_v36TierCounts.T1+_v36TierCounts.T2)>0
+    ? ` · v36 tiers: T1=${_v36TierCounts.T1} T2=${_v36TierCounts.T2}` : '';
+  const summary=`🌍 cross-region dedup post-pass: ${_crSwapCount} החלפות ב-${_crPasses} מעברים · כפילויות בין-אזוריות שנותרו: ${_crRemainingDups.length}${_crSafeDupsSkipped?` (+${_crSafeDupsSkipped} כפילויות בטוחות — מערך כללי)`:''}${_tierBreakdown}`;
+  try{console.log('[_crossRegionDedupSwap] '+summary,{swaps:_crSwapCount,passes:_crPasses,tierCounts:_v36TierCounts,remainingDups:_crRemainingDups,swapEvents:_crSwapEvents.slice(0,20)})}catch(_){}
   if(perRegion.length){
     perRegion[0].warnings=perRegion[0].warnings||[];
     perRegion[0].warnings.push({type:'cross_region_dedup_summary',msg:summary});
@@ -5375,7 +5747,7 @@ function _crossRegionDedupSwap(perRegion, opts){
       perRegion[0].warnings.push({type:'cross_region_dedup_leftover',msg:`⚠ כפילות בין-אזורית: ${d.weekISO} · "${d.mat}" · ${d.regions.join('+')} · ${d.uids} מדריכות (${d.swappable} להחלפה)`});
     });
   }
-  return {swaps:_crSwapCount,passes:_crPasses,remainingDups:_crRemainingDups,swapEvents:_crSwapEvents};
+  return {swaps:_crSwapCount,passes:_crPasses,remainingDups:_crRemainingDups,swapEvents:_crSwapEvents,tierCounts:_v36TierCounts};
 }
 // Expose for Node harness testing (no-op in production; import via property assignment doesn't hurt).
 if(typeof window!=='undefined')window._crossRegionDedupSwap=_crossRegionDedupSwap;
