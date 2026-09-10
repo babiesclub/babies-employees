@@ -299,6 +299,14 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // SCHEDULE AUDIT — persistent trail of every mutation to user.gardens
+    // and user.weeklySchedule. Admin/office can read + write (writes come from
+    // the client the moment a mutation is made — see _auditScheduleMutation).
+    match /scheduleAudit/{docId} {
+      allow read: if isAdmin() || isOffice();
+      allow write: if isAdmin() || isOffice();
+    }
+
     // FINAL DENY — anything not matched above is closed.
     // This replaces the previous permissive catch-all that allowed any signed-in user
     // to read/write unlisted collections (including sensitive ones we hadn't declared).
