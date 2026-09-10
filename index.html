@@ -4118,6 +4118,27 @@ async function computeAnnualRotation(region, opts){
      free-agent-fallback still applies there because a one-cell swap there
      doesn't destroy a coordinated Latin cycle across sub-groups. */
   const _pipelineProtectedUids=new Set();
+  /* v36 (2026-09-10): per-week per-uid pipeline pool metadata for SAFE tiered
+     dedup swap. Populated by both super-cluster pipeline branches (3-pair and
+     2+2+3). Consumed by the intra-region dedup pass (below) and by
+     `_crossRegionDedupSwap` (via the return object) to try:
+       T1 (♻ pool-internal swap): swap uid↔pair-mate across the WHOLE current
+         cycle — both uids still see the same pool over the cycle (Latin square
+         holds), only the dates flip.
+       T2 (⇄ pool temporal-swap): swap CURRENT cycle's pool with a FUTURE
+         cycle's pool for the same sub-group — each uid's year still sees the
+         same total mats, just at swapped calendar positions.
+     T3 (raw single-cell + pool patch) was intentionally OMITTED — v34
+     attempted it and it broke Latin square. Iron rule for T1/T2 is preserved
+     by construction: T1 keeps the same 2-mat set per uid over the cycle;
+     T2 requires disjoint pools so no uid sees any mat twice.
+     Shape:
+       _pipelinePoolByWeek[weekISO][uidStr] = {
+         superId, subGroupId, subGroupUids:[uid,…], poolMatIds:[mid,…],
+         shiftIdx, weekInShift, pIdx, cycleLen, pipelineKind:'3pair'|'pair2p3'|'triple2p3'
+       }
+     Only pipeline-protected cells get an entry. */
+  const _pipelinePoolByWeek={};
   const groupPipelines={};
   // State per group: {batch:[matId,...], batchStartWeekIdx:N|null}
   // Latin Square rotation: batch of N materials, cycled N weeks (each instructor sees each material once).
@@ -5037,7 +5058,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-10/v33-supergroup-latin';
+  const _algoVersion='2026-09-10/v35-ripple-forward-swap';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -6937,13 +6958,156 @@ async function openDupSwapMo(weekId, uid, currentMatId){
   mo.innerHTML=`<div class="md" style="max-width:640px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>${_safeDup?'ℹ כפילות בטוחה':'⚠ מערך משוכפל'} · ${esc(u.name)}</span><span class="mc" onclick="document.getElementById('dup-swap-mo').classList.remove('open');document.getElementById('dup-swap-mo').style.display='none'">×</span></div>${_safeBanner}<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:10px;padding:12px 14px;margin-bottom:12px"><div style="font-size:13px;color:#78350F;line-height:1.6"><b>שבוע ${weekId}</b> — המערך <b>${esc((curMat||{}).name||'?')}</b> משובץ אצל ${1+dupNames.length} מדריכות:${dupNames.length?'<br>• '+esc(u.name)+' (כאן)<br>• '+dupNames.map(esc).join('<br>• '):''}</div></div><div style="font-size:12px;font-weight:700;color:#059669;margin-bottom:8px">✅ ${good.filter(c=>c.score>0).length} אלטרנטיבות פנויות (מקטינות שיכפול):</div>${good.filter(c=>c.score>0).slice(0,30).map(chip).join('')||'<div style="font-size:12px;color:var(--mut);font-style:italic">אין מערך פנוי שיקטין שיכפול</div>'}${good.filter(c=>c.score<=0).length?`<div style="font-size:12px;font-weight:700;color:#B45309;margin:12px 0 8px">⚠ ${good.filter(c=>c.score<=0).length} אלטרנטיבות שגם הן משוכפלות (תעביר שיכפול):</div>${good.filter(c=>c.score<=0).slice(0,10).map(chip).join('')}`:''}${bad.length?`<details style="margin-top:12px"><summary style="font-size:12px;color:var(--mut);cursor:pointer">🚫 ${bad.length} מערכים חסומים (חוקים)</summary><div style="margin-top:6px">${bad.slice(0,20).map(chip).join('')}</div></details>`:''}<div style="background:#F0F9FF;border-radius:8px;padding:8px 12px;font-size:11px;color:#0369A1;margin-top:12px;line-height:1.5">💡 לחיצה על מערך פנוי (ירוק) — יחליף כאן ויינעל אוטומטית. הצבעים: 🟢 פנוי (מקטין שיכפול) · 🟡 גם משוכפל · 🔴 חסום ע"י חוק.</div></div>`;
   mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
 }
+/* v35 (2026-09-10): Ripple-forward swap for manual dup-swap picker.
+   When admin picks M2 to replace M1 at (uid, weekA), look for a FUTURE cell in the
+   same region where M2 is already scheduled. If found, do a two-way swap:
+     - (uid, weekA) : M1 → M2   (what admin picked)
+     - (uid2, weekB): M2 → M1   (M1 gets a new home instead of being deleted)
+   Preferences: same instructor's own future cell first; then any other instructor
+   in the same region who currently holds M2. Skip rotation-group cells (Latin-square
+   pipeline) and Sukkot fullWeek skips. Validate iron rule + season fit + category
+   cooldown (no 3+ consecutive same-category-group weeks) for BOTH sides.
+   Returns { uid2, weekB } or null. */
+function _rippleForwardSwap(uid, weekA, oldMatId, newMatId){
+  try{
+    if(!uid||!weekA||!oldMatId||!newMatId||String(oldMatId)===String(newMatId))return null;
+    const schedule=getWeeklySchedule();
+    const materials=getMaterials();
+    const matById=Object.fromEntries(materials.map(m=>[m.id,m]));
+    const oldMat=matById[oldMatId], newMat=matById[newMatId];
+    if(!oldMat||!newMat)return null;
+    const users=[...(DB.get('users')||[]),...(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[])];
+    const user=users.find(x=>String(x.uid||x.id)===String(uid));
+    if(!user)return null;
+    const region=user.region||(typeof inferInstructorRegion==='function'?inferInstructorRegion(user):null);
+    if(!region)return null;
+    // Region membership
+    const regionUidSet=new Set(users.filter(u=>{
+      const r=u.region||(typeof inferInstructorRegion==='function'?inferInstructorRegion(u):null);
+      return r===region;
+    }).map(u=>String(u.uid||u.id)));
+    // Rotation-group cells are off-limits (Latin-square pipeline pool)
+    const groupUids=new Set();
+    (typeof _rotGroups!=='undefined'?_rotGroups:[]).filter(g=>g.regionName===region).forEach(g=>(g.instructorUids||[]).forEach(u=>groupUids.add(String(u))));
+    // Feathered super-group: bird ~ chick (mirrors _temporalSwapDedup's `catGroupOf`)
+    const catGroup=(c)=>{ if(c==='bird'||c==='chick')return 'feathered'; return c||'other'; };
+    // Ordered future weeks (strictly after weekA, inside school year, non-fullWeek-holiday)
+    const yStart=(typeof SCHOOL_YEAR!=='undefined'&&SCHOOL_YEAR.start)||'0000-00-00';
+    const yEnd=(typeof SCHOOL_YEAR!=='undefined'&&SCHOOL_YEAR.end)||'9999-99-99';
+    const weekISOs=Object.keys(schedule).filter(w=>w>weekA&&w>=yStart&&w<=yEnd).sort();
+    const isSkipWeek=(wISO)=>{
+      const h=typeof getHolidayForWeek==='function'?getHolidayForWeek(wISO):(typeof ISRAELI_HOLIDAYS!=='undefined'?ISRAELI_HOLIDAYS[wISO]:null);
+      return !!(h&&h.fullWeek);
+    };
+    if(isSkipWeek(weekA))return null;
+    // Season fit (strict). newMat @ weekA already validated by caller, but re-check for safety.
+    const seasonOK=(mat,wISO)=>{
+      if(typeof _matSeasonFits!=='function')return true;
+      return _matSeasonFits(mat,wISO,(typeof HOLIDAYS_5787!=='undefined'?HOLIDAYS_5787:{}));
+    };
+    // Holiday-only mat/week compatibility
+    const holidayCompat=(mat,wISO)=>{
+      const isHoli=(typeof _matIsHolidayOnlyMaterial==='function')?_matIsHolidayOnlyMaterial(mat):false;
+      if(isHoli){
+        return (typeof _matIsHolidayOnlyFor==='function')?_matIsHolidayOnlyFor(mat,wISO):false;
+      }
+      if(typeof HOLIDAY_ONLY_WEEKS!=='undefined'&&HOLIDAY_ONLY_WEEKS[wISO])return false;
+      return true;
+    };
+    if(!seasonOK(newMat,weekA))return null;
+    if(!holidayCompat(newMat,weekA))return null;
+    // Iron rule: after swap, will target-uid have `matId` more than once across the year?
+    // `freedCells` list cells whose current value is IGNORED (because the swap frees them).
+    const wouldViolateIron=(targetUid,matId,freedCells)=>{
+      for(const wISO of Object.keys(schedule)){
+        if(wISO<yStart||wISO>yEnd)continue;
+        const wk=schedule[wISO];if(!wk||!wk.assignments)continue;
+        const curMid=wk.assignments[targetUid];if(!curMid)continue;
+        if(freedCells.some(e=>String(e.uid)===String(targetUid)&&e.week===wISO))continue;
+        if(String(curMid)===String(matId))return true;
+      }
+      return false;
+    };
+    // Category cooldown: no 3+ consecutive same-cat-group weeks for `targetUid` after applying `overrides`.
+    const cooldownOK=(targetUid,overrides)=>{
+      const wkKeys=Object.keys(schedule).filter(w=>w>=yStart&&w<=yEnd).sort();
+      let run=1,prevCg=null;
+      for(let i=0;i<wkKeys.length;i++){
+        const w=wkKeys[i];
+        const has=Object.prototype.hasOwnProperty.call(overrides,w);
+        const mid=has?overrides[w]:((schedule[w]||{}).assignments||{})[targetUid];
+        if(!mid){prevCg=null;run=1;continue}
+        const m=matById[mid];if(!m){prevCg=null;run=1;continue}
+        const cg=catGroup(m.category||'other');
+        if(cg&&cg===prevCg){run++;if(run>=3)return false}
+        else run=1;
+        prevCg=cg;
+      }
+      return true;
+    };
+    // Two passes: same-instructor first (preference 1), then cross-instructor (preference 2)
+    for(const pass of ['self','other']){
+      for(const wISO of weekISOs){
+        if(isSkipWeek(wISO))continue;
+        const wk=schedule[wISO];if(!wk||!wk.assignments)continue;
+        const holders=Object.entries(wk.assignments).filter(([u,mid])=>{
+          if(String(mid)!==String(newMatId))return false;
+          if(!regionUidSet.has(String(u)))return false;
+          if(pass==='self')return String(u)===String(uid);
+          return String(u)!==String(uid);
+        });
+        for(const [uid2] of holders){
+          if(groupUids.has(String(uid2)))continue; // pipeline pool — off-limits
+          if(!seasonOK(oldMat,wISO))continue;
+          if(!holidayCompat(oldMat,wISO))continue;
+          const freed=[{uid,week:weekA},{uid:uid2,week:wISO}];
+          if(wouldViolateIron(uid,newMatId,freed))continue;
+          if(wouldViolateIron(uid2,oldMatId,freed))continue;
+          // Simulated overrides per target uid for cooldown check
+          const ovUid={};ovUid[weekA]=newMatId;if(String(uid2)===String(uid))ovUid[wISO]=oldMatId;
+          if(!cooldownOK(uid,ovUid))continue;
+          if(String(uid2)!==String(uid)){
+            const ovU2={};ovU2[wISO]=oldMatId;
+            if(!cooldownOK(uid2,ovU2))continue;
+          }
+          return {uid2:String(uid2),weekB:wISO};
+        }
+      }
+    }
+    return null;
+  }catch(e){console.warn('_rippleForwardSwap error:',e);return null}
+}
 async function confirmDupSwap(weekId, uid, newMatId){
   const mats=getMaterials();const m=mats.find(x=>x.id===newMatId);
   if(!m){alert('מערך לא נמצא');return}
-  if(!confirm(`להחליף למערך "${m.name}"?\n\nהתא ייעל אוטומטית — האלגוריתם לא ידרוס אותו.`))return;
-  await setWschAssignment(weekId,uid,newMatId,true);
-  document.getElementById('dup-swap-mo').classList.remove('open');
-  document.getElementById('dup-swap-mo').style.display='none';
+  const schedule=getWeeklySchedule();
+  const oldMatId=((schedule[weekId]||{}).assignments||{})[uid]||'';
+  const oldMat=mats.find(x=>x.id===oldMatId);
+  const oldName=(oldMat&&oldMat.name)||(oldMatId?String(oldMatId).slice(0,8):'—');
+  if(!confirm(`להחליף למערך "${m.name}"?\n\nהאלגוריתם ינסה קודם למצוא מיקום עתידי ל-"${oldName}" באזור (ripple-forward). אם יימצא — שני התאים יתעדכנו וייעלו. אם לא — "${oldName}" יוסר מהמערכת השבועית.`))return;
+  const ripple=(oldMatId&&typeof _rippleForwardSwap==='function')?_rippleForwardSwap(uid,weekId,oldMatId,newMatId):null;
+  if(ripple&&ripple.uid2&&ripple.weekB){
+    const users=[...(DB.get('users')||[]),...(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[])];
+    const u2=users.find(x=>String(x.uid||x.id)===String(ripple.uid2));
+    const u2Name=(u2&&u2.name)||String(ripple.uid2).slice(0,8);
+    // Apply weekA first, then weekB (both locked so recompute won't undo).
+    await setWschAssignment(weekId,uid,newMatId,true);
+    await setWschAssignment(ripple.weekB,ripple.uid2,oldMatId,true);
+    if(cu&&cu.role==='admin'&&typeof _logAudit==='function'){
+      const u1=users.find(x=>String(x.uid||x.id)===String(uid));
+      const u1Name=(u1&&u1.name)||String(uid).slice(0,8);
+      _logAudit('swap','schedule',`ripple/${weekId}/${uid}`,`ripple-forward · ${weekId}/${u1Name}: "${oldName}"→"${m.name}" ⇄ ${ripple.weekB}/${u2Name}: "${m.name}"→"${oldName}"`);
+    }
+    alert(`🔀 ripple-forward בוצע!\n\n"${m.name}" הועבר לשבוע ${weekId}\n"${oldName}" הועבר לשבוע ${ripple.weekB} (${u2Name})\n\nשני התאים נעולים — האלגוריתם לא ידרוס.`);
+  } else {
+    // Fallback — original behavior (oldMat disappears from the region's weekly schedule)
+    await setWschAssignment(weekId,uid,newMatId,true);
+    if(cu&&cu.role==='admin'&&typeof _logAudit==='function'){
+      _logAudit('swap','schedule',`dupswap/${weekId}/${uid}`,`dup-swap ללא ripple · ${weekId}/${uid.slice(0,8)}: "${oldName}"→"${m.name}" (הוסר "${oldName}" — לא נמצא מיקום עתידי)`);
+    }
+    alert(`⚠ "${oldName}" הוסר מהמערכת השבועית באזור — לא נמצא מיקום עתידי מתאים.\n\n"${m.name}" שובץ בשבוע ${weekId}.`);
+  }
+  const moEl=document.getElementById('dup-swap-mo');if(moEl){moEl.classList.remove('open');moEl.style.display='none'}
   renderWschGrid();
 }
 /* Admin/office directly resets ANY user's Firebase Auth password via Cloud Function
