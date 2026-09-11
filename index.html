@@ -629,6 +629,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#F59E0B;color:#78350F;font-weight:800" onclick="openOrphanedGardensScanMo()">🔍 סרוק גני רפאים בשיבוצים (לא קיימים במאגר)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#F0F9FF,#BAE6FD);border-color:#0EA5E9;color:#0C4A6E;font-weight:800" onclick="openScheduleAuditMo()">📜 יומן שינויים במערכת שבועית (מי הסיר/הוסיף — עם שחזור)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#F59E0B;color:#78350F;font-weight:800" onclick="openSlotMigrationMo()">⚠ פיצול רשומות דוחות (שבוע נוכחי — מיגרציית slotKey)</button>
+            <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FCE7F3,#FBCFE8);border-color:#DB2777;color:#831843;font-weight:800" onclick="openSlotAuditMo()">🔍 סקירת ימים עם סשנים חסרים (v38.4 — פיצול בכמות)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border-color:#7C3AED;color:#5B21B6;font-weight:800" onclick="openNetworkImageImportMo()">📷 ייבוא סניפי רשת מתמונה (אפטר סקול / צהרונים)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#DCFCE7,#BBF7D0);border-color:#16A34A;color:#14532D;font-weight:800" onclick="openMoveNetworkMo()">🔀 העבר סניפים בין רשתות</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#D97706;color:#78350F;font-weight:800" onclick="openReconcileMo()">🏦 התאמת תשלומים · OneZero / Bit / PayBox → Morning</button>
@@ -5077,7 +5078,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-11/v38.3-slot-migration';
+  const _algoVersion='2026-09-11/v38.4-multi-slot-audit';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -7829,6 +7830,470 @@ async function _slotMigSubmitSplitEdit(recId){
   });
   _renderSlotMigList();
   if(typeof renderHis==='function')renderHis();
+}
+/* ==== MULTI-SLOT DAY AUDIT (v38.4) ====
+   Complements v38.3 slot-migration. v38.3 tagged legacy records with slotKey
+   but did NOT split them. Case: instructor has 4 slots for garden X on Monday
+   but only reported ONCE — after v38.3 that single record got slotKey=matches[0].
+   Payroll shows 1 session but she actually did 4.
+   This tool scans records from CUTOFF, groups by (instructor, date, garden),
+   compares group.length vs weeklySchedule slot count for that day+garden, and
+   surfaces days where sCount > rCount so admin can decide: split-N-identical,
+   split-and-edit, or "she genuinely did fewer".
+   Every action tags touched/created records with `_slotAuditDone` so groups
+   don't re-surface. Every action writes to scheduleAudit for restore. */
+const _SLOT_AUDIT_CUTOFF='2026-09-06';
+function _slotAuditDow(dateStr){try{return new Date(dateStr+'T00:00:00').getDay()}catch(e){return -1}}
+function _slotAuditLookupUser(r,users){
+  const targetKey=r._isSubstitute&&r.substituteForUid?String(r.substituteForUid):null;
+  if(targetKey){
+    const u=users.find(x=>String(x.uid||'')===targetKey||String(x.id||'')===targetKey);
+    if(u)return u;
+  }
+  return users.find(x=>(r.instructorUid&&String(x.uid||'')===String(r.instructorUid))||(r.instructorId!=null&&String(x.id||'')===String(r.instructorId)))||null;
+}
+/* Returns unique sorted slotKeys for (instructor, date, garden). Honors biweekly parity. */
+function _slotAuditExpectedSlots(u,dateStr,garden){
+  if(!u||!dateStr||!garden)return[];
+  const dow=_slotAuditDow(dateStr);
+  if(dow<0)return[];
+  const parity=(typeof _weekParityFor==='function')?_weekParityFor(new Date(dateStr+'T00:00:00')):0;
+  const raw=(u.weeklySchedule&&u.weeklySchedule[dow])||[];
+  const gLower=String(garden||'').toLowerCase();
+  const entries=raw.map(_readEntry).filter(e=>e&&String(e.garden||'').toLowerCase()===gLower&&_entryMatchesWeek(e,parity));
+  const keys=[...new Set(entries.map(e=>_mySchedSlotKey(e.start,e.end)))].sort();
+  const byKey=new Map();
+  entries.forEach(e=>{const k=_mySchedSlotKey(e.start,e.end);if(!byKey.has(k))byKey.set(k,e)});
+  return{keys,byKey,entries};
+}
+/* Build lookup keys for grouping. Prefer uid, fall back to numeric id. */
+function _slotAuditGroupKey(r){
+  const uid=r._isSubstitute&&r.substituteForUid?String(r.substituteForUid):(String(r.instructorUid||'')||('id:'+String(r.instructorId||'')));
+  return uid+'|'+String(r.date||'')+'|'+String(r.garden||'');
+}
+/* Scan phase — returns array of flagged groups sorted by date DESC. */
+function _slotAuditScan(records,users){
+  const byUid=new Map();const byId=new Map();
+  (users||[]).forEach(u=>{if(u&&u.uid)byUid.set(String(u.uid),u);if(u&&u.id!=null)byId.set(String(u.id),u)});
+  const groups=new Map();
+  (records||[]).forEach(r=>{
+    if(!r||!r.date||!r.garden)return;
+    if(r.date<_SLOT_AUDIT_CUTOFF)return;
+    if(r.status==='not_executed')return;/* not_executed: instructor explicitly reported this slot didn't happen — don't touch */
+    if(r._slotAuditDone)return;/* already audited */
+    const k=_slotAuditGroupKey(r);
+    if(!groups.has(k))groups.set(k,[]);
+    groups.get(k).push(r);
+  });
+  const flagged=[];
+  groups.forEach((recs,gk)=>{
+    /* If any record in group is already audited, skip whole group */
+    if(recs.some(r=>r._slotAuditDone))return;
+    const first=recs[0];
+    const u=_slotAuditLookupUser(first,users)||byUid.get(String(first.instructorUid||''))||byId.get(String(first.instructorId||''));
+    if(!u)return;
+    const{keys,byKey,entries}=_slotAuditExpectedSlots(u,first.date,first.garden);
+    const sCount=keys.length;
+    const rCount=recs.length;
+    if(sCount<2)return;/* garden has 0 or 1 slot that day — nothing to split */
+    if(sCount<=rCount)return;/* all slots already reported */
+    /* Sort records by createdAt/id — the "first" is the template for cloning */
+    recs.sort((a,b)=>{
+      const ca=String(a.createdAt||'');const cb=String(b.createdAt||'');
+      if(ca!==cb)return ca.localeCompare(cb);
+      return String(a.id||'').localeCompare(String(b.id||''));
+    });
+    flagged.push({groupKey:gk,recs,firstRec:recs[0],user:u,date:first.date,garden:first.garden,expectedKeys:keys,expectedByKey:byKey,expectedEntries:entries,sCount,rCount,missing:sCount-rCount});
+  });
+  flagged.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  return flagged;
+}
+async function _slotAuditWriteAudit(entry){
+  try{
+    const arr=JSON.parse(localStorage.getItem('bz3_scheduleAudit')||'[]');
+    arr.unshift(entry);
+    localStorage.setItem('bz3_scheduleAudit',JSON.stringify(arr.slice(0,300)));
+  }catch(e){}
+  if(window.fbDb){
+    const docId=Date.now()+'_'+Math.random().toString(36).slice(2,10);
+    try{await fbDb.collection('scheduleAudit').doc(docId).set(entry)}catch(e){console.warn('[slotAudit audit]',e.message||e)}
+  }
+}
+/* Given a flagged group, plan the split:
+   Returns {existingUpdates:[{rec,newSlotKey,markType}], newRecs:[{template,slotKey,timeIn}]}
+   • Existing records that already have a slotKey in expectedKeys → keep as-is, tag done.
+   • Existing records without slotKey (or 'unknown' or not-in-expected) → assign next unused key.
+   • Remaining unused keys → clone from firstRec (template). */
+function _slotAuditPlanSplit(flag){
+  const{recs,firstRec,expectedKeys,expectedByKey}=flag;
+  const usedKeys=new Set();
+  const existingUpdates=[];
+  recs.forEach(r=>{
+    const k=r.slotKey;
+    if(k&&k!=='unknown'&&expectedKeys.includes(k)&&!usedKeys.has(k)){
+      usedKeys.add(k);
+      existingUpdates.push({rec:r,newSlotKey:k,markType:'template-kept'});
+    }else{
+      existingUpdates.push({rec:r,newSlotKey:null,markType:'template-assign'});
+    }
+  });
+  const unusedKeys=expectedKeys.filter(k=>!usedKeys.has(k));
+  let uIdx=0;
+  existingUpdates.forEach(eu=>{
+    if(eu.newSlotKey==null){
+      if(uIdx<unusedKeys.length){
+        eu.newSlotKey=unusedKeys[uIdx++];
+      }else{
+        /* Overflow — more existing records than expected slots. Keep whatever was there (or 'unknown'). */
+        eu.newSlotKey=eu.rec.slotKey||'unknown';
+        eu.markType='overflow-kept';
+      }
+    }
+  });
+  const remainingKeys=unusedKeys.slice(uIdx);
+  const newRecs=remainingKeys.map(k=>{
+    const m=expectedByKey.get(k);
+    return{template:firstRec,slotKey:k,timeIn:(m&&m.start)||''};
+  });
+  return{existingUpdates,newRecs,orderedKeys:expectedKeys};
+}
+/* Split action — "she did all N, just reported once". */
+async function _slotAuditSplitGroup(flag,opts){
+  opts=opts||{};
+  const records=DB.get('records')||[];
+  const plan=_slotAuditPlanSplit(flag);
+  const nowIso=new Date().toISOString();
+  const idxMap=new Map(records.map((r,i)=>[String(r.id),i]));
+  const touchedIds=[];const newRecIds=[];
+  /* Update existing records in-place */
+  for(const eu of plan.existingUpdates){
+    const idx=idxMap.get(String(eu.rec.id));
+    if(idx==null)continue;
+    const updated={...eu.rec,slotKey:eu.newSlotKey,_slotAuditDone:'split',_slotAuditAt:nowIso,_slotAuditSource:'audit-split',updatedAt:nowIso};
+    if(!eu.rec.timeIn){
+      const m=flag.expectedByKey.get(eu.newSlotKey);
+      if(m&&m.start)updated.timeIn=m.start;
+    }
+    records[idx]=updated;
+    touchedIds.push(String(eu.rec.id));
+  }
+  /* Create clones for remaining slots */
+  let seq=0;
+  for(const nr of plan.newRecs){
+    const nid=Date.now()+Math.floor(Math.random()*10000)+(seq++);
+    const clone={...nr.template,id:nid,slotKey:nr.slotKey,timeIn:nr.timeIn||nr.template.timeIn||'',_slotAuditDone:'split-clone',_slotAuditAt:nowIso,_slotAuditSource:'audit-split-clone',_slotAuditOfId:String(nr.template.id),createdAt:nr.template.createdAt||nowIso,updatedAt:nowIso};
+    /* Clear any signature/attendance-specific IDs that shouldn't duplicate */
+    records.push(clone);
+    newRecIds.push(String(nid));
+  }
+  DB.set('records',records);
+  if(window.fbDb){
+    for(const id of touchedIds){
+      const r=records.find(x=>String(x.id)===String(id));
+      if(r){try{await fbDb.collection('records').doc(String(id)).set(r)}catch(e){console.warn('[slotAudit split existing]',id,e.message||e)}}
+    }
+    for(const id of newRecIds){
+      const r=records.find(x=>String(x.id)===String(id));
+      if(r){try{await fbDb.collection('records').doc(String(id)).set(r)}catch(e){console.warn('[slotAudit split new]',id,e.message||e)}}
+    }
+  }
+  if(!opts.skipAudit){
+    const u=flag.user||{};
+    const originalRole=(cu&&(cu._originalRole||cu.role))||'admin';
+    await _slotAuditWriteAudit({
+      ts:nowIso,targetUid:u.uid||String(u.id||'?'),targetName:u.name||u.username||flag.firstRec.instructorName||'?',
+      changedBy:(cu&&cu.uid)||'system',changedByName:(cu&&(cu.name||cu.username))||'system',changedByRole:originalRole,
+      source:'slot-audit-split',
+      totals:{recordsUpdated:touchedIds.length,recordsCreated:newRecIds.length,expectedSlots:flag.sCount,priorReports:flag.rCount},
+      slotAudit:{action:'split',date:flag.date,garden:flag.garden,originalRecordIds:touchedIds,newRecordIds:newRecIds,expectedKeys:flag.expectedKeys},
+      note:`v38.4 — יום עם ${flag.sCount} סשנים ו-${flag.rCount} דיווח, פוצל ל-${flag.sCount} רשומות`
+    });
+  }
+  return{touchedIds,newRecIds};
+}
+/* Keep action — instructor genuinely did fewer sessions. Marks existing records as processed. */
+async function _slotAuditKeepGroup(flag,opts){
+  opts=opts||{};
+  const records=DB.get('records')||[];
+  const nowIso=new Date().toISOString();
+  const idxMap=new Map(records.map((r,i)=>[String(r.id),i]));
+  const touchedIds=[];
+  for(const r of flag.recs){
+    const idx=idxMap.get(String(r.id));
+    if(idx==null)continue;
+    const updated={...r,_slotAuditDone:'skipped',_slotAuditAt:nowIso,_slotAuditSource:'audit-keep',_slotAuditNote:`דווח על ${flag.rCount} מתוך ${flag.sCount} — האחרים לא בוצעו`,updatedAt:nowIso};
+    records[idx]=updated;
+    touchedIds.push(String(r.id));
+  }
+  DB.set('records',records);
+  if(window.fbDb){
+    for(const id of touchedIds){
+      const r=records.find(x=>String(x.id)===String(id));
+      if(r){try{await fbDb.collection('records').doc(String(id)).set(r)}catch(e){console.warn('[slotAudit keep]',id,e.message||e)}}
+    }
+  }
+  if(!opts.skipAudit){
+    const u=flag.user||{};
+    const originalRole=(cu&&(cu._originalRole||cu.role))||'admin';
+    await _slotAuditWriteAudit({
+      ts:nowIso,targetUid:u.uid||String(u.id||'?'),targetName:u.name||u.username||flag.firstRec.instructorName||'?',
+      changedBy:(cu&&cu.uid)||'system',changedByName:(cu&&(cu.name||cu.username))||'system',changedByRole:originalRole,
+      source:'slot-audit-keep',
+      totals:{recordsMarked:touchedIds.length,expectedSlots:flag.sCount,priorReports:flag.rCount},
+      slotAudit:{action:'keep',date:flag.date,garden:flag.garden,recordIds:touchedIds,expectedKeys:flag.expectedKeys},
+      note:`v38.4 — סומן כ-${flag.rCount} מתוך ${flag.sCount} (המדריכה ביצעה פחות)`
+    });
+  }
+  return{touchedIds};
+}
+/* Split-and-edit action — per-slot control (which done, custom duration/groups). */
+async function _slotAuditSplitEditGroup(flag,perSlot,opts){
+  opts=opts||{};
+  if(!Array.isArray(perSlot)||!perSlot.length){alert('לפחות שיבוץ אחד חייב להיות מסומן');return null}
+  const records=DB.get('records')||[];
+  const nowIso=new Date().toISOString();
+  const idxMap=new Map(records.map((r,i)=>[String(r.id),i]));
+  const touchedIds=[];const newRecIds=[];
+  const{firstRec,recs,expectedByKey}=flag;
+  /* Strategy: first perSlot entry → apply to firstRec. Additional entries: if there's a matching existing record with that slotKey use it, else clone from firstRec. */
+  const existingByKey=new Map();
+  recs.forEach(r=>{if(r.slotKey&&r.slotKey!=='unknown'&&!existingByKey.has(r.slotKey))existingByKey.set(r.slotKey,r)});
+  const usedExisting=new Set();
+  const availableExisting=recs.filter(r=>!r.slotKey||r.slotKey==='unknown');
+  let availIdx=0;
+  let seq=0;
+  for(let i=0;i<perSlot.length;i++){
+    const s=perSlot[i];
+    const m=expectedByKey.get(s.slotKey);
+    const timeIn=s.timeIn||(m&&m.start)||'';
+    /* Find an existing record to update: prefer one already carrying this slotKey, else next unassigned */
+    let target=existingByKey.get(s.slotKey);
+    if(target&&!usedExisting.has(String(target.id))){
+      usedExisting.add(String(target.id));
+    }else if(availIdx<availableExisting.length){
+      target=availableExisting[availIdx++];
+      usedExisting.add(String(target.id));
+    }else{
+      target=null;
+    }
+    if(target){
+      const idx=idxMap.get(String(target.id));
+      if(idx==null)continue;
+      const updated={...target,slotKey:s.slotKey,duration:s.duration,groups:s.groups,notes:s.notes||target.notes||'',timeIn:timeIn||target.timeIn||'',_slotAuditDone:'split-edit',_slotAuditAt:nowIso,_slotAuditSource:'audit-split-edit',updatedAt:nowIso};
+      records[idx]=updated;
+      touchedIds.push(String(target.id));
+    }else{
+      const nid=Date.now()+Math.floor(Math.random()*10000)+(seq++);
+      const clone={...firstRec,id:nid,slotKey:s.slotKey,duration:s.duration,groups:s.groups,notes:s.notes||firstRec.notes||'',timeIn:timeIn||firstRec.timeIn||'',_slotAuditDone:'split-edit-clone',_slotAuditAt:nowIso,_slotAuditSource:'audit-split-edit-clone',_slotAuditOfId:String(firstRec.id),createdAt:firstRec.createdAt||nowIso,updatedAt:nowIso};
+      records.push(clone);
+      newRecIds.push(String(nid));
+    }
+  }
+  /* Any existing records that weren't picked in perSlot → mark as "not done" (skipped) */
+  const skippedIds=[];
+  recs.forEach(r=>{
+    if(usedExisting.has(String(r.id)))return;
+    const idx=idxMap.get(String(r.id));
+    if(idx==null)return;
+    const updated={...r,_slotAuditDone:'skipped-in-edit',_slotAuditAt:nowIso,_slotAuditSource:'audit-split-edit-skip',updatedAt:nowIso};
+    records[idx]=updated;
+    skippedIds.push(String(r.id));
+  });
+  DB.set('records',records);
+  if(window.fbDb){
+    const allTouched=[...touchedIds,...skippedIds];
+    for(const id of allTouched){
+      const r=records.find(x=>String(x.id)===String(id));
+      if(r){try{await fbDb.collection('records').doc(String(id)).set(r)}catch(e){console.warn('[slotAudit edit existing]',id,e.message||e)}}
+    }
+    for(const id of newRecIds){
+      const r=records.find(x=>String(x.id)===String(id));
+      if(r){try{await fbDb.collection('records').doc(String(id)).set(r)}catch(e){console.warn('[slotAudit edit new]',id,e.message||e)}}
+    }
+  }
+  if(!opts.skipAudit){
+    const u=flag.user||{};
+    const originalRole=(cu&&(cu._originalRole||cu.role))||'admin';
+    await _slotAuditWriteAudit({
+      ts:nowIso,targetUid:u.uid||String(u.id||'?'),targetName:u.name||u.username||flag.firstRec.instructorName||'?',
+      changedBy:(cu&&cu.uid)||'system',changedByName:(cu&&(cu.name||cu.username))||'system',changedByRole:originalRole,
+      source:'slot-audit-split',
+      totals:{recordsUpdated:touchedIds.length,recordsCreated:newRecIds.length,recordsSkipped:skippedIds.length,expectedSlots:flag.sCount,priorReports:flag.rCount},
+      slotAudit:{action:'split-edit',date:flag.date,garden:flag.garden,originalRecordIds:touchedIds,newRecordIds:newRecIds,skippedRecordIds:skippedIds,perSlot:perSlot.map(s=>({slotKey:s.slotKey,duration:s.duration,groups:s.groups}))},
+      note:`v38.4 — פיצול מותאם ל-${perSlot.length} סשנים מתוך ${flag.sCount}`
+    });
+  }
+  return{touchedIds,newRecIds,skippedIds};
+}
+/* ---- UI: modal ---- */
+function openSlotAuditMo(){
+  if(!cu||(cu.role!=='admin'&&cu.role!=='office')){alert('רק אדמין / משרד');return}
+  let mo=document.getElementById('slot-audit-mo');
+  if(!mo){mo=document.createElement('div');mo.id='slot-audit-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:1200px;width:96vw;max-height:94vh;overflow-y:auto"><div class="mt"><span>🔍 סקירת ימים עם סשנים חסרים (v38.4)</span><span class="mc" onclick="document.getElementById('slot-audit-mo').classList.remove('open');document.getElementById('slot-audit-mo').style.display='none'">×</span></div>
+    <div style="background:#FCE7F3;border-right:4px solid #DB2777;padding:10px 12px;border-radius:8px;margin-bottom:10px;font-size:12px;color:#831843;line-height:1.6">
+      סורק ימים שבהם למדריכה יש כמה שיבוצים לאותו גן, אבל דיווחה רק על חלק. ההנחה הרווחת: <b>ביצעה את כל הסשנים אבל דיווחה פעם אחת</b>.
+      לכל שורה שלוש אפשרויות: פצל אוטומטית ל-N רשומות זהות · אשרי שדיווחה פחות · פצל וערוך פרטים לכל סשן.
+      פעולות נכתבות ליומן ולא ניתן לשחזרן דרך הכפתור הזה — היכנסי ליומן שינויים לשחזור.
+    </div>
+    <div id="slot-audit-summary" style="background:#EFF6FF;border-right:4px solid #3B82F6;padding:10px 12px;border-radius:8px;margin-bottom:10px;font-size:12px;color:#1E3A8A;line-height:1.6"></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+      <button class="btn-prim" onclick="_slotAuditBulkSplitAll()" style="background:#DB2777;border-color:#DB2777;font-size:13px;padding:10px 16px;margin:0">⚡ פצל את כל הרשומות אוטומטית</button>
+      <button class="btn-sec" onclick="_renderSlotAuditList()" style="font-size:13px;padding:10px 16px">🔄 רענן</button>
+    </div>
+    <div id="slot-audit-list" style="max-height:70vh;overflow-y:auto"></div></div>`;
+  mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+  _renderSlotAuditList();
+}
+function _renderSlotAuditList(){
+  const el=document.getElementById('slot-audit-list');if(!el)return;
+  const records=DB.get('records')||[];const users=DB.get('users')||[];
+  const flagged=_slotAuditScan(records,users);
+  const sumEl=document.getElementById('slot-audit-summary');
+  if(sumEl){
+    const totalMissing=flagged.reduce((s,f)=>s+f.missing,0);
+    sumEl.innerHTML=`<b>סריקה מ-${_SLOT_AUDIT_CUTOFF}:</b> ${flagged.length} ימי-גן-מדריכה עם סשנים חסרים · סה"כ ${totalMissing} סשנים חסרים (אם באמת בוצעו — יש לפצל)`;
+  }
+  if(!flagged.length){
+    el.innerHTML='<div style="padding:30px;text-align:center;color:var(--mut);font-size:13px;background:#F0FDF4;border:2px dashed #86EFAC;border-radius:10px">✓ אין ימים עם סשנים חסרים. הכל מדווח או טופל.</div>';
+    return;
+  }
+  const rows=flagged.map(f=>{
+    const rid='sa-row-'+String(f.groupKey).replace(/[^\w-]/g,'_');
+    const dt=new Date(f.date+'T00:00:00');
+    const dayName=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'][dt.getDay()];
+    const N=f.sCount;
+    const slotList=f.expectedKeys.map(k=>{
+      const m=f.expectedByKey.get(k);
+      const isReported=f.recs.some(r=>r.slotKey===k);
+      const bg=isReported?'#D1FAE5':'#FEE2E2';const brd=isReported?'#10B981':'#EF4444';const col=isReported?'#065F46':'#991B1B';
+      return `<span style="display:inline-block;background:${bg};color:${col};padding:3px 10px;border-radius:6px;margin:2px;font-weight:700;font-size:12px;border:1px solid ${brd}" title="${isReported?'דווח':'לא דווח'}">${isReported?'✓':'✗'} 🕐 ${esc(k)}${m&&m.note?' <span style=\"font-weight:500;opacity:0.8\">('+esc(m.note)+')</span>':''}</span>`;
+    }).join(' ');
+    const currentReports=f.recs.map(r=>`<b>${esc(String(r.duration||0))}′</b> · ${esc(String(r.groups||0))} קב'${r.slotKey?' · '+esc(r.slotKey):''}${r.timeIn?' · '+esc(r.timeIn):''}`).join('<br>');
+    const groupKeyEsc=esc(String(f.groupKey));
+    return `<tr id="${rid}" style="border-bottom:1.5px solid #E5E7EB;vertical-align:top">
+      <td style="padding:10px 8px;font-weight:700;white-space:nowrap;font-size:12px">${esc(dayName)}<br>${esc(f.date)}</td>
+      <td style="padding:10px 8px;font-size:12px">${esc((f.user&&(f.user.name||f.user.username))||f.firstRec.instructorName||'?')}</td>
+      <td style="padding:10px 8px;font-weight:700;color:#1B4332;font-size:12px">${esc(f.garden||'?')}</td>
+      <td style="padding:10px 8px;font-size:12px"><span style="background:#FEE2E2;color:#991B1B;padding:2px 8px;border-radius:6px;font-weight:800">${f.rCount} של ${f.sCount}</span><br><span style="font-size:11px;color:var(--mut)">חסרים ${f.missing}</span></td>
+      <td style="padding:10px 8px;line-height:1.9">${slotList}</td>
+      <td style="padding:10px 8px;font-size:11px;color:#374151">${currentReports}</td>
+      <td style="padding:10px 8px;white-space:nowrap">
+        <div style="display:flex;flex-direction:column;gap:4px;min-width:200px">
+          <button class="btn-sec" onclick="_slotAuditActionSplit('${groupKeyEsc}')" style="background:#DBEAFE;border-color:#3B82F6;color:#1E3A8A;font-weight:700;padding:6px 10px;font-size:11px">✂ פצל ל-${N} רשומות זהות</button>
+          <button class="btn-sec" onclick="_slotAuditActionKeep('${groupKeyEsc}')" style="background:#FEF3C7;border-color:#F59E0B;color:#78350F;font-weight:700;padding:6px 10px;font-size:11px">✅ אשרי — דיווחה רק על ${f.rCount} מתוך ${f.sCount}</button>
+          <button class="btn-sec" onclick="_slotAuditOpenSplitEdit('${groupKeyEsc}')" style="background:#EDE9FE;border-color:#7C3AED;color:#5B21B6;font-weight:700;padding:6px 10px;font-size:11px">✏ פצל וערוך</button>
+        </div>
+      </td>
+    </tr>
+    <tr id="${rid}-edit" hidden><td colspan="7" style="padding:10px;background:#F9FAFB;border-bottom:2px solid #7C3AED"><div id="${rid}-edit-body"></div></td></tr>`;
+  }).join('');
+  el.innerHTML=`<table style="width:100%;border-collapse:collapse;font-size:12px;background:white">
+    <thead><tr style="background:#F3F4F6">
+      <th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">תאריך</th>
+      <th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">מדריכה</th>
+      <th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">גן</th>
+      <th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">דווח / צפוי</th>
+      <th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">שיבוצים באותו יום</th>
+      <th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">דיווחים קיימים</th>
+      <th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">פעולות</th>
+    </tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+function _slotAuditFindFlag(groupKey){
+  const records=DB.get('records')||[];const users=DB.get('users')||[];
+  const flagged=_slotAuditScan(records,users);
+  return flagged.find(f=>String(f.groupKey)===String(groupKey));
+}
+async function _slotAuditActionSplit(groupKey){
+  const flag=_slotAuditFindFlag(groupKey);
+  if(!flag){alert('הקבוצה כבר לא רלוונטית — רעני');return}
+  if(!confirm(`פיצול ל-${flag.sCount} רשומות זהות?\n\nהמדריכה: ${(flag.user&&flag.user.name)||flag.firstRec.instructorName}\nתאריך: ${flag.date}\nגן: ${flag.garden}\nיווצרו ${flag.missing} רשומות חדשות (משך/קבוצות כמו הראשונה).\n\nלהמשיך?`))return;
+  const res=await _slotAuditSplitGroup(flag);
+  _renderSlotAuditList();
+  if(typeof renderHis==='function')renderHis();
+  alert(`✓ פוצל: ${res.touchedIds.length} עודכנו, ${res.newRecIds.length} נוצרו`);
+}
+async function _slotAuditActionKeep(groupKey){
+  const flag=_slotAuditFindFlag(groupKey);
+  if(!flag){alert('הקבוצה כבר לא רלוונטית — רעני');return}
+  if(!confirm(`סימון: המדריכה דיווחה רק על ${flag.rCount} מתוך ${flag.sCount} סשנים ולא ביצעה את השאר. הרשומות ייסגרו לביקורת. להמשיך?`))return;
+  const res=await _slotAuditKeepGroup(flag);
+  _renderSlotAuditList();
+  if(typeof renderHis==='function')renderHis();
+  alert(`✓ סומן: ${res.touchedIds.length} רשומות`);
+}
+function _slotAuditOpenSplitEdit(groupKey){
+  const flag=_slotAuditFindFlag(groupKey);
+  if(!flag){alert('הקבוצה כבר לא רלוונטית — רעני');return}
+  const rid='sa-row-'+String(flag.groupKey).replace(/[^\w-]/g,'_');
+  const tr=document.getElementById(rid+'-edit');const body=document.getElementById(rid+'-edit-body');
+  if(!tr||!body)return;
+  const defaultDur=flag.firstRec.duration||30;const defaultGrp=flag.firstRec.groups||1;const defaultNotes=flag.firstRec.notes||'';
+  const slotForms=flag.expectedKeys.map((k,i)=>{
+    const m=flag.expectedByKey.get(k);
+    const timeStr=`${m&&m.start||'?'}-${m&&m.end||'?'}`;
+    const slotDur=(m&&m.start&&m.end)?((()=>{const[h1,m1]=m.start.split(':').map(Number);const[h2,m2]=m.end.split(':').map(Number);const d=(h2*60+m2)-(h1*60+m1);return d>0?d:defaultDur})()):defaultDur;
+    const alreadyReported=flag.recs.some(r=>r.slotKey===k);
+    return `<div style="background:white;border:2px solid #7C3AED;border-radius:8px;padding:10px;margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:700;color:#5B21B6;font-size:13px;margin-bottom:6px">
+        <input type="checkbox" id="sa-e-${rid}-${i}-inc" ${alreadyReported?'checked':'checked'} style="width:16px;height:16px" data-slotkey="${esc(k)}">
+        🕐 ${esc(timeStr)}${m&&m.note?' · '+esc(m.note):''}${alreadyReported?' <span style="background:#D1FAE5;color:#065F46;padding:1px 6px;border-radius:5px;font-size:10px">כבר דווח</span>':''}
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <label style="font-size:11px;color:var(--mut)">משך (דק'): <input type="number" id="sa-e-${rid}-${i}-dur" value="${esc(String(slotDur))}" min="0" style="width:70px;padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-size:12px"></label>
+        <label style="font-size:11px;color:var(--mut)">קבוצות: <input type="number" id="sa-e-${rid}-${i}-grp" value="${esc(String(defaultGrp))}" min="0" style="width:60px;padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-size:12px"></label>
+        <label style="font-size:11px;color:var(--mut);flex:1;min-width:180px">הערות: <input type="text" id="sa-e-${rid}-${i}-not" value="${esc(defaultNotes)}" style="width:100%;padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-size:12px;font-family:inherit"></label>
+      </div>
+    </div>`;
+  }).join('');
+  body.innerHTML=`<div style="font-size:12px;color:#5B21B6;font-weight:700;margin-bottom:8px">בחרי אילו סשנים בוצעו ומלאי משך/קבוצות לכל סשן. בטלי סימון של סשנים שלא בוצעו.</div>
+    ${slotForms}
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn-prim" onclick="_slotAuditSubmitSplitEdit('${esc(String(flag.groupKey))}')" style="background:#7C3AED;border-color:#7C3AED;font-size:13px;padding:10px 16px;margin:0">✓ שמור פיצול מותאם</button>
+      <button class="btn-sec" onclick="document.getElementById('${rid}-edit').hidden=true" style="padding:10px 16px">בטל</button>
+    </div>`;
+  tr.hidden=false;
+}
+async function _slotAuditSubmitSplitEdit(groupKey){
+  const flag=_slotAuditFindFlag(groupKey);
+  if(!flag){alert('הקבוצה כבר לא רלוונטית — רעני');return}
+  const rid='sa-row-'+String(flag.groupKey).replace(/[^\w-]/g,'_');
+  const perSlot=[];
+  flag.expectedKeys.forEach((k,i)=>{
+    const inc=document.getElementById(`sa-e-${rid}-${i}-inc`);
+    if(!inc||!inc.checked)return;
+    const dur=parseInt((document.getElementById(`sa-e-${rid}-${i}-dur`)||{}).value||'0',10);
+    const grp=parseInt((document.getElementById(`sa-e-${rid}-${i}-grp`)||{}).value||'0',10);
+    const notes=(document.getElementById(`sa-e-${rid}-${i}-not`)||{}).value||'';
+    const m=flag.expectedByKey.get(k);
+    perSlot.push({slotKey:k,duration:dur,groups:grp,notes,timeIn:(m&&m.start)||''});
+  });
+  if(!perSlot.length){alert('לפחות סשן אחד חייב להיות מסומן. השתמשי ב-"אשרי" אם אף אחד לא בוצע.');return}
+  const res=await _slotAuditSplitEditGroup(flag,perSlot);
+  if(!res)return;
+  _renderSlotAuditList();
+  if(typeof renderHis==='function')renderHis();
+  alert(`✓ פוצל ידנית: ${res.touchedIds.length} עודכנו, ${res.newRecIds.length} נוצרו, ${res.skippedIds.length} סומנו לא בוצעו`);
+}
+async function _slotAuditBulkSplitAll(){
+  const records=DB.get('records')||[];const users=DB.get('users')||[];
+  const flagged=_slotAuditScan(records,users);
+  if(!flagged.length){alert('אין ימים לפצל.');return}
+  const totalMissing=flagged.reduce((s,f)=>s+f.missing,0);
+  if(!confirm(`⚡ פיצול אוטומטי של כל הימים המסומנים (${flagged.length} קבוצות).\n\nיווצרו ${totalMissing} רשומות חדשות (הנחה: כל הסשנים בוצעו).\n\nפעולה זו לא ניתנת לביטול בכפתור אחד. להמשיך?`))return;
+  let okGroups=0,touched=0,created=0,failed=0;
+  for(const flag of flagged){
+    try{
+      const res=await _slotAuditSplitGroup(flag,{skipAudit:false});
+      okGroups++;
+      touched+=res.touchedIds.length;
+      created+=res.newRecIds.length;
+    }catch(e){failed++;console.warn('[slotAudit bulk]',e);}
+  }
+  _renderSlotAuditList();
+  if(typeof renderHis==='function')renderHis();
+  alert(`✓ הושלם\n\n• קבוצות שטופלו: ${okGroups}\n• רשומות עודכנו: ${touched}\n• רשומות נוצרו: ${created}\n• כשלו: ${failed}`);
 }
 /* ==== OFFICE ATTENDANCE (time clock) ==== */
 function _getOfficeAttendanceLocal(){try{return JSON.parse(localStorage.getItem('bz3_officeAttendance')||'[]')}catch(e){return[]}}
