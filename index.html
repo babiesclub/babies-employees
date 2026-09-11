@@ -7475,7 +7475,7 @@ async function _restoreFromScheduleAudit(docId){
                    original record id + any new record ids for restore.
    Iron rule: splits produce N records with same date+garden but different
    slotKey — matches the v38.2 contract. */
-const _SLOT_MIG_CUTOFF='2026-09-06';
+const _SLOT_MIG_CUTOFF='2026-08-01';
 function _slotMigLookupUser(r,users){
   /* Substitutes: use the ORIGINAL instructor's weekly schedule (they own the slot). */
   const targetKey=r._isSubstitute&&r.substituteForUid?String(r.substituteForUid):null;
@@ -7842,7 +7842,7 @@ async function _slotMigSubmitSplitEdit(recId){
    split-and-edit, or "she genuinely did fewer".
    Every action tags touched/created records with `_slotAuditDone` so groups
    don't re-surface. Every action writes to scheduleAudit for restore. */
-const _SLOT_AUDIT_CUTOFF='2026-09-06';
+const _SLOT_AUDIT_CUTOFF='2026-08-01';
 function _slotAuditDow(dateStr){try{return new Date(dateStr+'T00:00:00').getDay()}catch(e){return -1}}
 function _slotAuditLookupUser(r,users){
   const targetKey=r._isSubstitute&&r.substituteForUid?String(r.substituteForUid):null;
