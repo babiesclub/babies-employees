@@ -628,6 +628,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <button class="btn-sec" style="margin-top:8px;width:100%;background:#FEE2E2;border-color:#DC2626;color:#7F1D1D;font-weight:700" onclick="openNetworkCleanupMo()">🧹 נקה גני רשת (מחיקה בבת אחת של כל הסניפים)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#F59E0B;color:#78350F;font-weight:800" onclick="openOrphanedGardensScanMo()">🔍 סרוק גני רפאים בשיבוצים (לא קיימים במאגר)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#F0F9FF,#BAE6FD);border-color:#0EA5E9;color:#0C4A6E;font-weight:800" onclick="openScheduleAuditMo()">📜 יומן שינויים במערכת שבועית (מי הסיר/הוסיף — עם שחזור)</button>
+            <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#F59E0B;color:#78350F;font-weight:800" onclick="openSlotMigrationMo()">⚠ פיצול רשומות דוחות (שבוע נוכחי — מיגרציית slotKey)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border-color:#7C3AED;color:#5B21B6;font-weight:800" onclick="openNetworkImageImportMo()">📷 ייבוא סניפי רשת מתמונה (אפטר סקול / צהרונים)</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#DCFCE7,#BBF7D0);border-color:#16A34A;color:#14532D;font-weight:800" onclick="openMoveNetworkMo()">🔀 העבר סניפים בין רשתות</button>
             <button class="btn-sec" style="margin-top:8px;width:100%;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-color:#D97706;color:#78350F;font-weight:800" onclick="openReconcileMo()">🏦 התאמת תשלומים · OneZero / Bit / PayBox → Morning</button>
@@ -5076,7 +5077,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-11/v38.2-independent-slots';
+  const _algoVersion='2026-09-11/v38.3-slot-migration';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -7452,6 +7453,382 @@ async function _restoreFromScheduleAudit(docId){
   if(typeof renderInstList==='function')renderInstList();
   if(typeof renderAdm==='function')renderAdm();
   syncScheduleAudit(500).then(renderScheduleAuditList);
+}
+/* ==== SLOT-KEY RETRO MIGRATION (v38.3) ====
+   v38.2 added `slotKey` to NEW records so a garden with N slots on one day gets
+   N independent records. Records from THIS week (>= 2026-09-06) were written
+   before that change and have no slotKey — if an instructor did all N slots but
+   only reported one, payroll under-counts by N-1.
+   Part A (auto):  scan every record from CUTOFF onward, look up the instructor's
+                   weeklySchedule for that day-of-week, and:
+                   • 0 matches → leave alone (unknown garden).
+                   • 1 unique slotKey among matches → assign it.
+                   • N unique slotKeys but record.timeIn uniquely picks one → assign it.
+                   • else → flag ambiguous.
+   Part B (UI):    admin modal listing every ambiguous record with 3 actions:
+                   keep-as-single / split-N-identical / split-and-edit.
+   Part C (guard): every touched record gets `_slotMigrationDone:true` so it never
+                   surfaces twice.
+   Part D (trail): every action writes a `scheduleAudit` entry (source
+                   `slot-migration-auto` or `slot-migration-manual`) with the
+                   original record id + any new record ids for restore.
+   Iron rule: splits produce N records with same date+garden but different
+   slotKey — matches the v38.2 contract. */
+const _SLOT_MIG_CUTOFF='2026-09-06';
+function _slotMigLookupUser(r,users){
+  /* Substitutes: use the ORIGINAL instructor's weekly schedule (they own the slot). */
+  const targetKey=r._isSubstitute&&r.substituteForUid?String(r.substituteForUid):null;
+  if(targetKey){
+    const u=users.find(x=>String(x.uid||'')===targetKey||String(x.id||'')===targetKey);
+    if(u)return u;
+  }
+  return users.find(x=>(r.instructorUid&&String(x.uid||'')===String(r.instructorUid))||(r.instructorId!=null&&String(x.id||'')===String(r.instructorId)))||null;
+}
+function _slotMigDayOfWeek(dateStr){try{return new Date(dateStr+'T00:00:00').getDay()}catch(e){return -1}}
+function _slotMigMatchesFor(r,users){
+  const u=_slotMigLookupUser(r,users);
+  if(!u)return{u:null,matches:[]};
+  const dow=_slotMigDayOfWeek(r.date);
+  if(dow<0)return{u,matches:[]};
+  const ws=(u.weeklySchedule&&u.weeklySchedule[dow])||[];
+  const gLower=String(r.garden||'').toLowerCase();
+  return{u,matches:ws.filter(e=>e&&String(e.garden||'').toLowerCase()===gLower)};
+}
+/* Classify a single record. Returns:
+     {action:'skip-has-slot'|'skip-migrated'|'skip-not-exec'|'skip-old'|
+             'skip-unknown-instructor'|'unknown-slot'|'auto'|'ambiguous',
+      slotKey?, matches?, uniqueKeys?, lookupUser?} */
+function _slotMigClassify(r,users){
+  if(!r)return{action:'skip-old'};
+  if(r.date<_SLOT_MIG_CUTOFF)return{action:'skip-old'};
+  if(r.slotKey)return{action:'skip-has-slot'};
+  if(r._slotMigrationDone)return{action:'skip-migrated'};
+  if(r.status==='not_executed')return{action:'skip-not-exec'};
+  const{u,matches}=_slotMigMatchesFor(r,users);
+  if(!u)return{action:'skip-unknown-instructor'};
+  if(!matches.length)return{action:'unknown-slot',lookupUser:u};
+  const uniqueKeys=[...new Set(matches.map(m=>_mySchedSlotKey(m.start,m.end)))];
+  if(uniqueKeys.length===1)return{action:'auto',slotKey:uniqueKeys[0],matches,uniqueKeys,lookupUser:u};
+  if(r.timeIn){
+    const exact=[...new Set(matches.filter(m=>m.start===r.timeIn).map(m=>_mySchedSlotKey(m.start,m.end)))];
+    if(exact.length===1)return{action:'auto',slotKey:exact[0],matches,uniqueKeys,lookupUser:u};
+  }
+  return{action:'ambiguous',matches,uniqueKeys,lookupUser:u};
+}
+function _slotMigScan(records,users){
+  const buckets={auto:[],ambiguous:[],unknownSlot:[],skipHasSlot:[],skipMigrated:[],skipNotExec:[],skipUnknownInstructor:[],skipOld:[]};
+  (records||[]).forEach(r=>{
+    const c=_slotMigClassify(r,users);
+    if(c.action==='auto')buckets.auto.push({r,...c});
+    else if(c.action==='ambiguous')buckets.ambiguous.push({r,...c});
+    else if(c.action==='unknown-slot')buckets.unknownSlot.push({r,...c});
+    else if(c.action==='skip-has-slot')buckets.skipHasSlot.push(r);
+    else if(c.action==='skip-migrated')buckets.skipMigrated.push(r);
+    else if(c.action==='skip-not-exec')buckets.skipNotExec.push(r);
+    else if(c.action==='skip-unknown-instructor')buckets.skipUnknownInstructor.push(r);
+    else if(c.action==='skip-old')buckets.skipOld.push(r);
+  });
+  return buckets;
+}
+async function _slotMigWriteAudit(entry){
+  try{
+    const arr=JSON.parse(localStorage.getItem('bz3_scheduleAudit')||'[]');
+    arr.unshift(entry);
+    localStorage.setItem('bz3_scheduleAudit',JSON.stringify(arr.slice(0,300)));
+  }catch(e){}
+  if(window.fbDb){
+    const docId=Date.now()+'_'+Math.random().toString(36).slice(2,10);
+    try{await fbDb.collection('scheduleAudit').doc(docId).set(entry)}catch(e){console.warn('[slotMig audit]',e.message||e)}
+  }
+}
+/* Runs auto-backfill (Part A). Admin-only. Never touches ambiguous rows. */
+async function runSlotMigrationAutoBackfill(opts){
+  opts=opts||{};
+  if(!cu||(cu.role!=='admin'&&cu.role!=='office')){alert('רק אדמין / משרד');return null}
+  const records=DB.get('records')||[];
+  const users=DB.get('users')||[];
+  const buckets=_slotMigScan(records,users);
+  if(!buckets.auto.length&&!opts.silent){
+    alert(`אין רשומות לגיבוי אוטומטי.\n\n• עם slotKey: ${buckets.skipHasSlot.length}\n• כבר טופלו: ${buckets.skipMigrated.length}\n• לא בוצע: ${buckets.skipNotExec.length}\n• עמומות (דורש אישור): ${buckets.ambiguous.length}\n• גן לא ידוע: ${buckets.unknownSlot.length}`);
+    return buckets;
+  }
+  if(!opts.skipConfirm&&!opts.silent){
+    if(!confirm(`עדכון אוטומטי של ${buckets.auto.length} רשומות (הוספת slotKey לפי המערכת השבועית).\n\nעמומות (${buckets.ambiguous.length}) לא ייגעו — תראי אותן ברשימה נפרדת.\n\nלהמשיך?`))return null;
+  }
+  const idsMap=new Map(records.map((r,i)=>[String(r.id),i]));
+  const auditPerInstructor=new Map();
+  let okCount=0,failCount=0;
+  for(const item of buckets.auto){
+    const r=item.r;
+    const idx=idsMap.get(String(r.id));
+    if(idx==null){failCount++;continue}
+    const newRec={...r,slotKey:item.slotKey,_slotMigrationDone:true,_slotMigrationSource:'auto',_slotMigrationAt:new Date().toISOString()};
+    records[idx]=newRec;
+    if(window.fbDb){
+      try{await fbDb.collection('records').doc(String(r.id)).set(newRec);okCount++}
+      catch(e){failCount++;console.warn('[slotMig auto] Firestore set failed for',r.id,e.message||e)}
+    }else okCount++;
+    const key=String((item.lookupUser&&(item.lookupUser.uid||item.lookupUser.id))||'?');
+    if(!auditPerInstructor.has(key))auditPerInstructor.set(key,{u:item.lookupUser,rows:[]});
+    auditPerInstructor.get(key).rows.push({recordId:String(r.id),date:r.date,garden:r.garden,slotKey:item.slotKey,timeIn:r.timeIn||''});
+  }
+  DB.set('records',records);
+  /* One audit entry per instructor to keep the log readable. */
+  const originalRole=(cu&&(cu._originalRole||cu.role))||'admin';
+  for(const[key,payload]of auditPerInstructor.entries()){
+    const u=payload.u||{};
+    await _slotMigWriteAudit({
+      ts:new Date().toISOString(),
+      targetUid:u.uid||String(u.id||key),
+      targetName:u.name||u.username||'?',
+      changedBy:(cu&&cu.uid)||'system',
+      changedByName:(cu&&(cu.name||cu.username))||'system',
+      changedByRole:originalRole,
+      source:'slot-migration-auto',
+      totals:{recordsBackfilled:payload.rows.length},
+      slotMigration:{action:'auto-backfill',rows:payload.rows},
+      note:`v38.3 — הוקצה slotKey אוטומטית ל-${payload.rows.length} רשומות`
+    });
+  }
+  if(!opts.silent){
+    alert(`✓ הושלם\n\n• הוקצו אוטומטית: ${okCount}\n• כשלו: ${failCount}\n• עמומות ממתינות: ${buckets.ambiguous.length}\n\nהעמומות זמינות תחת "⚠ פיצול רשומות דוחות".`);
+  }
+  return{...buckets,okCount,failCount};
+}
+/* --- Ambiguous review UI (Part B) --- */
+function openSlotMigrationMo(){
+  if(!cu||(cu.role!=='admin'&&cu.role!=='office')){alert('רק אדמין / משרד');return}
+  let mo=document.getElementById('slot-mig-mo');
+  if(!mo){mo=document.createElement('div');mo.id='slot-mig-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:1100px;width:96vw;max-height:94vh;overflow-y:auto"><div class="mt"><span>⚠ פיצול רשומות דוחות (מיגרציית v38.3)</span><span class="mc" onclick="document.getElementById('slot-mig-mo').classList.remove('open');document.getElementById('slot-mig-mo').style.display='none'">×</span></div>
+    <div style="background:#FEF3C7;border-right:4px solid #F59E0B;padding:10px 12px;border-radius:8px;margin-bottom:10px;font-size:12px;color:#78350F;line-height:1.6">רשומה "עמומה" = מדריכה דיווחה פעם אחת על גן שיש לו כמה שיבוצים באותו יום. לא ניתן לדעת אוטומטית אם ביצעה 1 מתוך N או את כולם. אנא ווידאי עם המדריכה ובחרי את הפעולה המתאימה. שינויים ייכתבו ליומן ואפשר לשחזר.</div>
+    <div id="slot-mig-summary" style="background:#EFF6FF;border-right:4px solid #3B82F6;padding:10px 12px;border-radius:8px;margin-bottom:10px;font-size:12px;color:#1E3A8A;line-height:1.6"></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+      <button class="btn-prim" onclick="runSlotMigrationAutoBackfill().then(_=>_renderSlotMigList())" style="background:#2D6A4F;border-color:#2D6A4F;font-size:13px;padding:10px 16px;margin:0">▶ הרץ גיבוי אוטומטי (unambiguous)</button>
+      <button class="btn-sec" onclick="_renderSlotMigList()" style="font-size:13px;padding:10px 16px">🔄 רענן</button>
+    </div>
+    <div id="slot-mig-list" style="max-height:70vh;overflow-y:auto"></div></div>`;
+  mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+  _renderSlotMigList();
+}
+function _renderSlotMigList(){
+  const el=document.getElementById('slot-mig-list');if(!el)return;
+  const records=DB.get('records')||[];
+  const users=DB.get('users')||[];
+  const buckets=_slotMigScan(records,users);
+  const sumEl=document.getElementById('slot-mig-summary');
+  if(sumEl){
+    sumEl.innerHTML=`<b>מצב נוכחי מתאריך ${_SLOT_MIG_CUTOFF}:</b><br>
+      • עם slotKey (תקין): ${buckets.skipHasSlot.length}
+      · כבר טופלו ידנית: ${buckets.skipMigrated.length}
+      · לא בוצע (מדולג): ${buckets.skipNotExec.length}
+      · גן לא במערכת (נשארות כמו שהן): ${buckets.unknownSlot.length}<br>
+      • ניתנות לגיבוי אוטומטי: <b>${buckets.auto.length}</b>
+      · <span style="color:#B45309">עמומות הדורשות אישור: <b>${buckets.ambiguous.length}</b></span>`;
+  }
+  if(!buckets.ambiguous.length){
+    el.innerHTML='<div style="padding:30px;text-align:center;color:var(--mut);font-size:13px;background:#F0FDF4;border:2px dashed #86EFAC;border-radius:10px">✓ אין רשומות עמומות. הכל טופל או ניתן לטיפול אוטומטי.</div>';
+    return;
+  }
+  const rows=buckets.ambiguous.slice().sort((a,b)=>(a.r.date||'').localeCompare(b.r.date||'')).map(item=>{
+    const r=item.r;
+    const u=item.lookupUser||{};
+    const rid='sm-row-'+String(r.id).replace(/[^\w-]/g,'');
+    const dt=new Date(r.date+'T00:00:00');
+    const dayName=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'][dt.getDay()];
+    const slotList=item.matches.map((m,i)=>`<span style="display:inline-block;background:#E1F2FA;color:#0C4A6E;padding:3px 10px;border-radius:6px;margin:2px;font-weight:700;font-size:12px;border:1px solid #90CDF4">🕐 ${esc(m.start||'?')}-${esc(m.end||'?')}${m.note?' <span style=\"font-weight:500;opacity:0.8\">('+esc(m.note)+')</span>':''}</span>`).join(' ');
+    const currentReport=`<b>${esc(String(r.duration||0))}′</b> · ${esc(String(r.groups||0))} קבוצות${r.notes?' · '+esc(r.notes):''}${r.timeIn?' · timeIn: '+esc(r.timeIn):''}`;
+    const N=item.matches.length;
+    return `<tr id="${rid}" style="border-bottom:1.5px solid #E5E7EB;vertical-align:top">
+      <td style="padding:10px 8px;font-weight:700;white-space:nowrap">${esc(dayName)} · ${esc(r.date)}</td>
+      <td style="padding:10px 8px">${esc(u.name||r.instructorName||'?')}</td>
+      <td style="padding:10px 8px;font-weight:700;color:#1B4332">${esc(r.garden||'?')}</td>
+      <td style="padding:10px 8px;font-size:12px;color:#374151">${currentReport}</td>
+      <td style="padding:10px 8px;line-height:1.9">${slotList}</td>
+      <td style="padding:10px 8px;white-space:nowrap">
+        <div style="display:flex;flex-direction:column;gap:4px;min-width:180px">
+          <button class="btn-sec" onclick="_slotMigMarkSingle('${esc(String(r.id))}')" style="background:#FEF3C7;border-color:#F59E0B;color:#78350F;font-weight:700;padding:6px 10px;font-size:11px">1 של ${N} — לא לפצל</button>
+          <button class="btn-sec" onclick="_slotMigSplitAll('${esc(String(r.id))}')" style="background:#DBEAFE;border-color:#3B82F6;color:#1E3A8A;font-weight:700;padding:6px 10px;font-size:11px">לפצל ל-${N} זהות</button>
+          <button class="btn-sec" onclick="_slotMigOpenSplitEdit('${esc(String(r.id))}')" style="background:#EDE9FE;border-color:#7C3AED;color:#5B21B6;font-weight:700;padding:6px 10px;font-size:11px">✏ לפצל ולערוך</button>
+        </div>
+      </td>
+    </tr>
+    <tr id="${rid}-edit" hidden><td colspan="6" style="padding:10px;background:#F9FAFB;border-bottom:2px solid #7C3AED"><div id="${rid}-edit-body"></div></td></tr>`;
+  }).join('');
+  el.innerHTML=`<table style="width:100%;border-collapse:collapse;font-size:12px;background:white">
+    <thead><tr style="background:#F3F4F6"><th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">תאריך</th><th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">מדריכה</th><th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">גן</th><th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">דיווח נוכחי</th><th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">שיבוצים באותו יום</th><th style="padding:8px 6px;text-align:right;border-bottom:2px solid #D1D5DB;font-size:11px">פעולות</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+async function _slotMigMarkSingle(recId){
+  if(!confirm('סימון "1 של N" — הרשומה תסומן כטופלה עם slotKey=unknown ולא ייווצרו רשומות חדשות. להמשיך?'))return;
+  const records=DB.get('records')||[];
+  const users=DB.get('users')||[];
+  const idx=records.findIndex(r=>String(r.id)===String(recId));
+  if(idx<0){alert('רשומה לא נמצאה');return}
+  const r=records[idx];
+  const c=_slotMigClassify(r,users);
+  const nowIso=new Date().toISOString();
+  const newRec={...r,slotKey:'unknown',_slotMigrationDone:true,_slotMigrationSource:'manual-single',_slotMigrationAt:nowIso};
+  records[idx]=newRec;
+  DB.set('records',records);
+  if(window.fbDb){try{await fbDb.collection('records').doc(String(r.id)).set(newRec)}catch(e){alert('סנכרון ענן נכשל: '+(e.message||e));return}}
+  const u=c.lookupUser||{};
+  const originalRole=(cu&&(cu._originalRole||cu.role))||'admin';
+  await _slotMigWriteAudit({
+    ts:nowIso,targetUid:u.uid||String(u.id||'?'),targetName:u.name||u.username||r.instructorName||'?',
+    changedBy:(cu&&cu.uid)||'system',changedByName:(cu&&(cu.name||cu.username))||'system',changedByRole:originalRole,
+    source:'slot-migration-manual',totals:{recordsMarkedSingle:1},
+    slotMigration:{action:'mark-single',originalRecordId:String(r.id),date:r.date,garden:r.garden,availableSlots:(c.matches||[]).map(m=>_mySchedSlotKey(m.start,m.end))},
+    note:'סומן כ-1 מתוך N — אין פיצול'
+  });
+  _renderSlotMigList();
+  if(typeof renderHis==='function')renderHis();
+}
+async function _slotMigSplitAll(recId){
+  const records=DB.get('records')||[];
+  const users=DB.get('users')||[];
+  const idx=records.findIndex(r=>String(r.id)===String(recId));
+  if(idx<0){alert('רשומה לא נמצאה');return}
+  const r=records[idx];
+  const c=_slotMigClassify(r,users);
+  if(c.action!=='ambiguous'){alert('הרשומה כבר לא עמומה — רעני');return}
+  const uniqueKeys=[...new Set((c.matches||[]).map(m=>_mySchedSlotKey(m.start,m.end)))];
+  const N=uniqueKeys.length;
+  if(!confirm(`פיצול ל-${N} רשומות זהות (בוצעו כל השיבוצים)?\n\nהרשומה המקורית תיחשב לשיבוץ הראשון, ו-${N-1} רשומות חדשות ייווצרו עם משך/קבוצות/הערות זהות.`))return;
+  const nowIso=new Date().toISOString();
+  /* Pick the first matching slot object per unique slotKey (they may share duration if identical). */
+  const keyToMatch=new Map();
+  (c.matches||[]).forEach(m=>{const k=_mySchedSlotKey(m.start,m.end);if(!keyToMatch.has(k))keyToMatch.set(k,m)});
+  const orderedKeys=uniqueKeys.slice().sort();
+  const firstKey=orderedKeys[0];
+  const firstMatch=keyToMatch.get(firstKey);
+  const updatedOrig={...r,slotKey:firstKey,timeIn:r.timeIn||(firstMatch&&firstMatch.start)||'',_slotMigrationDone:true,_slotMigrationSource:'manual-split-all',_slotMigrationAt:nowIso};
+  records[idx]=updatedOrig;
+  const newRecIds=[];
+  for(let i=1;i<orderedKeys.length;i++){
+    const k=orderedKeys[i];
+    const m=keyToMatch.get(k);
+    const nid=Date.now()+Math.floor(Math.random()*1000)+i;
+    const clone={...r,id:nid,slotKey:k,timeIn:(m&&m.start)||r.timeIn||'',_slotMigrationDone:true,_slotMigrationSource:'manual-split-all-clone',_slotMigrationAt:nowIso,_slotMigrationOfId:String(r.id),createdAt:r.createdAt||nowIso,updatedAt:nowIso};
+    records.push(clone);
+    newRecIds.push(String(nid));
+  }
+  DB.set('records',records);
+  if(window.fbDb){
+    try{await fbDb.collection('records').doc(String(r.id)).set(updatedOrig)}
+    catch(e){alert('סנכרון ענן נכשל (מקור): '+(e.message||e));return}
+    for(const nid of newRecIds){
+      const rr=records.find(x=>String(x.id)===String(nid));
+      if(rr)try{await fbDb.collection('records').doc(String(nid)).set(rr)}catch(e){console.warn('[slotMig split] cloud save',nid,e.message||e)}
+    }
+  }
+  const u=c.lookupUser||{};
+  const originalRole=(cu&&(cu._originalRole||cu.role))||'admin';
+  await _slotMigWriteAudit({
+    ts:nowIso,targetUid:u.uid||String(u.id||'?'),targetName:u.name||u.username||r.instructorName||'?',
+    changedBy:(cu&&cu.uid)||'system',changedByName:(cu&&(cu.name||cu.username))||'system',changedByRole:originalRole,
+    source:'slot-migration-manual',totals:{recordsSplit:N,recordsCreated:newRecIds.length},
+    slotMigration:{action:'split-all',originalRecordId:String(r.id),newRecordIds:newRecIds,date:r.date,garden:r.garden,slotsAssigned:orderedKeys},
+    note:`פוצלה ל-${N} רשומות זהות (בוצעו כל השיבוצים)`
+  });
+  _renderSlotMigList();
+  if(typeof renderHis==='function')renderHis();
+}
+function _slotMigOpenSplitEdit(recId){
+  const records=DB.get('records')||[];
+  const users=DB.get('users')||[];
+  const r=records.find(x=>String(x.id)===String(recId));
+  if(!r){alert('רשומה לא נמצאה');return}
+  const c=_slotMigClassify(r,users);
+  if(c.action!=='ambiguous'){alert('הרשומה כבר לא עמומה — רעני');return}
+  const uniqueKeys=[...new Set((c.matches||[]).map(m=>_mySchedSlotKey(m.start,m.end)))].sort();
+  const keyToMatch=new Map();
+  (c.matches||[]).forEach(m=>{const k=_mySchedSlotKey(m.start,m.end);if(!keyToMatch.has(k))keyToMatch.set(k,m)});
+  const rid='sm-row-'+String(r.id).replace(/[^\w-]/g,'');
+  const tr=document.getElementById(rid+'-edit');
+  const body=document.getElementById(rid+'-edit-body');
+  if(!tr||!body)return;
+  const defaultDur=r.duration||30;
+  const defaultGrp=r.groups||1;
+  const slotForms=uniqueKeys.map((k,i)=>{
+    const m=keyToMatch.get(k);
+    const timeStr=`${m.start||'?'}-${m.end||'?'}`;
+    const slotDur=(m.start&&m.end)?((()=>{const[h1,m1]=m.start.split(':').map(Number);const[h2,m2]=m.end.split(':').map(Number);const d=(h2*60+m2)-(h1*60+m1);return d>0?d:defaultDur})()):defaultDur;
+    return `<div style="background:white;border:2px solid #7C3AED;border-radius:8px;padding:10px;margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:700;color:#5B21B6;font-size:13px;margin-bottom:6px">
+        <input type="checkbox" id="sm-e-${rid}-${i}-inc" checked style="width:16px;height:16px">
+        🕐 ${esc(timeStr)}${m.note?' · '+esc(m.note):''}
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+        <label style="font-size:11px;color:var(--mut)">משך (דק'): <input type="number" id="sm-e-${rid}-${i}-dur" value="${esc(String(slotDur))}" min="0" style="width:70px;padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-size:12px"></label>
+        <label style="font-size:11px;color:var(--mut)">קבוצות: <input type="number" id="sm-e-${rid}-${i}-grp" value="${esc(String(defaultGrp))}" min="0" style="width:60px;padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-size:12px"></label>
+        <label style="font-size:11px;color:var(--mut);flex:1;min-width:180px">הערות: <input type="text" id="sm-e-${rid}-${i}-not" value="${esc(r.notes||'')}" style="width:100%;padding:4px 6px;border:1.5px solid var(--brd);border-radius:5px;font-size:12px;font-family:inherit"></label>
+      </div>
+    </div>`;
+  }).join('');
+  body.innerHTML=`<div style="font-size:12px;color:#5B21B6;font-weight:700;margin-bottom:8px">ערכי לכל שיבוץ מה בפועל בוצע. בטלי סימון של שיבוצים שלא בוצעו.</div>
+    ${slotForms}
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn-prim" onclick="_slotMigSubmitSplitEdit('${esc(String(r.id))}')" style="background:#7C3AED;border-color:#7C3AED;font-size:13px;padding:10px 16px;margin:0">✓ שמור פיצול מותאם</button>
+      <button class="btn-sec" onclick="document.getElementById('${rid}-edit').hidden=true" style="padding:10px 16px">בטל</button>
+    </div>`;
+  tr.hidden=false;
+}
+async function _slotMigSubmitSplitEdit(recId){
+  const records=DB.get('records')||[];
+  const users=DB.get('users')||[];
+  const idx=records.findIndex(x=>String(x.id)===String(recId));
+  if(idx<0){alert('רשומה לא נמצאה');return}
+  const r=records[idx];
+  const c=_slotMigClassify(r,users);
+  if(c.action!=='ambiguous'){alert('הרשומה כבר לא עמומה — רעני');return}
+  const uniqueKeys=[...new Set((c.matches||[]).map(m=>_mySchedSlotKey(m.start,m.end)))].sort();
+  const keyToMatch=new Map();
+  (c.matches||[]).forEach(m=>{const k=_mySchedSlotKey(m.start,m.end);if(!keyToMatch.has(k))keyToMatch.set(k,m)});
+  const rid='sm-row-'+String(r.id).replace(/[^\w-]/g,'');
+  const perSlot=[];
+  uniqueKeys.forEach((k,i)=>{
+    const inc=document.getElementById(`sm-e-${rid}-${i}-inc`);
+    if(!inc||!inc.checked)return;
+    const dur=parseInt((document.getElementById(`sm-e-${rid}-${i}-dur`)||{}).value||'0',10);
+    const grp=parseInt((document.getElementById(`sm-e-${rid}-${i}-grp`)||{}).value||'0',10);
+    const notes=(document.getElementById(`sm-e-${rid}-${i}-not`)||{}).value||'';
+    const m=keyToMatch.get(k);
+    perSlot.push({slotKey:k,duration:dur,groups:grp,notes,timeIn:(m&&m.start)||''});
+  });
+  if(!perSlot.length){alert('לפחות שיבוץ אחד חייב להיות מסומן. השתמשי ב-"לא לפצל" אם אף אחד לא בוצע.');return}
+  const nowIso=new Date().toISOString();
+  const first=perSlot[0];
+  const updatedOrig={...r,slotKey:first.slotKey,duration:first.duration,groups:first.groups,notes:first.notes,timeIn:first.timeIn||r.timeIn||'',_slotMigrationDone:true,_slotMigrationSource:'manual-split-edit',_slotMigrationAt:nowIso,updatedAt:nowIso};
+  records[idx]=updatedOrig;
+  const newRecIds=[];
+  for(let i=1;i<perSlot.length;i++){
+    const s=perSlot[i];
+    const nid=Date.now()+Math.floor(Math.random()*1000)+i;
+    const clone={...r,id:nid,slotKey:s.slotKey,duration:s.duration,groups:s.groups,notes:s.notes,timeIn:s.timeIn||r.timeIn||'',_slotMigrationDone:true,_slotMigrationSource:'manual-split-edit-clone',_slotMigrationAt:nowIso,_slotMigrationOfId:String(r.id),createdAt:r.createdAt||nowIso,updatedAt:nowIso};
+    records.push(clone);
+    newRecIds.push(String(nid));
+  }
+  DB.set('records',records);
+  if(window.fbDb){
+    try{await fbDb.collection('records').doc(String(r.id)).set(updatedOrig)}
+    catch(e){alert('סנכרון ענן נכשל (מקור): '+(e.message||e));return}
+    for(const nid of newRecIds){
+      const rr=records.find(x=>String(x.id)===String(nid));
+      if(rr)try{await fbDb.collection('records').doc(String(nid)).set(rr)}catch(e){console.warn('[slotMig split-edit] cloud',nid,e.message||e)}
+    }
+  }
+  const u=c.lookupUser||{};
+  const originalRole=(cu&&(cu._originalRole||cu.role))||'admin';
+  await _slotMigWriteAudit({
+    ts:nowIso,targetUid:u.uid||String(u.id||'?'),targetName:u.name||u.username||r.instructorName||'?',
+    changedBy:(cu&&cu.uid)||'system',changedByName:(cu&&(cu.name||cu.username))||'system',changedByRole:originalRole,
+    source:'slot-migration-manual',totals:{recordsSplit:perSlot.length,recordsCreated:newRecIds.length},
+    slotMigration:{action:'split-edit',originalRecordId:String(r.id),newRecordIds:newRecIds,date:r.date,garden:r.garden,perSlot},
+    note:`פיצול מותאם ל-${perSlot.length} שיבוצים`
+  });
+  _renderSlotMigList();
+  if(typeof renderHis==='function')renderHis();
 }
 /* ==== OFFICE ATTENDANCE (time clock) ==== */
 function _getOfficeAttendanceLocal(){try{return JSON.parse(localStorage.getItem('bz3_officeAttendance')||'[]')}catch(e){return[]}}
