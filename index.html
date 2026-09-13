@@ -7463,6 +7463,466 @@ async function _restoreFromScheduleAudit(docId){
   if(typeof renderAdm==='function')renderAdm();
   syncScheduleAudit(500).then(renderScheduleAuditList);
 }
+/* ==== INVENTORY (v38.6) ====
+   Two categories:
+   - materials: physical animal/kit units. Same template can have multiple physical copies.
+   - speakers: one per instructor typically; spares held in warehouse.
+   Firestore:
+     inventoryItems     — one doc per physical unit (soft-deleted, not hard-deleted)
+     inventoryMovements — audit trail for every create/transfer/delete
+   Non-destructive: delete sets deleted:true; movement history is preserved. */
+async function syncInventoryItems(){
+  if(!window.fbDb||!cu)return[];
+  try{
+    const snap=await fbDb.collection('inventoryItems').get();
+    const arr=[];snap.forEach(d=>arr.push({...d.data(),_docId:d.id,id:d.data().id||d.id}));
+    localStorage.setItem('bz3_inventoryItems',JSON.stringify(arr));
+    return arr;
+  }catch(e){console.warn('[inventory] sync:',e.message);return[]}
+}
+function getInventoryItems(){try{return JSON.parse(localStorage.getItem('bz3_inventoryItems')||'[]')}catch(e){return[]}}
+async function syncInventoryMovements(limitN){
+  if(!window.fbDb||!cu||(cu.role!=='admin'&&cu.role!=='office'))return[];
+  try{
+    const snap=await fbDb.collection('inventoryMovements').orderBy('movedAt','desc').limit(limitN||500).get();
+    const arr=[];snap.forEach(d=>arr.push({...d.data(),_docId:d.id}));
+    localStorage.setItem('bz3_inventoryMovements',JSON.stringify(arr));
+    return arr;
+  }catch(e){console.warn('[inventory movements] sync:',e.message);return[]}
+}
+function getInventoryMovements(){try{return JSON.parse(localStorage.getItem('bz3_inventoryMovements')||'[]')}catch(e){return[]}}
+function _invActiveInstructors(){
+  const users=DB.get('users')||[];
+  return users.filter(u=>u&&u.role==='instructor'&&!u.offboarded&&!u.accessBlocked)
+              .sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
+}
+function _invNextSerial(templateId,type){
+  const items=getInventoryItems().filter(x=>!x.deleted&&x.type===type&&(type==='speaker'||x.templateId===templateId));
+  let mx=0;
+  items.forEach(it=>{
+    const m=/^#(\d+)$/.exec(String(it.serialLabel||''));
+    if(m)mx=Math.max(mx,parseInt(m[1],10));
+  });
+  return '#'+(mx+1);
+}
+function _invResolveLocationName(loc){
+  if(!loc||loc==='warehouse')return 'מחסן';
+  if(loc.indexOf('instructor:')===0){
+    const uid=loc.slice(11);
+    const u=(DB.get('users')||[]).find(x=>String(x.uid||x.id)===uid);
+    return u?u.name:'—';
+  }
+  return '—';
+}
+let _invTab='material';
+let _invFilterTpl='';
+function openInventoryMo(){
+  if(!cu||(cu.role!=='admin'&&cu.role!=='office')){alert('רק אדמין / משרד');return}
+  let mo=document.getElementById('inventory-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inventory-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:1180px;width:96vw;max-height:94vh;overflow-y:auto"><div class="mt"><span>📦 ניהול מלאי — מערכים + רמקולים</span><span class="mc" onclick="document.getElementById('inventory-mo').classList.remove('open');document.getElementById('inventory-mo').style.display='none'">×</span></div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;border-bottom:2px solid var(--brd);padding-bottom:10px;flex-wrap:wrap">
+      <button class="btn-sec" id="inv-tab-mat" onclick="switchInventoryTab('material')" style="flex:1;font-weight:800;min-width:150px">📦 מערכים פיזיים</button>
+      <button class="btn-sec" id="inv-tab-sp" onclick="switchInventoryTab('speaker')" style="flex:1;font-weight:800;min-width:150px">🔊 רמקולים</button>
+      <button class="btn-sec" onclick="openInventoryMovementsMo()" style="font-weight:700;background:#F3E8FF;color:#5B21B6;border-color:#7C3AED">📜 היסטוריית תנועות</button>
+    </div>
+    <div id="inv-body"><div style="padding:24px;text-align:center;color:var(--mut);font-size:12px">טוען מלאי...</div></div>
+  </div>`;
+  mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+  syncInventoryItems().then(()=>renderInventoryTab());
+}
+function switchInventoryTab(t){_invTab=t;renderInventoryTab()}
+function renderInventoryTab(){
+  const el=document.getElementById('inv-body');if(!el)return;
+  const t=_invTab||'material';
+  const tabMat=document.getElementById('inv-tab-mat');const tabSp=document.getElementById('inv-tab-sp');
+  if(tabMat){tabMat.style.background=t==='material'?'#DBEAFE':'white';tabMat.style.color=t==='material'?'#1E40AF':'var(--text)';}
+  if(tabSp){tabSp.style.background=t==='speaker'?'#DBEAFE':'white';tabSp.style.color=t==='speaker'?'#1E40AF':'var(--text)';}
+  if(t==='material')renderInventoryMaterialsTab(el);else renderInventorySpeakersTab(el);
+}
+function renderInventoryMaterialsTab(el){
+  const items=getInventoryItems().filter(x=>!x.deleted&&x.type==='material');
+  const mats=(typeof getMaterials==='function')?getMaterials():[];
+  const matsById={};mats.forEach(m=>matsById[m.id]=m);
+  const tplMap={};
+  items.forEach(x=>{
+    const tid=x.templateId||'?';
+    if(!tplMap[tid])tplMap[tid]={id:tid,name:(matsById[tid]&&matsById[tid].name)||x.templateName||'—',items:[]};
+    tplMap[tid].items.push(x);
+  });
+  const templates=Object.values(tplMap).sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
+  const filter=_invFilterTpl||'';
+  const filtered=filter?items.filter(x=>x.templateId===filter):items.slice();
+  filtered.sort((a,b)=>{
+    const an=(matsById[a.templateId]&&matsById[a.templateId].name)||a.templateName||'';
+    const bn=(matsById[b.templateId]&&matsById[b.templateId].name)||b.templateName||'';
+    return an.localeCompare(bn,'he')||(a.serialLabel||'').localeCompare(b.serialLabel||'','he');
+  });
+  const wareCount=items.filter(x=>x.location==='warehouse').length;
+  const instCount=items.filter(x=>x.location&&x.location.indexOf('instructor:')===0).length;
+  const summary=`<div style="background:#EFF6FF;border:1px solid #93C5FD;border-radius:8px;padding:10px;font-size:13px;color:#1E3A8A;margin-bottom:10px"><b>סה"כ יחידות מערכים: ${items.length}</b> · ${wareCount} במחסן · ${instCount} אצל מדריכות</div>`;
+  const tplAllBtn=`<div onclick="_invSetFilter('')" style="padding:8px 10px;background:${!filter?'#DBEAFE':'#F9FAFB'};border:1px solid var(--brd);border-radius:8px;margin-bottom:6px;cursor:pointer;font-size:12px;font-weight:700">📋 הכל (${items.length})</div>`;
+  const tplList=templates.map(tp=>{
+    const w=tp.items.filter(x=>x.location==='warehouse').length;
+    const iC=tp.items.filter(x=>x.location&&x.location.indexOf('instructor:')===0).length;
+    const bg=filter===tp.id?'#DBEAFE':'#F9FAFB';
+    return `<div onclick="_invSetFilter(${JSON.stringify(tp.id)})" style="padding:8px 10px;background:${bg};border:1px solid var(--brd);border-radius:8px;margin-bottom:6px;cursor:pointer;font-size:12px"><b>${tp.items.length} יחידות ${esc(tp.name)}</b><br><span style="font-size:10px;color:var(--mut)">${w} במחסן · ${iC} אצל מדריכות</span></div>`;
+  }).join('');
+  const tblRows=filtered.map(x=>{
+    const tplName=(matsById[x.templateId]&&matsById[x.templateId].name)||x.templateName||'—';
+    const lastMoved=x.updatedAt?new Date(x.updatedAt).toLocaleDateString('he-IL'):'—';
+    const itId=x.id||x._docId;
+    return `<tr>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB">${esc(tplName)}</td>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB;font-family:monospace">${esc(x.serialLabel||'#1')}</td>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB">${x.location==='warehouse'?'🏭 מחסן':'👤 '+esc(x.locationName||'')}</td>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB;color:var(--mut);font-size:11px">${lastMoved}</td>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB;white-space:nowrap">
+        <button class="btn-sec" onclick='openInventoryTransferMo(${JSON.stringify(itId)})' style="padding:4px 8px;font-size:11px">🔄 העבר</button>
+        <button class="btn-sec" onclick='deleteInventoryItem(${JSON.stringify(itId)})' style="padding:4px 8px;font-size:11px;background:#FEE2E2;color:#991B1B">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  const emptyMsg='<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">אין יחידות מלאי — הוסיפי את הראשונה +</div>';
+  el.innerHTML=`
+    ${summary}
+    <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <div style="width:280px;flex-shrink:0">
+        <button class="btn-prim" style="width:100%;margin-bottom:10px" onclick="openInventoryAddMaterialMo()">+ הוסף יחידת מלאי</button>
+        <div style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px">סינון לפי מערך</div>
+        ${tplAllBtn}${tplList||'<div style="font-size:11px;color:var(--mut);font-style:italic;padding:6px">(אין תבניות עדיין)</div>'}
+      </div>
+      <div style="flex:1;min-width:320px">
+        ${items.length?`<table style="width:100%;border-collapse:collapse;font-size:12px;background:white;border:1px solid var(--brd);border-radius:8px;overflow:hidden">
+          <thead style="background:#F3F4F6"><tr>
+            <th style="padding:8px;text-align:right">מערך</th>
+            <th style="padding:8px;text-align:right">שם ייחודי</th>
+            <th style="padding:8px;text-align:right">מיקום</th>
+            <th style="padding:8px;text-align:right">עודכן</th>
+            <th style="padding:8px;text-align:right">פעולות</th>
+          </tr></thead>
+          <tbody>${tblRows}</tbody>
+        </table>`:emptyMsg}
+      </div>
+    </div>`;
+}
+function _invSetFilter(id){_invFilterTpl=id;renderInventoryTab()}
+function renderInventorySpeakersTab(el){
+  const items=getInventoryItems().filter(x=>!x.deleted&&x.type==='speaker');
+  const w=items.filter(x=>x.location==='warehouse').length;
+  const iC=items.filter(x=>x.location&&x.location.indexOf('instructor:')===0).length;
+  const instructors=_invActiveInstructors();
+  const speakerByUid={};items.forEach(x=>{if(x.location&&x.location.indexOf('instructor:')===0)speakerByUid[x.location.slice(11)]=x});
+  const withoutSpeaker=instructors.filter(u=>!speakerByUid[String(u.uid||u.id)]);
+  const summary=`<div style="background:#F3E8FF;border:1px solid #C4B5FD;border-radius:8px;padding:10px;font-size:13px;color:#5B21B6;margin-bottom:10px"><b>סה"כ רמקולים: ${items.length}</b> · ${w} במחסן · ${iC} אצל מדריכות</div>`;
+  const tblRows=items.slice().sort((a,b)=>(a.serialLabel||'').localeCompare(b.serialLabel||'','he')).map(x=>{
+    const lastMoved=x.updatedAt?new Date(x.updatedAt).toLocaleDateString('he-IL'):'—';
+    const itId=x.id||x._docId;
+    return `<tr>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB;font-family:monospace">${esc(x.serialLabel||'#1')}</td>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB">${x.location==='warehouse'?'🏭 מחסן':'👤 '+esc(x.locationName||'')}</td>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB;color:var(--mut);font-size:11px">${lastMoved}</td>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB;white-space:nowrap">
+        <button class="btn-sec" onclick='openInventoryTransferMo(${JSON.stringify(itId)})' style="padding:4px 8px;font-size:11px">🔄 העבר</button>
+        <button class="btn-sec" onclick='deleteInventoryItem(${JSON.stringify(itId)})' style="padding:4px 8px;font-size:11px;background:#FEE2E2;color:#991B1B">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  const missingList=withoutSpeaker.length?withoutSpeaker.map(u=>{
+    const uid=String(u.uid||u.id);
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;background:#FEF3C7;border:1px solid #FCD34D;border-radius:6px;margin-bottom:4px;font-size:12px"><span>❌ ${esc(u.name)} — אין רמקול</span><button class="btn-sec" onclick='openInventoryAssignSpeakerMo(${JSON.stringify(uid)},${JSON.stringify(u.name)})' style="padding:3px 8px;font-size:11px;background:#DCFCE7;color:#166534;white-space:nowrap">🎁 הקצה רמקול</button></div>`;
+  }).join(''):'<div style="padding:8px;text-align:center;color:#166534;background:#DCFCE7;border-radius:6px;font-size:12px">✓ לכל המדריכות יש רמקול</div>';
+  const emptyMsg='<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">אין יחידות מלאי — הוסיפי את הראשונה +</div>';
+  el.innerHTML=`
+    ${summary}
+    <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <div style="width:340px;flex-shrink:0">
+        <button class="btn-prim" style="width:100%;margin-bottom:10px" onclick="openInventoryAddSpeakerMo()">+ הוסף רמקול</button>
+        <div style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:6px">מדריכות ללא רמקול</div>
+        ${missingList}
+      </div>
+      <div style="flex:1;min-width:320px">
+        ${items.length?`<table style="width:100%;border-collapse:collapse;font-size:12px;background:white;border:1px solid var(--brd);border-radius:8px;overflow:hidden">
+          <thead style="background:#F3F4F6"><tr>
+            <th style="padding:8px;text-align:right">שם ייחודי</th>
+            <th style="padding:8px;text-align:right">מיקום</th>
+            <th style="padding:8px;text-align:right">עודכן</th>
+            <th style="padding:8px;text-align:right">פעולות</th>
+          </tr></thead>
+          <tbody>${tblRows}</tbody>
+        </table>`:emptyMsg}
+      </div>
+    </div>`;
+}
+function openInventoryAddMaterialMo(){
+  const mats=((typeof getMaterials==='function')?getMaterials():[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
+  const instructors=_invActiveInstructors();
+  const matOpts=mats.map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+  const instOpts=instructors.map(u=>`<option value="instructor:${esc(String(u.uid||u.id))}">${esc(u.name)}</option>`).join('');
+  let mo=document.getElementById('inv-add-mat-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-add-mat-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:520px"><div class="mt"><span>+ הוסף יחידת מלאי (מערך)</span><span class="mc" onclick="document.getElementById('inv-add-mat-mo').classList.remove('open');document.getElementById('inv-add-mat-mo').style.display='none'">×</span></div>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">תבנית מערך *</label>
+    <select id="inv-add-mat-tpl" class="md-input" onchange="_invSuggestSerial()"><option value="">— בחרי —</option>${matOpts}</select>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">שם ייחודי (למשל #1, #2)</label>
+    <input type="text" id="inv-add-mat-serial" class="md-input" placeholder="#1">
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">מיקום ראשוני *</label>
+    <select id="inv-add-mat-loc" class="md-input">
+      <option value="warehouse">🏭 מחסן</option>
+      ${instOpts}
+    </select>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">הערות (רשות)</label>
+    <textarea id="inv-add-mat-notes" rows="2" class="md-input" style="resize:vertical;font-family:inherit"></textarea>
+    <div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin-top:0" onclick="saveInventoryAddMaterial()">💾 שמור</button><button class="btn-sec" onclick="document.getElementById('inv-add-mat-mo').classList.remove('open');document.getElementById('inv-add-mat-mo').style.display='none'">ביטול</button></div>
+  </div>`;
+  mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+function _invSuggestSerial(){
+  const tpl=(document.getElementById('inv-add-mat-tpl')||{}).value;
+  const inp=document.getElementById('inv-add-mat-serial');
+  if(!tpl||!inp)return;
+  inp.value=_invNextSerial(tpl,'material');
+}
+async function saveInventoryAddMaterial(){
+  const tpl=document.getElementById('inv-add-mat-tpl').value;
+  if(!tpl){alert('חובה לבחור תבנית מערך');return}
+  const mats=getMaterials();const m=mats.find(x=>x.id===tpl);
+  if(!m){alert('מערך לא נמצא');return}
+  const serialLabel=((document.getElementById('inv-add-mat-serial').value||'').trim())||_invNextSerial(tpl,'material');
+  const loc=document.getElementById('inv-add-mat-loc').value;
+  const notes=(document.getElementById('inv-add-mat-notes').value||'').trim();
+  const locationName=_invResolveLocationName(loc);
+  const res=await _invCreateItem({type:'material',templateId:tpl,templateName:m.name,serialLabel,location:loc,locationName,notes});
+  if(res){document.getElementById('inv-add-mat-mo').classList.remove('open');document.getElementById('inv-add-mat-mo').style.display='none';renderInventoryTab()}
+}
+function openInventoryAddSpeakerMo(){
+  const instructors=_invActiveInstructors();
+  const instOpts=instructors.map(u=>`<option value="instructor:${esc(String(u.uid||u.id))}">${esc(u.name)}</option>`).join('');
+  let mo=document.getElementById('inv-add-sp-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-add-sp-mo';mo.className='mo';document.body.appendChild(mo)}
+  const suggested=_invNextSerial(null,'speaker');
+  mo.innerHTML=`<div class="md" style="max-width:520px"><div class="mt"><span>+ הוסף רמקול</span><span class="mc" onclick="document.getElementById('inv-add-sp-mo').classList.remove('open');document.getElementById('inv-add-sp-mo').style.display='none'">×</span></div>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">שם ייחודי</label>
+    <input type="text" id="inv-add-sp-serial" class="md-input" value="${esc(suggested)}">
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">מיקום ראשוני *</label>
+    <select id="inv-add-sp-loc" class="md-input">
+      <option value="warehouse">🏭 מחסן</option>
+      ${instOpts}
+    </select>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">הערות (רשות)</label>
+    <textarea id="inv-add-sp-notes" rows="2" class="md-input" style="resize:vertical;font-family:inherit"></textarea>
+    <div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin-top:0" onclick="saveInventoryAddSpeaker()">💾 שמור</button><button class="btn-sec" onclick="document.getElementById('inv-add-sp-mo').classList.remove('open');document.getElementById('inv-add-sp-mo').style.display='none'">ביטול</button></div>
+  </div>`;
+  mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function saveInventoryAddSpeaker(){
+  const serialLabel=((document.getElementById('inv-add-sp-serial').value||'').trim())||_invNextSerial(null,'speaker');
+  const loc=document.getElementById('inv-add-sp-loc').value;
+  const notes=(document.getElementById('inv-add-sp-notes').value||'').trim();
+  const locationName=_invResolveLocationName(loc);
+  const res=await _invCreateItem({type:'speaker',templateId:null,templateName:'רמקול',serialLabel,location:loc,locationName,notes});
+  if(res){document.getElementById('inv-add-sp-mo').classList.remove('open');document.getElementById('inv-add-sp-mo').style.display='none';renderInventoryTab()}
+}
+function openInventoryAssignSpeakerMo(uid,name){
+  const items=getInventoryItems().filter(x=>!x.deleted&&x.type==='speaker'&&x.location==='warehouse');
+  if(!items.length){alert('אין רמקולים פנויים במחסן. הוסיפי רמקול חדש קודם.');return}
+  const opts=items.map(x=>`<option value="${esc(x.id||x._docId)}">${esc(x.serialLabel||'רמקול')}</option>`).join('');
+  let mo=document.getElementById('inv-assign-sp-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-assign-sp-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:480px"><div class="mt"><span>🎁 הקצאת רמקול ל-${esc(name)}</span><span class="mc" onclick="document.getElementById('inv-assign-sp-mo').classList.remove('open');document.getElementById('inv-assign-sp-mo').style.display='none'">×</span></div>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">רמקול מהמחסן *</label>
+    <select id="inv-assign-sp-item" class="md-input">${opts}</select>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">סיבה (רשות)</label>
+    <input type="text" id="inv-assign-sp-reason" class="md-input" placeholder="למשל: שיבוץ חדש">
+    <div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin-top:0" onclick='saveInventoryAssignSpeaker(${JSON.stringify(uid)},${JSON.stringify(name)})'>💾 הקצה</button><button class="btn-sec" onclick="document.getElementById('inv-assign-sp-mo').classList.remove('open');document.getElementById('inv-assign-sp-mo').style.display='none'">ביטול</button></div>
+  </div>`;
+  mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function saveInventoryAssignSpeaker(uid,name){
+  const itemId=document.getElementById('inv-assign-sp-item').value;
+  const reason=(document.getElementById('inv-assign-sp-reason').value||'').trim();
+  await _invMoveItem(itemId,{location:'instructor:'+uid,locationName:name},reason);
+  document.getElementById('inv-assign-sp-mo').classList.remove('open');document.getElementById('inv-assign-sp-mo').style.display='none';
+  renderInventoryTab();
+}
+function openInventoryTransferMo(itemId){
+  const items=getInventoryItems();const it=items.find(x=>(x.id||x._docId)===itemId);
+  if(!it){alert('פריט לא נמצא');return}
+  const instructors=_invActiveInstructors();
+  const instOpts=instructors.map(u=>`<option value="instructor:${esc(String(u.uid||u.id))}">${esc(u.name)}</option>`).join('');
+  let mo=document.getElementById('inv-transfer-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-transfer-mo';mo.className='mo';document.body.appendChild(mo)}
+  const currentLabel=it.location==='warehouse'?'🏭 מחסן':'👤 '+esc(it.locationName||'');
+  const itemLabel=(it.templateName||'—')+' '+(it.serialLabel||'');
+  mo.innerHTML=`<div class="md" style="max-width:480px"><div class="mt"><span>🔄 העברת ${esc(itemLabel)}</span><span class="mc" onclick="document.getElementById('inv-transfer-mo').classList.remove('open');document.getElementById('inv-transfer-mo').style.display='none'">×</span></div>
+    <div style="background:#F3F4F6;padding:8px;border-radius:6px;font-size:12px;margin-bottom:10px"><b>מיקום נוכחי:</b> ${currentLabel}</div>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">יעד *</label>
+    <select id="inv-transfer-to" class="md-input">
+      <option value="warehouse">🏭 מחסן</option>
+      ${instOpts}
+    </select>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">סיבה (רשות)</label>
+    <input type="text" id="inv-transfer-reason" class="md-input" placeholder="למשל: סיום עבודה / שיבוץ חדש">
+    <div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin-top:0" onclick='saveInventoryTransfer(${JSON.stringify(itemId)})'>💾 העבר</button><button class="btn-sec" onclick="document.getElementById('inv-transfer-mo').classList.remove('open');document.getElementById('inv-transfer-mo').style.display='none'">ביטול</button></div>
+  </div>`;
+  mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function saveInventoryTransfer(itemId){
+  const to=document.getElementById('inv-transfer-to').value;
+  const reason=(document.getElementById('inv-transfer-reason').value||'').trim();
+  const locationName=_invResolveLocationName(to);
+  await _invMoveItem(itemId,{location:to,locationName},reason);
+  document.getElementById('inv-transfer-mo').classList.remove('open');document.getElementById('inv-transfer-mo').style.display='none';
+  renderInventoryTab();
+}
+async function deleteInventoryItem(itemId){
+  const items=getInventoryItems();const it=items.find(x=>(x.id||x._docId)===itemId);
+  if(!it){alert('פריט לא נמצא');return}
+  if(!confirm(`למחוק את ${it.templateName||'הפריט'} ${it.serialLabel||''}?\n\nהפריט יסומן כמחוק אבל היסטוריית התנועות תישמר.`))return;
+  if(!window.fbDb){alert('Firebase לא זמין');return}
+  const now=Date.now();
+  try{
+    await fbDb.collection('inventoryItems').doc(itemId).update({
+      deleted:true,
+      deletedAt:now,
+      deletedBy:(cu&&cu.uid)||'system',
+      deletedByName:(cu&&(cu.name||cu.username))||'system',
+      updatedAt:now,
+      updatedBy:(cu&&cu.uid)||'system'
+    });
+    await fbDb.collection('inventoryMovements').add({
+      itemId,
+      from:{location:it.location||'',locationName:it.locationName||''},
+      to:{location:'deleted',locationName:'מחוק'},
+      movedBy:(cu&&cu.uid)||'system',
+      movedByName:(cu&&(cu.name||cu.username))||'system',
+      movedAt:now,
+      reason:'מחיקה',
+      action:'delete'
+    });
+    await syncInventoryItems();
+    renderInventoryTab();
+    if(typeof _logAudit==='function')_logAudit('delete','inventoryItem',itemId,`מחיקת ${it.templateName||'פריט'} ${it.serialLabel||''}`);
+  }catch(e){alert('שגיאה: '+e.message)}
+}
+async function _invCreateItem(fields){
+  if(!window.fbDb){alert('Firebase לא זמין');return null}
+  const now=Date.now();
+  const id='inv_'+now+'_'+Math.random().toString(36).slice(2,8);
+  const doc={
+    id,
+    type:fields.type,
+    templateId:fields.templateId||null,
+    templateName:fields.templateName||'',
+    serialLabel:fields.serialLabel||'',
+    location:fields.location||'warehouse',
+    locationName:fields.locationName||'מחסן',
+    notes:fields.notes||'',
+    deleted:false,
+    createdAt:now,
+    createdBy:(cu&&cu.uid)||'system',
+    createdByName:(cu&&(cu.name||cu.username))||'system',
+    updatedAt:now,
+    updatedBy:(cu&&cu.uid)||'system'
+  };
+  try{
+    await fbDb.collection('inventoryItems').doc(id).set(doc);
+    await fbDb.collection('inventoryMovements').add({
+      itemId:id,
+      from:{location:'',locationName:''},
+      to:{location:doc.location,locationName:doc.locationName},
+      movedBy:doc.createdBy,
+      movedByName:doc.createdByName,
+      movedAt:now,
+      reason:'יצירה',
+      action:'create'
+    });
+    await syncInventoryItems();
+    if(typeof _logAudit==='function')_logAudit('create','inventoryItem',id,`יצירת ${doc.templateName} ${doc.serialLabel} → ${doc.locationName}`);
+    return doc;
+  }catch(e){console.error('inventory create failed',e);alert('שגיאה: '+e.message);return null}
+}
+async function _invMoveItem(itemId,to,reason){
+  if(!window.fbDb){alert('Firebase לא זמין');return}
+  const items=getInventoryItems();
+  const it=items.find(x=>(x.id||x._docId)===itemId);
+  if(!it){alert('פריט לא נמצא');return}
+  if(it.location===to.location){alert('הפריט כבר במיקום הזה.');return}
+  const now=Date.now();
+  try{
+    await fbDb.collection('inventoryItems').doc(itemId).update({
+      location:to.location,
+      locationName:to.locationName,
+      updatedAt:now,
+      updatedBy:(cu&&cu.uid)||'system'
+    });
+    await fbDb.collection('inventoryMovements').add({
+      itemId,
+      from:{location:it.location,locationName:it.locationName},
+      to,
+      movedBy:(cu&&cu.uid)||'system',
+      movedByName:(cu&&(cu.name||cu.username))||'system',
+      movedAt:now,
+      reason:reason||'',
+      action:'transfer'
+    });
+    await syncInventoryItems();
+    if(typeof _logAudit==='function')_logAudit('update','inventoryItem',itemId,`העברת ${it.templateName||''} ${it.serialLabel||''}: ${it.locationName||'—'} → ${to.locationName||'—'}`);
+  }catch(e){console.error('inventory move failed',e);alert('שגיאה: '+e.message)}
+}
+function openInventoryMovementsMo(){
+  let mo=document.getElementById('inv-mv-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-mv-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:1000px;width:96vw;max-height:94vh;overflow-y:auto"><div class="mt"><span>📜 היסטוריית תנועות מלאי</span><span class="mc" onclick="document.getElementById('inv-mv-mo').classList.remove('open');document.getElementById('inv-mv-mo').style.display='none'">×</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+      <select id="inv-mv-type" onchange="renderInventoryMovements()" style="padding:6px 10px;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit"><option value="">כל סוגי המלאי</option><option value="material">מערכים</option><option value="speaker">רמקולים</option></select>
+      <input type="date" id="inv-mv-from" onchange="renderInventoryMovements()" style="padding:6px 10px;border:1.5px solid var(--brd);border-radius:8px">
+      <input type="date" id="inv-mv-to" onchange="renderInventoryMovements()" style="padding:6px 10px;border:1.5px solid var(--brd);border-radius:8px">
+      <button class="btn-sec" onclick="syncInventoryMovements(500).then(renderInventoryMovements)">🔄 רענן</button>
+    </div>
+    <div id="inv-mv-list" style="max-height:70vh;overflow-y:auto"><div style="padding:24px;text-align:center;color:var(--mut);font-size:12px">טוען...</div></div>
+  </div>`;
+  mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+  syncInventoryMovements(500).then(renderInventoryMovements);
+}
+function renderInventoryMovements(){
+  const el=document.getElementById('inv-mv-list');if(!el)return;
+  const mvs=getInventoryMovements();
+  const items=getInventoryItems();
+  const itById={};items.forEach(x=>{itById[x.id||x._docId]=x});
+  const typeF=(document.getElementById('inv-mv-type')||{}).value||'';
+  const fromF=(document.getElementById('inv-mv-from')||{}).value||'';
+  const toF=(document.getElementById('inv-mv-to')||{}).value||'';
+  const filtered=mvs.filter(m=>{
+    if(typeF){const it=itById[m.itemId];if(!it||it.type!==typeF)return false}
+    if(fromF||toF){const d=new Date(m.movedAt||0).toISOString().slice(0,10);if(fromF&&d<fromF)return false;if(toF&&d>toF)return false}
+    return true;
+  });
+  if(!filtered.length){el.innerHTML='<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px">אין תנועות תואמות</div>';return}
+  el.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:12px;background:white"><thead style="background:#F3F4F6"><tr>'+
+    '<th style="padding:8px;text-align:right">מתי</th>'+
+    '<th style="padding:8px;text-align:right">פריט</th>'+
+    '<th style="padding:8px;text-align:right">מ →</th>'+
+    '<th style="padding:8px;text-align:right">→ ל</th>'+
+    '<th style="padding:8px;text-align:right">על ידי</th>'+
+    '<th style="padding:8px;text-align:right">סיבה</th>'+
+    '</tr></thead><tbody>'+
+    filtered.map(m=>{
+      const it=itById[m.itemId];
+      const label=it?((it.templateName||'—')+' '+(it.serialLabel||'')):('#'+String(m.itemId||'').slice(-6));
+      const dt=new Date(m.movedAt||0);
+      const dstr=`${dt.toLocaleDateString('he-IL')} ${dt.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})}`;
+      return `<tr>
+        <td style="padding:6px;border-bottom:1px solid #E5E7EB;color:var(--mut)">${esc(dstr)}</td>
+        <td style="padding:6px;border-bottom:1px solid #E5E7EB">${esc(label)}</td>
+        <td style="padding:6px;border-bottom:1px solid #E5E7EB">${esc((m.from&&m.from.locationName)||'—')}</td>
+        <td style="padding:6px;border-bottom:1px solid #E5E7EB">${esc((m.to&&m.to.locationName)||'—')}</td>
+        <td style="padding:6px;border-bottom:1px solid #E5E7EB">${esc(m.movedByName||'—')}</td>
+        <td style="padding:6px;border-bottom:1px solid #E5E7EB;color:var(--mut)">${esc(m.reason||'')}</td>
+      </tr>`;
+    }).join('')+
+    '</tbody></table>';
+}
 /* ==== SLOT-KEY RETRO MIGRATION (v38.3) ====
    v38.2 added `slotKey` to NEW records so a garden with N slots on one day gets
    N independent records. Records from THIS week (>= 2026-09-06) were written

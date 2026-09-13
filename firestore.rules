@@ -307,6 +307,20 @@ service cloud.firestore {
       allow write: if isAdmin() || isOffice();
     }
 
+    // INVENTORY (v38.6) — physical material units + speakers.
+    // Instructors read (so they see what they own); only admin/office write.
+    // Non-destructive: delete flips `deleted:true` — hard delete is admin-only.
+    match /inventoryItems/{itemId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || isOffice();
+      allow delete: if isAdmin();
+    }
+    match /inventoryMovements/{docId} {
+      allow read: if isAdmin() || isOffice();
+      allow create: if isAdmin() || isOffice();
+      allow update, delete: if isAdmin();
+    }
+
     // FINAL DENY — anything not matched above is closed.
     // This replaces the previous permissive catch-all that allowed any signed-in user
     // to read/write unlisted collections (including sensitive ones we hadn't declared).
