@@ -513,6 +513,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
         <div class="fg" style="margin-bottom:10px"><label>📅 תאריך</label><input type="date" id="iqr-date" onchange="renderInstructorQuickReport()"></div>
         <div id="iqr-list"></div>
       </div>
+      <div id="instructor-inventory-held" class="instructor-only card" style="display:none;background:linear-gradient(135deg,#F5F3FF,#EEF2FF);border:2px solid #7C3AED;margin-bottom:14px"></div>
       <div id="mysched-content"></div>
     </div>
     <!-- CAMP-SCREEN-DISABLED: hidden until next camp season -->
@@ -816,6 +817,8 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
                 <option value="total_desc">סה"כ יורד</option>
                 <option value="unpaid_first">לא שולם קודם</option>
                 <option value="paid_first">שולם קודם</option>
+                <option value="executed_asc">לפי ביצוע (חלש→חזק)</option>
+                <option value="executed_desc">לפי ביצוע (חזק→חלש)</option>
               </select>
             </div>
             <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);cursor:pointer;padding:8px 10px;background:white;border:1.5px solid var(--brd);border-radius:8px;font-weight:600">
@@ -5087,7 +5090,7 @@ async function computeAnnualRotation(region, opts){
   }
   /* Algorithm version — visible in results panel so a stale browser cache is caught early.
      Bump this whenever the RH-cluster pool logic changes. */
-  const _algoVersion='2026-09-13/v38.6-inventory';
+  const _algoVersion='2026-09-14/v38.8-executed-scale';
   window.__algoVersion=_algoVersion;
   /* Snapshot which pools got used per rotation group (+ free agents) for each holiday cluster.
      Surfaces in UI so admin can verify Latin Square within each group is happening. */
@@ -6546,7 +6549,15 @@ async function applyRotationProposal(result, opts){
     }
     if(isFrozenWeek)frozenSkipped.push(w.weekISO);
   }
-  return {written,cleared,frozenSkipped:frozenSkipped.length,filledFrozen,overwroteFrozen,lockedSkipped,errors,invalidCleaned};
+  /* v38.7: after applying rotation, silently sync inventory location to reflect
+     the new schedule. Failures are non-fatal — inventory is a secondary system. */
+  let pipelineSummary=null;
+  try{
+    if(typeof _inventorySyncPipeline==='function'){
+      pipelineSummary=await _inventorySyncPipeline({silent:true});
+    }
+  }catch(e){console.warn('[applyRotationProposal] pipeline sync failed:',e.message)}
+  return {written,cleared,frozenSkipped:frozenSkipped.length,filledFrozen,overwroteFrozen,lockedSkipped,errors,invalidCleaned,pipelineSummary};
 }
 // Yellow card for virtual/pending instructor rows in the admin instructor list. Distinct from real instructor rows.
 function renderVirtualInstructorRow(v){const isArchived=(v.status==='archived');const bg=isArchived?'#F3F4F6':'#FEF3C7';const border=isArchived?'#9CA3AF':'#F59E0B';const fg=isArchived?'#4B5563':'#7B5C00';const icon=isArchived?'📦':'🕐';const statusTag=isArchived?'<span style="font-size:10px;color:white;background:#6B7280;padding:2px 7px;border-radius:8px;font-weight:700">📦 בארכיון</span>':'<span style="font-size:10px;color:white;background:#F59E0B;padding:2px 7px;border-radius:8px;font-weight:700">🕐 עתידית</span>';const regionBadge=v.region?`<span style="font-size:10px;color:white;background:${REGION_COLORS[v.region]||'#1565C0'};padding:2px 7px;border-radius:8px;font-weight:700">📍 ${esc(v.region)}</span>`:'<span style="font-size:10px;color:white;background:#DC2626;padding:2px 7px;border-radius:8px;font-weight:700">⚠ אין אזור</span>';const specLabel=v.specialty&&SPEC_LABELS[v.specialty]?`<span style="font-size:10px;color:${(SPEC_COLORS[v.specialty]||{}).fg||'white'};background:${(SPEC_COLORS[v.specialty]||{}).bg||'#888'};padding:2px 7px;border-radius:8px;font-weight:700">${SPEC_LABELS[v.specialty]}</span>`:'';const gCount=(v.gardens||[]).length;const gBadge=`<span style="font-size:10px;font-weight:700;background:${gCount>0?'#D8F3DC':'#FFEBEE'};color:${gCount>0?'#1B4332':'#C62828'};padding:2px 7px;border-radius:10px">🏫 ${gCount} גנים</span>`;const label=v.pendingLabel?`<div style="font-size:11px;color:${fg};margin-top:4px;font-style:italic">📝 ${esc(v.pendingLabel)}</div>`:'';const actions=isArchived?`<button class="btn-ed" style="background:#DCFCE7;border-color:#86EFAC;color:#166534;font-weight:700" onclick="restoreVirtualInstructor('${esc(v.id)}')" title="שחזור מהארכיון">↩ שחזור</button><button class="btn-dn" onclick="deleteVirtualInstructorHard('${esc(v.id)}')" title="מחיקה סופית">🗑</button>`:`<button class="btn-ed" style="background:#D1FAE5;border-color:#10B981;color:#065F46;font-weight:800" onclick="openConvertVirtualMo('${esc(v.id)}')" title="גייסת מדריכה — המירי לפעילה">🎉 גייסתי</button><button class="btn-ed" onclick="openAddVirtualInstructorMo('${esc(v.id)}')">✏</button><button class="btn-ed" style="background:#F3F4F6;border-color:#9CA3AF;color:#4B5563;font-weight:700" onclick="archiveVirtualInstructor('${esc(v.id)}')" title="העברה לארכיון">📦</button>`;return`<div style="background:${bg};border:1.5px solid ${border};border-radius:10px;padding:10px;margin-bottom:8px;position:relative"><div style="display:flex;align-items:center;gap:10px"><div style="width:36px;height:36px;background:${border};color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${icon}</div><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-weight:700;font-size:14px;color:${fg}">${esc(v.name||'ללא שם')}</span>${statusTag}${regionBadge}${specLabel}</div>${label}</div><div style="display:flex;align-items:center;gap:4px;flex-shrink:0">${actions}</div></div><div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:5px">${gBadge}<span style="font-size:10px;font-weight:700;background:#EDE9FE;color:#5B21B6;padding:2px 7px;border-radius:10px" title="לא משתתפת בשכר, WhatsApp, או פרונט לקוחות">🚫 מוסתרת ממערכות תפעוליות</span></div></div>`}
@@ -7497,14 +7508,26 @@ function _invActiveInstructors(){
   return users.filter(u=>u&&u.role==='instructor'&&!u.offboarded&&!u.accessBlocked)
               .sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
 }
-function _invNextSerial(templateId,type){
+/* v38.7: return the LOWEST available positive integer for the template (gap-filling).
+   Uses unitNumber if present, else parses "#N" from serialLabel for backward-compat. */
+function _invNextUnitNumber(templateId,type){
   const items=getInventoryItems().filter(x=>!x.deleted&&x.type===type&&(type==='speaker'||x.templateId===templateId));
-  let mx=0;
+  const used=new Set();
   items.forEach(it=>{
+    if(typeof it.unitNumber==='number'&&it.unitNumber>0){used.add(it.unitNumber);return}
     const m=/^#(\d+)$/.exec(String(it.serialLabel||''));
-    if(m)mx=Math.max(mx,parseInt(m[1],10));
+    if(m)used.add(parseInt(m[1],10));
   });
-  return '#'+(mx+1);
+  let n=1;while(used.has(n))n++;return n;
+}
+function _invNextSerial(templateId,type){
+  return '#'+_invNextUnitNumber(templateId,type);
+}
+/* v38.7: canonical human label for a unit ("#N" preferred, falls back to serialLabel). */
+function _invUnitLabel(it){
+  if(!it)return '';
+  if(typeof it.unitNumber==='number'&&it.unitNumber>0)return '#'+it.unitNumber;
+  return String(it.serialLabel||'#?');
 }
 function _invResolveLocationName(loc){
   if(!loc||loc==='warehouse')return 'מחסן';
@@ -7522,15 +7545,18 @@ function openInventoryMo(){
   let mo=document.getElementById('inventory-mo');
   if(!mo){mo=document.createElement('div');mo.id='inventory-mo';mo.className='mo';document.body.appendChild(mo)}
   mo.innerHTML=`<div class="md" style="max-width:1180px;width:96vw;max-height:94vh;overflow-y:auto"><div class="mt"><span>📦 ניהול מלאי — מערכים + רמקולים</span><span class="mc" onclick="document.getElementById('inventory-mo').classList.remove('open');document.getElementById('inventory-mo').style.display='none'">×</span></div>
+    <div id="inv-reports-badge" style="margin-bottom:10px"></div>
     <div style="display:flex;gap:8px;margin-bottom:14px;border-bottom:2px solid var(--brd);padding-bottom:10px;flex-wrap:wrap">
       <button class="btn-sec" id="inv-tab-mat" onclick="switchInventoryTab('material')" style="flex:1;font-weight:800;min-width:150px">📦 מערכים פיזיים</button>
       <button class="btn-sec" id="inv-tab-sp" onclick="switchInventoryTab('speaker')" style="flex:1;font-weight:800;min-width:150px">🔊 רמקולים</button>
+      <button class="btn-sec" onclick="_inventorySyncPipelineFromMo()" style="font-weight:700;background:#DBEAFE;color:#0C4A6E;border-color:#0EA5E9">🔄 סנכרן פייפליין</button>
+      <button class="btn-sec" onclick="openInventoryGapAnalysisMo()" style="font-weight:700;background:#FEF3C7;color:#7B5C00;border-color:#F59E0B">🔍 גירעונות</button>
       <button class="btn-sec" onclick="openInventoryMovementsMo()" style="font-weight:700;background:#F3E8FF;color:#5B21B6;border-color:#7C3AED">📜 היסטוריית תנועות</button>
     </div>
     <div id="inv-body"><div style="padding:24px;text-align:center;color:var(--mut);font-size:12px">טוען מלאי...</div></div>
   </div>`;
   mo.classList.add('open');mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
-  syncInventoryItems().then(()=>renderInventoryTab());
+  Promise.all([syncInventoryItems(),syncInventoryReports()]).then(()=>{renderInventoryTab();renderInventoryReportsBadge()});
 }
 function switchInventoryTab(t){_invTab=t;renderInventoryTab()}
 function renderInventoryTab(){
@@ -7541,10 +7567,17 @@ function renderInventoryTab(){
   if(tabSp){tabSp.style.background=t==='speaker'?'#DBEAFE':'white';tabSp.style.color=t==='speaker'?'#1E40AF':'var(--text)';}
   if(t==='material')renderInventoryMaterialsTab(el);else renderInventorySpeakersTab(el);
 }
+/* v38.7: aggregated view — one section per template, per-location chips per unit.
+   Each chip is clickable → transfer modal. Red border if open defect report.
+   The old per-unit table is available as a details fold-out. */
+let _invShowDetails=false;
+function _invToggleDetails(){_invShowDetails=!_invShowDetails;renderInventoryTab()}
 function renderInventoryMaterialsTab(el){
   const items=getInventoryItems().filter(x=>!x.deleted&&x.type==='material');
   const mats=(typeof getMaterials==='function')?getMaterials():[];
   const matsById={};mats.forEach(m=>matsById[m.id]=m);
+  const reports=(typeof getInventoryReports==='function')?getInventoryReports().filter(r=>r.status==='open'):[];
+  const openReportsByItem={};reports.forEach(r=>{if(!openReportsByItem[r.itemId])openReportsByItem[r.itemId]=[];openReportsByItem[r.itemId].push(r)});
   const tplMap={};
   items.forEach(x=>{
     const tid=x.templateId||'?';
@@ -7553,15 +7586,10 @@ function renderInventoryMaterialsTab(el){
   });
   const templates=Object.values(tplMap).sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));
   const filter=_invFilterTpl||'';
-  const filtered=filter?items.filter(x=>x.templateId===filter):items.slice();
-  filtered.sort((a,b)=>{
-    const an=(matsById[a.templateId]&&matsById[a.templateId].name)||a.templateName||'';
-    const bn=(matsById[b.templateId]&&matsById[b.templateId].name)||b.templateName||'';
-    return an.localeCompare(bn,'he')||(a.serialLabel||'').localeCompare(b.serialLabel||'','he');
-  });
+  const templatesVisible=filter?templates.filter(t=>t.id===filter):templates;
   const wareCount=items.filter(x=>x.location==='warehouse').length;
   const instCount=items.filter(x=>x.location&&x.location.indexOf('instructor:')===0).length;
-  const summary=`<div style="background:#EFF6FF;border:1px solid #93C5FD;border-radius:8px;padding:10px;font-size:13px;color:#1E3A8A;margin-bottom:10px"><b>סה"כ יחידות מערכים: ${items.length}</b> · ${wareCount} במחסן · ${instCount} אצל מדריכות</div>`;
+  const summary=`<div style="background:#EFF6FF;border:1px solid #93C5FD;border-radius:8px;padding:10px;font-size:13px;color:#1E3A8A;margin-bottom:10px"><b>סה"כ יחידות מערכים: ${items.length}</b> · ${wareCount} במחסן · ${instCount} אצל מדריכות · ${templates.length} תבניות</div>`;
   const tplAllBtn=`<div onclick="_invSetFilter('')" style="padding:8px 10px;background:${!filter?'#DBEAFE':'#F9FAFB'};border:1px solid var(--brd);border-radius:8px;margin-bottom:6px;cursor:pointer;font-size:12px;font-weight:700">📋 הכל (${items.length})</div>`;
   const tplList=templates.map(tp=>{
     const w=tp.items.filter(x=>x.location==='warehouse').length;
@@ -7569,22 +7597,85 @@ function renderInventoryMaterialsTab(el){
     const bg=filter===tp.id?'#DBEAFE':'#F9FAFB';
     return `<div onclick="_invSetFilter(${JSON.stringify(tp.id)})" style="padding:8px 10px;background:${bg};border:1px solid var(--brd);border-radius:8px;margin-bottom:6px;cursor:pointer;font-size:12px"><b>${tp.items.length} יחידות ${esc(tp.name)}</b><br><span style="font-size:10px;color:var(--mut)">${w} במחסן · ${iC} אצל מדריכות</span></div>`;
   }).join('');
-  const tblRows=filtered.map(x=>{
+  const chip=(it)=>{
+    const itId=it.id||it._docId;
+    const label=_invUnitLabel(it);
+    const openR=openReportsByItem[itId]||[];
+    const hasReport=openR.length>0;
+    const bg=hasReport?'#FEE2E2':'#EEF2FF';
+    const brd=hasReport?'#DC2626':'#818CF8';
+    const fg=hasReport?'#991B1B':'#3730A3';
+    const lastMoved=it.updatedAt?new Date(it.updatedAt).toLocaleDateString('he-IL'):'—';
+    const emoji=hasReport?'🚨':(it.pipelineOverride?'🔒':'');
+    const title=hasReport?('דיווח פתוח: '+esc((openR[0].description||'').slice(0,80))+' · לחצי לפתיחה'):(it.pipelineOverride?('נעול מסנכרון פייפליין · עודכן '+lastMoved+' · לחצי להעברה'):('עודכן '+lastMoved+' · לחצי להעברה'));
+    const onclick=hasReport?`openInventoryReportViewMo(${JSON.stringify(itId)})`:`openInventoryTransferMo(${JSON.stringify(itId)})`;
+    return `<span onclick='${onclick}' title="${esc(title)}" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:${bg};border:1.5px solid ${brd};color:${fg};border-radius:14px;font-family:monospace;font-weight:800;font-size:12px;cursor:pointer;margin:2px">${emoji}${esc(label)}</span>`;
+  };
+  const tplSection=(tp)=>{
+    const inst={};let ware=[];
+    tp.items.forEach(it=>{
+      if(it.location==='warehouse')ware.push(it);
+      else if(it.location&&it.location.indexOf('instructor:')===0){
+        const uid=it.location.slice(11);
+        if(!inst[uid])inst[uid]={name:it.locationName||'—',items:[]};
+        inst[uid].items.push(it);
+      }
+    });
+    // Sort each list by unitNumber for stable display
+    const numOf=(x)=>(typeof x.unitNumber==='number'?x.unitNumber:parseInt((/^#(\d+)/.exec(x.serialLabel||'')||[])[1]||'0',10));
+    ware.sort((a,b)=>numOf(a)-numOf(b));
+    Object.values(inst).forEach(v=>v.items.sort((a,b)=>numOf(a)-numOf(b)));
+    const rows=[];
+    if(ware.length)rows.push(`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 10px;background:#F9FAFB;border-radius:6px;margin-bottom:4px"><span style="font-size:12px;font-weight:800;color:#1E3A8A;min-width:140px">🏭 מחסן</span><span style="font-size:11px;color:var(--mut);min-width:70px">(${ware.length} יחידות)</span><div>${ware.map(chip).join('')}</div></div>`);
+    Object.entries(inst).sort((a,b)=>(a[1].name||'').localeCompare(b[1].name||'','he')).forEach(([uid,v])=>{
+      rows.push(`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 10px;background:#F9FAFB;border-radius:6px;margin-bottom:4px"><span style="font-size:12px;font-weight:800;color:#065F46;min-width:140px">👤 ${esc(v.name)}</span><span style="font-size:11px;color:var(--mut);min-width:70px">(${v.items.length} יחידות)</span><div>${v.items.map(chip).join('')}</div></div>`);
+    });
+    const openCount=tp.items.filter(x=>openReportsByItem[x.id||x._docId]).length;
+    const badge=openCount?`<span style="background:#DC2626;color:white;font-size:10px;padding:2px 8px;border-radius:10px;margin-right:6px;font-weight:800">🚨 ${openCount} דיווחים</span>`:'';
+    return `<div style="border:1.5px solid #E5E7EB;border-radius:10px;padding:12px;background:white;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <div style="font-weight:800;font-size:14px;color:#1E3A8A">📦 ${esc(tp.name)} — ${tp.items.length} יחידות${badge}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn-sec" onclick='openInventoryAddMaterialMoFor(${JSON.stringify(tp.id)})' style="padding:4px 10px;font-size:11px;background:#DCFCE7;color:#166534;border-color:#22C55E;font-weight:700">+ הוסף יחידה</button>
+          <button class="btn-sec" onclick='openInventoryGapAnalysisMo(${JSON.stringify(tp.id)})' style="padding:4px 10px;font-size:11px;background:#FEF3C7;color:#7B5C00;border-color:#F59E0B;font-weight:700">🔍 גירעונות</button>
+        </div>
+      </div>
+      ${rows.join('')||'<div style="padding:12px;text-align:center;color:var(--mut);font-size:12px;background:#F9FAFB;border-radius:6px">אין יחידות</div>'}
+    </div>`;
+  };
+  const sections=templatesVisible.map(tplSection).join('');
+  const detailRows=items.slice().sort((a,b)=>{
+    const an=(matsById[a.templateId]&&matsById[a.templateId].name)||a.templateName||'';
+    const bn=(matsById[b.templateId]&&matsById[b.templateId].name)||b.templateName||'';
+    return an.localeCompare(bn,'he')||((a.unitNumber||0)-(b.unitNumber||0))||(a.serialLabel||'').localeCompare(b.serialLabel||'','he');
+  }).filter(x=>!filter||x.templateId===filter).map(x=>{
     const tplName=(matsById[x.templateId]&&matsById[x.templateId].name)||x.templateName||'—';
     const lastMoved=x.updatedAt?new Date(x.updatedAt).toLocaleDateString('he-IL'):'—';
     const itId=x.id||x._docId;
     return `<tr>
       <td style="padding:8px;border-bottom:1px solid #E5E7EB">${esc(tplName)}</td>
-      <td style="padding:8px;border-bottom:1px solid #E5E7EB;font-family:monospace">${esc(x.serialLabel||'#1')}</td>
+      <td style="padding:8px;border-bottom:1px solid #E5E7EB;font-family:monospace">${esc(_invUnitLabel(x))}</td>
       <td style="padding:8px;border-bottom:1px solid #E5E7EB">${x.location==='warehouse'?'🏭 מחסן':'👤 '+esc(x.locationName||'')}</td>
       <td style="padding:8px;border-bottom:1px solid #E5E7EB;color:var(--mut);font-size:11px">${lastMoved}</td>
       <td style="padding:8px;border-bottom:1px solid #E5E7EB;white-space:nowrap">
         <button class="btn-sec" onclick='openInventoryTransferMo(${JSON.stringify(itId)})' style="padding:4px 8px;font-size:11px">🔄 העבר</button>
+        <button class="btn-sec" onclick='_invTogglePipelineOverride(${JSON.stringify(itId)})' style="padding:4px 8px;font-size:11px;background:${x.pipelineOverride?'#FEF3C7':'#F3F4F6'};color:${x.pipelineOverride?'#7B5C00':'var(--mut)'}" title="${x.pipelineOverride?'משוחזר לסנכרון אוטומטי':'לנעול מסנכרון פייפליין'}">${x.pipelineOverride?'🔒 נעול':'🔓 חופשי'}</button>
         <button class="btn-sec" onclick='deleteInventoryItem(${JSON.stringify(itId)})' style="padding:4px 8px;font-size:11px;background:#FEE2E2;color:#991B1B">🗑</button>
       </td>
     </tr>`;
   }).join('');
-  const emptyMsg='<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">אין יחידות מלאי — הוסיפי את הראשונה +</div>';
+  const detailsFold=`<details ${_invShowDetails?'open':''} style="margin-top:16px" ontoggle="_invShowDetails=this.open"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:#5B21B6;padding:6px 10px;background:#F3E8FF;border-radius:6px">📋 פרטים — טבלה שטוחה של כל היחידות</summary>
+    <div style="margin-top:8px">${items.length?`<table style="width:100%;border-collapse:collapse;font-size:12px;background:white;border:1px solid var(--brd);border-radius:8px;overflow:hidden">
+      <thead style="background:#F3F4F6"><tr>
+        <th style="padding:8px;text-align:right">מערך</th>
+        <th style="padding:8px;text-align:right">מזהה</th>
+        <th style="padding:8px;text-align:right">מיקום</th>
+        <th style="padding:8px;text-align:right">עודכן</th>
+        <th style="padding:8px;text-align:right">פעולות</th>
+      </tr></thead>
+      <tbody>${detailRows}</tbody>
+    </table>`:'<div style="padding:12px;text-align:center;color:var(--mut);font-size:12px">אין יחידות</div>'}</div></details>`;
+  const emptyMsg='<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">אין יחידות מלאי — הוסיפי את הראשונה עם "+ הוסף יחידת מלאי" שמימין</div>';
   el.innerHTML=`
     ${summary}
     <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
@@ -7594,18 +7685,28 @@ function renderInventoryMaterialsTab(el){
         ${tplAllBtn}${tplList||'<div style="font-size:11px;color:var(--mut);font-style:italic;padding:6px">(אין תבניות עדיין)</div>'}
       </div>
       <div style="flex:1;min-width:320px">
-        ${items.length?`<table style="width:100%;border-collapse:collapse;font-size:12px;background:white;border:1px solid var(--brd);border-radius:8px;overflow:hidden">
-          <thead style="background:#F3F4F6"><tr>
-            <th style="padding:8px;text-align:right">מערך</th>
-            <th style="padding:8px;text-align:right">שם ייחודי</th>
-            <th style="padding:8px;text-align:right">מיקום</th>
-            <th style="padding:8px;text-align:right">עודכן</th>
-            <th style="padding:8px;text-align:right">פעולות</th>
-          </tr></thead>
-          <tbody>${tblRows}</tbody>
-        </table>`:emptyMsg}
+        ${templatesVisible.length?sections:emptyMsg}
+        ${items.length?detailsFold:''}
       </div>
     </div>`;
+}
+/* v38.7: open Add-Material modal pre-filled to a specific template. */
+function openInventoryAddMaterialMoFor(templateId){
+  openInventoryAddMaterialMo();
+  setTimeout(()=>{const sel=document.getElementById('inv-add-mat-tpl');if(sel){sel.value=templateId;_invSuggestSerial()}},60);
+}
+/* v38.7: toggle "pipelineOverride" flag on an inventory unit. When true, auto-sync
+   skips the unit. Admin only. */
+async function _invTogglePipelineOverride(itemId){
+  if(!window.fbDb){alert('Firebase לא זמין');return}
+  const it=getInventoryItems().find(x=>(x.id||x._docId)===itemId);
+  if(!it)return;
+  const newVal=!it.pipelineOverride;
+  try{
+    await fbDb.collection('inventoryItems').doc(itemId).update({pipelineOverride:newVal,updatedAt:Date.now(),updatedBy:(cu&&cu.uid)||'system'});
+    await syncInventoryItems();
+    renderInventoryTab();
+  }catch(e){alert('שגיאה: '+e.message)}
 }
 function _invSetFilter(id){_invFilterTpl=id;renderInventoryTab()}
 function renderInventorySpeakersTab(el){
@@ -7810,12 +7911,24 @@ async function _invCreateItem(fields){
   if(!window.fbDb){alert('Firebase לא זמין');return null}
   const now=Date.now();
   const id='inv_'+now+'_'+Math.random().toString(36).slice(2,8);
+  /* v38.7: derive unitNumber (numeric, gap-filling) alongside serialLabel.
+     If the caller passed a "#N" serialLabel we honor it; otherwise assign
+     the next available integer. Backward-compat: legacy items without
+     unitNumber continue to display via their serialLabel. */
+  let unitNumber=(typeof fields.unitNumber==='number'&&fields.unitNumber>0)?fields.unitNumber:null;
+  if(!unitNumber){
+    const m=/^#(\d+)$/.exec(String(fields.serialLabel||''));
+    if(m)unitNumber=parseInt(m[1],10);
+  }
+  if(!unitNumber)unitNumber=_invNextUnitNumber(fields.templateId,fields.type);
+  const serialLabel=fields.serialLabel||('#'+unitNumber);
   const doc={
     id,
     type:fields.type,
     templateId:fields.templateId||null,
     templateName:fields.templateName||'',
-    serialLabel:fields.serialLabel||'',
+    unitNumber,
+    serialLabel,
     location:fields.location||'warehouse',
     locationName:fields.locationName||'מחסן',
     notes:fields.notes||'',
@@ -7924,6 +8037,445 @@ function renderInventoryMovements(){
     }).join('')+
     '</tbody></table>';
 }
+/* ==== INVENTORY REPORTS (v38.7) ====
+   Instructors report defects on units they hold. Admin resolves + optionally
+   replaces. Notification back to instructor on resolution. */
+async function syncInventoryReports(){
+  if(!window.fbDb||!cu)return[];
+  try{
+    const snap=await fbDb.collection('inventoryReports').get();
+    const arr=[];snap.forEach(d=>arr.push({...d.data(),_docId:d.id,id:d.data().id||d.id}));
+    localStorage.setItem('bz3_inventoryReports',JSON.stringify(arr));
+    return arr;
+  }catch(e){console.warn('[inventory reports] sync:',e.message);return[]}
+}
+function getInventoryReports(){try{return JSON.parse(localStorage.getItem('bz3_inventoryReports')||'[]')}catch(e){return[]}}
+function renderInventoryReportsBadge(){
+  const el=document.getElementById('inv-reports-badge');if(!el)return;
+  const openR=getInventoryReports().filter(r=>r.status==='open');
+  if(!openR.length){el.innerHTML='';return}
+  el.innerHTML=`<div style="background:#FEE2E2;border:1.5px solid #DC2626;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;color:#991B1B;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="openInventoryAllReportsMo()">🚨 ${openR.length} דיווחים פתוחים על יחידות מלאי — לחצי לצפייה</div>`;
+}
+function openInventoryAllReportsMo(){
+  const reports=getInventoryReports().filter(r=>r.status==='open').sort((a,b)=>(b.reportedAt||'').localeCompare(a.reportedAt||''));
+  let mo=document.getElementById('inv-all-reports-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-all-reports-mo';mo.className='mo';document.body.appendChild(mo)}
+  const rows=reports.length?reports.map(r=>{
+    const d=r.reportedAt?new Date(r.reportedAt).toLocaleDateString('he-IL'):'—';
+    return `<div style="background:white;border:1.5px solid #FCA5A5;border-radius:8px;padding:10px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+        <div style="font-weight:800;font-size:13px;color:#991B1B">🚨 ${esc(r.templateName||'—')} <span style="font-family:monospace">${esc(r.unitLabel||'')}</span></div>
+        <div style="font-size:11px;color:var(--mut)">${esc(r.reportedByName||'—')} · ${d}</div>
+      </div>
+      <div style="font-size:12px;color:#374151;margin-bottom:8px;white-space:pre-wrap">${esc(r.description||'')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn-sec" onclick='openInventoryReportResolveMo(${JSON.stringify(r.id||r._docId)})' style="padding:5px 10px;font-size:11px;background:#DCFCE7;color:#166534;border-color:#22C55E;font-weight:700">✓ סמני כטופל</button>
+        <button class="btn-sec" onclick='openInventoryReportViewMo(${JSON.stringify(r.itemId)})' style="padding:5px 10px;font-size:11px">👁 הצג יחידה</button>
+      </div>
+    </div>`;
+  }).join(''):'<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px">אין דיווחים פתוחים 🎉</div>';
+  mo.innerHTML=`<div class="md" style="max-width:720px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>🚨 דיווחי מלאי פתוחים</span><span class="mc" onclick="document.getElementById('inv-all-reports-mo').style.display='none'">×</span></div>${rows}</div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+function openInventoryReportViewMo(itemId){
+  const it=getInventoryItems().find(x=>(x.id||x._docId)===itemId);
+  if(!it){alert('יחידה לא נמצאה');return}
+  const reports=getInventoryReports().filter(r=>r.itemId===itemId).sort((a,b)=>(b.reportedAt||'').localeCompare(a.reportedAt||''));
+  let mo=document.getElementById('inv-report-view-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-report-view-mo';mo.className='mo';document.body.appendChild(mo)}
+  const label=(it.templateName||'—')+' '+_invUnitLabel(it);
+  const rows=reports.length?reports.map(r=>{
+    const d=r.reportedAt?new Date(r.reportedAt).toLocaleString('he-IL'):'—';
+    const isOpen=r.status==='open';
+    const badge=isOpen?'<span style="background:#DC2626;color:white;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:800">🚨 פתוח</span>':'<span style="background:#22C55E;color:white;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:800">✓ טופל</span>';
+    const btns=isOpen?`<div style="display:flex;gap:6px;margin-top:6px"><button class="btn-sec" onclick='openInventoryReportResolveMo(${JSON.stringify(r.id||r._docId)})' style="padding:5px 10px;font-size:11px;background:#DCFCE7;color:#166534;border-color:#22C55E;font-weight:700">✓ סמני כטופל</button></div>`:(r.resolutionNote?`<div style="font-size:11px;color:#166534;margin-top:4px">✓ ${esc(r.resolutionNote)}</div>`:'');
+    return `<div style="background:white;border:1.5px solid ${isOpen?'#FCA5A5':'#86EFAC'};border-radius:8px;padding:10px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;gap:6px;margin-bottom:6px;flex-wrap:wrap"><div style="font-weight:700;font-size:12px">${esc(r.reportedByName||'—')} · ${d}</div>${badge}</div>
+      <div style="font-size:12px;white-space:pre-wrap">${esc(r.description||'')}</div>${btns}
+    </div>`;
+  }).join(''):'<div style="padding:16px;text-align:center;color:var(--mut);font-size:12px">אין דיווחים על יחידה זו</div>';
+  mo.innerHTML=`<div class="md" style="max-width:640px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>📋 דיווחים על ${esc(label)}</span><span class="mc" onclick="document.getElementById('inv-report-view-mo').style.display='none'">×</span></div>
+    <div style="background:#F3F4F6;padding:8px;border-radius:6px;font-size:12px;margin-bottom:10px"><b>מיקום נוכחי:</b> ${it.location==='warehouse'?'🏭 מחסן':'👤 '+esc(it.locationName||'')}</div>
+    ${rows}
+    <div class="ma" style="margin-top:12px"><button class="btn-sec" onclick='openInventoryTransferMo(${JSON.stringify(itemId)})'>🔄 העבר יחידה</button><button class="btn-sec" onclick="document.getElementById('inv-report-view-mo').style.display='none'">סגור</button></div>
+  </div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+function openInventoryReportResolveMo(reportId){
+  const r=getInventoryReports().find(x=>(x.id||x._docId)===reportId);
+  if(!r){alert('דיווח לא נמצא');return}
+  const it=getInventoryItems().find(x=>(x.id||x._docId)===r.itemId);
+  const tplId=r.templateId||(it&&it.templateId);
+  const replacements=getInventoryItems().filter(x=>!x.deleted&&x.type==='material'&&x.templateId===tplId&&x.location==='warehouse'&&(x.id||x._docId)!==r.itemId);
+  const repOpts=['<option value="">— ללא החלפה —</option>'].concat(replacements.map(x=>`<option value="${esc(x.id||x._docId)}">${esc(_invUnitLabel(x))}</option>`)).join('');
+  let mo=document.getElementById('inv-report-resolve-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-report-resolve-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:520px"><div class="mt"><span>✓ סגירת דיווח</span><span class="mc" onclick="document.getElementById('inv-report-resolve-mo').style.display='none'">×</span></div>
+    <div style="background:#F3F4F6;padding:8px;border-radius:6px;font-size:12px;margin-bottom:10px"><b>יחידה:</b> ${esc(r.templateName||'—')} ${esc(r.unitLabel||'')}<br><b>מדריכה:</b> ${esc(r.reportedByName||'—')}</div>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">הערת פתרון</label>
+    <textarea id="inv-res-note" rows="3" class="md-input" style="resize:vertical;font-family:inherit" placeholder="למשל: החלפתי סוללה / החלפתי לגמרי / מסודר..."></textarea>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block;margin-top:10px">להחליף ליחידה אחרת? (רשות)</label>
+    <select id="inv-res-replace" class="md-input">${repOpts}</select>
+    <div style="font-size:10px;color:var(--mut);margin-top:4px">אם תבחרי החלפה: היחידה הפגומה תוחזר למחסן, ההחלפה תועבר למדריכה.</div>
+    <div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin-top:0" onclick='saveInventoryReportResolve(${JSON.stringify(reportId)})'>💾 סגור דיווח</button><button class="btn-sec" onclick="document.getElementById('inv-report-resolve-mo').style.display='none'">ביטול</button></div>
+  </div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function saveInventoryReportResolve(reportId){
+  const r=getInventoryReports().find(x=>(x.id||x._docId)===reportId);
+  if(!r||!window.fbDb){alert('שגיאה');return}
+  const note=(document.getElementById('inv-res-note').value||'').trim();
+  const replId=(document.getElementById('inv-res-replace').value||'').trim();
+  const now=Date.now();
+  try{
+    let status='resolved';let fullNote=note;
+    if(replId){
+      const it=getInventoryItems().find(x=>(x.id||x._docId)===r.itemId);
+      const repl=getInventoryItems().find(x=>(x.id||x._docId)===replId);
+      if(it&&repl){
+        // Move faulty unit → warehouse
+        await _invMoveItem(r.itemId,{location:'warehouse',locationName:'מחסן'},'החלפה בעקבות דיווח #'+String(reportId).slice(-6));
+        // Move replacement → same instructor
+        await _invMoveItem(replId,{location:it.location,locationName:it.locationName},'החלפה ליחידה פגומה '+_invUnitLabel(it));
+        status='replaced';
+        fullNote=(note?note+' · ':'')+'הוחלף ל-'+_invUnitLabel(repl);
+      }
+    }
+    await fbDb.collection('inventoryReports').doc(reportId).update({
+      status,
+      resolvedAt:now,
+      resolvedBy:(cu&&cu.uid)||'system',
+      resolvedByName:(cu&&(cu.name||cu.username))||'system',
+      resolutionNote:fullNote
+    });
+    // Notify instructor
+    if(r.reportedBy&&typeof createNotification==='function'){
+      try{await createNotification(r.reportedBy,'inventory_report_resolved','✓',`הדיווח שלך על ${r.templateName||''} ${r.unitLabel||''} נסגר`,fullNote||'הטיפול הושלם',{screen:'mysched'})}catch(e){console.warn('notify failed',e)}
+    }
+    await syncInventoryReports();
+    renderInventoryReportsBadge();
+    const mo1=document.getElementById('inv-report-resolve-mo');if(mo1)mo1.style.display='none';
+    const mo2=document.getElementById('inv-all-reports-mo');if(mo2)mo2.style.display='none';
+    const mo3=document.getElementById('inv-report-view-mo');if(mo3)mo3.style.display='none';
+    if(typeof renderInventoryTab==='function')renderInventoryTab();
+    if(typeof renderInstructorInventoryHeld==='function')renderInstructorInventoryHeld();
+  }catch(e){alert('שגיאה: '+e.message)}
+}
+/* Instructor-side: create a defect report on a unit currently at me. */
+function openInventoryReportCreateMo(itemId){
+  const it=getInventoryItems().find(x=>(x.id||x._docId)===itemId);
+  if(!it){alert('יחידה לא נמצאה');return}
+  let mo=document.getElementById('inv-report-create-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-report-create-mo';mo.className='mo';document.body.appendChild(mo)}
+  const label=(it.templateName||'—')+' '+_invUnitLabel(it);
+  mo.innerHTML=`<div class="md" style="max-width:520px"><div class="mt"><span>🚨 דיווח בעיה — ${esc(label)}</span><span class="mc" onclick="document.getElementById('inv-report-create-mo').style.display='none'">×</span></div>
+    <label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">תיאור הבעיה *</label>
+    <textarea id="inv-rep-desc" rows="4" class="md-input" style="resize:vertical;font-family:inherit" placeholder="למשל: הרוכסן נקרע, חסר חלק, נשבר..."></textarea>
+    <div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin-top:0" onclick='saveInventoryReportCreate(${JSON.stringify(itemId)})'>💾 שלחי דיווח</button><button class="btn-sec" onclick="document.getElementById('inv-report-create-mo').style.display='none'">ביטול</button></div>
+  </div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function saveInventoryReportCreate(itemId){
+  if(!window.fbDb||!cu){alert('שגיאה');return}
+  const it=getInventoryItems().find(x=>(x.id||x._docId)===itemId);
+  if(!it){alert('יחידה לא נמצאה');return}
+  const description=(document.getElementById('inv-rep-desc').value||'').trim();
+  if(!description){alert('חובה לתאר את הבעיה');return}
+  const now=Date.now();
+  const id='invr_'+now+'_'+Math.random().toString(36).slice(2,8);
+  const doc={
+    id,
+    itemId:it.id||it._docId,
+    templateId:it.templateId||null,
+    templateName:it.templateName||'',
+    unitLabel:_invUnitLabel(it),
+    reportedBy:cu.uid||cu.id,
+    reportedByName:cu.name||cu.username||'—',
+    reportedAt:new Date().toISOString(),
+    description,
+    status:'open',
+    createdAt:now
+  };
+  try{
+    await fbDb.collection('inventoryReports').doc(id).set(doc);
+    await syncInventoryReports();
+    const mo=document.getElementById('inv-report-create-mo');if(mo)mo.style.display='none';
+    alert('✓ הדיווח נשלח. האדמין יטפל בהקדם.');
+    if(typeof renderInstructorInventoryHeld==='function')renderInstructorInventoryHeld();
+  }catch(e){alert('שגיאה: '+e.message)}
+}
+/* ==== INVENTORY PIPELINE AUTO-SYNC (v38.7) ====
+   Reads the current weeklySchedule and, per super-cluster + template, aligns
+   inventoryItems' current location with the person actually holding that
+   material this week. Ambiguous cases (unknown owner-of-record) are logged
+   as warnings and skipped. Units flagged `pipelineOverride:true` are skipped.
+   Every write goes through `_invMoveItem` so movements are audit-logged. */
+async function _inventorySyncPipeline(opts){
+  opts=opts||{};
+  const silent=!!opts.silent;
+  if(!window.fbDb){if(!silent)alert('Firebase לא זמין');return null}
+  // Ensure fresh state
+  await syncInventoryItems();
+  const inv=getInventoryItems().filter(x=>!x.deleted&&x.type==='material');
+  const schedule=(typeof getWeeklySchedule==='function')?getWeeklySchedule():{};
+  const users=DB.get('users')||[];
+  const uidToName={};users.forEach(u=>{uidToName[String(u.uid||u.id)]=u.name});
+  // Current week Sunday ISO
+  const _isoToday=formatDateISO(new Date());
+  const _tD=new Date(_isoToday+'T00:00:00');const _sun=new Date(_tD);_sun.setDate(_sun.getDate()-_tD.getDay());
+  const currentWeekISO=formatDateISO(_sun);
+  // Build super-clusters (union-find over linkedGroupIds) — same union-find as computeAnnualRotation.
+  const groups=(_rotGroups||[]).slice();
+  const byId={};groups.forEach(g=>byId[g.id]=g);
+  const seen=new Set();const clusters=[];
+  groups.forEach(g=>{
+    if(seen.has(g.id))return;
+    const cluster=[];const q=[g.id];const inC=new Set();
+    while(q.length){const cur=q.shift();if(inC.has(cur))continue;inC.add(cur);seen.add(cur);const grp=byId[cur];if(!grp)continue;cluster.push(grp);(grp.linkedGroupIds||[]).forEach(o=>{if(!inC.has(o)&&byId[o])q.push(o)})}
+    const uids=new Set();
+    cluster.forEach(gg=>(gg.instructorUids||[]).forEach(u=>uids.add(String(u))));
+    if(uids.size)clusters.push({groupIds:cluster.map(x=>x.id),uids});
+  });
+  const summary={moved:0,warnings:[],skipped:0,decisions:[]};
+  // For each cluster, resolve unit locations per template.
+  for(const cluster of clusters){
+    // Templates present in cluster's units
+    const clusterUnits=inv.filter(x=>x.location==='warehouse'||(x.location&&x.location.indexOf('instructor:')===0&&cluster.uids.has(x.location.slice(11))));
+    const tplIds=new Set(clusterUnits.map(x=>x.templateId).filter(Boolean));
+    for(const tplId of tplIds){
+      const unitsOfTpl=inv.filter(x=>x.templateId===tplId);
+      // "Cluster units" of this template = warehouse OR located at cluster member
+      const clusterOwnedUnits=unitsOfTpl.filter(x=>x.location==='warehouse'||(x.location&&x.location.indexOf('instructor:')===0&&cluster.uids.has(x.location.slice(11))));
+      if(!clusterOwnedUnits.length)continue;
+      // Who in cluster is scheduled for this template THIS WEEK? and LAST WEEK?
+      const _weekAssignees=(weekISO)=>{
+        const w=schedule[weekISO];if(!w||!w.assignments)return new Set();
+        const set=new Set();
+        Object.entries(w.assignments).forEach(([uid,mid])=>{if(mid===tplId&&cluster.uids.has(String(uid)))set.add(String(uid))});
+        return set;
+      };
+      const thisWeek=_weekAssignees(currentWeekISO);
+      const lastWeek=_weekAssignees(_isoAddDays(currentWeekISO,-7));
+      // Determine target: who SHOULD each unit land on?
+      // Simple rule for current-week alignment:
+      //  - If a unit is with instructor J and J∉thisWeek but I∈thisWeek and I is not already receiving a unit of tpl → move J→I.
+      //  - If a unit is with instructor J and J∉thisWeek and thisWeek is empty → warehouse (cycle refresh).
+      //  - If a unit is in warehouse and I∈thisWeek and I has no unit of tpl → warehouse → I.
+      // Ambiguity: |thisWeek| > available cluster-owned units → skip and warn.
+      const uidHasUnitOfTpl={};
+      clusterOwnedUnits.forEach(x=>{if(x.location&&x.location.indexOf('instructor:')===0){const uid=x.location.slice(11);uidHasUnitOfTpl[uid]=(uidHasUnitOfTpl[uid]||[]).concat([x])}});
+      const wareUnits=clusterOwnedUnits.filter(x=>x.location==='warehouse');
+      // Handle each thisWeek assignee that has no unit yet: try to source a unit
+      for(const uid of thisWeek){
+        if(uidHasUnitOfTpl[uid]&&uidHasUnitOfTpl[uid].length)continue;
+        // Prefer a unit at someone in cluster who no longer needs it (was in lastWeek but not in thisWeek)
+        let source=null;
+        for(const [srcUid,arr] of Object.entries(uidHasUnitOfTpl)){
+          if(thisWeek.has(srcUid))continue;
+          if(!arr||!arr.length)continue;
+          const candidate=arr.find(x=>!x.pipelineOverride);
+          if(!candidate)continue;
+          source=candidate;break;
+        }
+        // Otherwise pull from warehouse
+        if(!source){source=wareUnits.find(x=>!x.pipelineOverride)||null;if(source){wareUnits.splice(wareUnits.indexOf(source),1)}}
+        if(!source){summary.warnings.push(`🚨 חסרה יחידה של ${clusterOwnedUnits[0].templateName||tplId} עבור ${uidToName[uid]||uid} (שבוע ${currentWeekISO}) — הוסיפי יחידה במלאי`);continue}
+        if(source.pipelineOverride){summary.skipped++;continue}
+        try{
+          await _invMoveItem(source.id||source._docId,{location:'instructor:'+uid,locationName:uidToName[uid]||'—'},'סנכרון פייפליין — '+currentWeekISO);
+          summary.moved++;summary.decisions.push(`${_invUnitLabel(source)}: ${source.locationName||'—'} → ${uidToName[uid]||uid}`);
+          // Update local map so we don't try to move the same unit twice
+          if(source.location&&source.location.indexOf('instructor:')===0){
+            const srcUid=source.location.slice(11);
+            uidHasUnitOfTpl[srcUid]=(uidHasUnitOfTpl[srcUid]||[]).filter(x=>x!==source);
+          }
+          uidHasUnitOfTpl[uid]=(uidHasUnitOfTpl[uid]||[]).concat([{...source,location:'instructor:'+uid}]);
+        }catch(e){summary.warnings.push('שגיאה: '+(e.message||e))}
+      }
+      // Handle units still at instructors who are NOT in thisWeek AND nobody in cluster needs them → warehouse
+      for(const [srcUid,arr] of Object.entries(uidHasUnitOfTpl)){
+        if(thisWeek.has(srcUid))continue;
+        for(const source of arr){
+          if(source.pipelineOverride){summary.skipped++;continue}
+          // Any unmet demand in thisWeek?
+          const unmet=[...thisWeek].some(u=>!uidHasUnitOfTpl[u]||!uidHasUnitOfTpl[u].length);
+          if(unmet)continue; // already handled above (would've moved this to that person)
+          try{
+            await _invMoveItem(source.id||source._docId,{location:'warehouse',locationName:'מחסן'},'סנכרון פייפליין — סיום מחזור '+currentWeekISO);
+            summary.moved++;summary.decisions.push(`${_invUnitLabel(source)}: ${source.locationName||'—'} → 🏭 מחסן`);
+          }catch(e){summary.warnings.push('שגיאה: '+(e.message||e))}
+        }
+      }
+    }
+  }
+  await syncInventoryItems();
+  return summary;
+}
+async function _inventorySyncPipelineFromMo(){
+  const btn=event&&event.target;
+  if(btn){btn.disabled=true;btn.textContent='⏳ מסנכרן...'}
+  try{
+    const s=await _inventorySyncPipeline();
+    if(!s){return}
+    const msg=`✓ סנכרון הסתיים\n\n📦 ${s.moved} תנועות בוצעו${s.skipped?`\n🔒 ${s.skipped} יחידות נעולות לא זזו`:''}${s.warnings.length?`\n\n⚠ ${s.warnings.length} אזהרות:\n${s.warnings.slice(0,10).join('\n')}`:''}${s.decisions.length?`\n\nהחלטות (${Math.min(10,s.decisions.length)} ראשונות):\n${s.decisions.slice(0,10).join('\n')}`:''}`;
+    alert(msg);
+    renderInventoryTab();
+  }catch(e){alert('שגיאה: '+(e.message||e))}
+  finally{if(btn){btn.disabled=false;btn.textContent='🔄 סנכרן פייפליין'}}
+}
+/* ==== INVENTORY GAP ANALYSIS (v38.7) ====
+   Scans weeklySchedule going forward, computes MAX concurrent usage per
+   material template, compares vs inventory count, surfaces deficits with
+   a "+ הוסף N יחידות" one-click filler. */
+function openInventoryGapAnalysisMo(filterTemplateId){
+  const items=getInventoryItems().filter(x=>!x.deleted&&x.type==='material');
+  const mats=(typeof getMaterials==='function')?getMaterials():[];
+  const matsById={};mats.forEach(m=>matsById[m.id]=m);
+  const schedule=(typeof getWeeklySchedule==='function')?getWeeklySchedule():{};
+  const today=formatDateISO(new Date());
+  const countsByTpl={};items.forEach(x=>{const t=x.templateId||'?';countsByTpl[t]=(countsByTpl[t]||0)+1});
+  const rowsData=[];
+  const seenTpls=new Set();
+  Object.keys(schedule).forEach(wISO=>{
+    if(wISO<today)return;
+    const wk=schedule[wISO];if(!wk||!wk.assignments)return;
+    // Count concurrent per tpl in this week
+    const perTpl={};
+    Object.values(wk.assignments).forEach(mid=>{if(mid)perTpl[mid]=(perTpl[mid]||0)+1});
+    Object.entries(perTpl).forEach(([tid,cnt])=>{
+      seenTpls.add(tid);
+      const cur=rowsData.find(r=>r.tid===tid);
+      if(!cur||cnt>cur.peak){
+        if(!cur)rowsData.push({tid,peak:cnt,peakWeek:wISO});
+        else{cur.peak=cnt;cur.peakWeek=wISO}
+      }
+    });
+  });
+  // Include templates that have inventory but nobody scheduled — peak=0
+  Object.keys(countsByTpl).forEach(tid=>{if(!seenTpls.has(tid))rowsData.push({tid,peak:0,peakWeek:null})});
+  const withDeficit=rowsData.map(r=>({...r,count:countsByTpl[r.tid]||0,deficit:Math.max(0,r.peak-(countsByTpl[r.tid]||0)),name:(matsById[r.tid]&&matsById[r.tid].name)||r.tid}));
+  withDeficit.sort((a,b)=>(b.deficit-a.deficit)||(b.peak-a.peak)||a.name.localeCompare(b.name,'he'));
+  const visible=filterTemplateId?withDeficit.filter(r=>r.tid===filterTemplateId):withDeficit;
+  let mo=document.getElementById('inv-gaps-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-gaps-mo';mo.className='mo';document.body.appendChild(mo)}
+  const totalDeficit=visible.reduce((s,r)=>s+r.deficit,0);
+  const rows=visible.map(r=>{
+    const bg=r.deficit?'#FEE2E2':'#DCFCE7';
+    const brd=r.deficit?'#DC2626':'#22C55E';
+    const fg=r.deficit?'#991B1B':'#166534';
+    const peakStr=r.peakWeek?`שיא: ${r.peak} (שבוע ${new Date(r.peakWeek).toLocaleDateString('he-IL')})`:'לא משובץ קדימה';
+    const deficitStr=r.deficit?`<b>חסרות ${r.deficit} יחידות</b>`:'✓ מספיק';
+    const fillBtn=r.deficit?`<button class="btn-prim" onclick='_invGapFill(${JSON.stringify(r.tid)},${r.deficit})' style="padding:6px 12px;font-size:11px;background:${brd};border-color:${brd}">+ הוסף ${r.deficit} יחידות</button>`:'';
+    return `<div style="background:${bg};border:1.5px solid ${brd};border-radius:8px;padding:10px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:800;font-size:13px;color:${fg}">${esc(r.name)}</div>
+        <div style="font-size:11px;color:${fg};margin-top:2px">${r.count} יחידות · ${peakStr} · ${deficitStr}</div>
+      </div>
+      ${fillBtn}
+    </div>`;
+  }).join('');
+  const banner=totalDeficit?`<div style="background:#FEE2E2;border:2px solid #DC2626;border-radius:10px;padding:10px;margin-bottom:10px;color:#991B1B;font-weight:800;font-size:13px">🚨 סה"כ ${totalDeficit} יחידות חסרות כדי לכסות את השיא הצפוי</div>`:'<div style="background:#DCFCE7;border:2px solid #22C55E;border-radius:10px;padding:10px;margin-bottom:10px;color:#166534;font-weight:800;font-size:13px">✓ אין גירעונות — יש מספיק יחידות לכל שבוע צפוי</div>';
+  mo.innerHTML=`<div class="md" style="max-width:760px;width:96vw;max-height:92vh;overflow-y:auto"><div class="mt"><span>🔍 ניתוח גירעונות מלאי — עד סוף שנת הלימודים</span><span class="mc" onclick="document.getElementById('inv-gaps-mo').style.display='none'">×</span></div>
+    <div style="font-size:11px;color:var(--mut);margin-bottom:10px">משווה בין מספר היחידות שיש במלאי לבין השיא הצפוי (שיבוצים במקביל באותו שבוע) קדימה. תבנית עם 3 יחידות ושיא של 5 מסומנת כחסרה 2.</div>
+    ${banner}
+    ${rows||'<div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">אין נתונים — האם יש שיבוצים ויחידות?</div>'}
+  </div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function _invGapFill(templateId,count){
+  const mats=(typeof getMaterials==='function')?getMaterials():[];
+  const tpl=mats.find(m=>m.id===templateId);
+  const tplName=(tpl&&tpl.name)||templateId;
+  if(!confirm(`להוסיף ${count} יחידות של "${tplName}" למחסן?`))return;
+  let added=0;const errors=[];
+  for(let i=0;i<count;i++){
+    try{
+      const num=_invNextUnitNumber(templateId,'material');
+      const res=await _invCreateItem({type:'material',templateId,templateName:tplName,unitNumber:num,serialLabel:'#'+num,location:'warehouse',locationName:'מחסן',notes:'נוסף אוטומטית ע"י ניתוח גירעונות'});
+      if(res)added++;
+    }catch(e){errors.push(e.message)}
+  }
+  alert(`✓ נוספו ${added}/${count} יחידות ל-"${tplName}"${errors.length?'\n\nשגיאות:\n'+errors.slice(0,5).join('\n'):''}`);
+  openInventoryGapAnalysisMo();
+  const invMo=document.getElementById('inventory-mo');if(invMo&&invMo.style.display==='flex')renderInventoryTab();
+}
+/* v38.7: inline WSCH grid "🔗 סמן יחידה" — open a small picker of available
+   units of the assigned template and transfer one to this instructor. */
+function openInventoryLinkPickerMo(weekId,uid,templateId){
+  if(!cu||(cu.role!=='admin'&&cu.role!=='office')){alert('רק אדמין / משרד');return}
+  const users=DB.get('users')||[];
+  const u=users.find(x=>String(x.uid||x.id)===String(uid));
+  const uName=u?u.name:uid;
+  const mats=(typeof getMaterials==='function')?getMaterials():[];
+  const tpl=mats.find(m=>m.id===templateId);
+  const tplName=tpl?tpl.name:templateId;
+  const inv=getInventoryItems().filter(x=>!x.deleted&&x.type==='material'&&x.templateId===templateId);
+  const avail=inv.filter(x=>x.location==='warehouse'||(x.location&&x.location.indexOf('instructor:')===0&&x.location.slice(11)!==String(uid)));
+  const opts=avail.map(x=>{
+    const label=_invUnitLabel(x);
+    const loc=x.location==='warehouse'?'🏭 מחסן':'👤 '+(x.locationName||'—');
+    return `<option value="${esc(x.id||x._docId)}">${esc(label)} · כרגע ב${esc(loc)}</option>`;
+  }).join('');
+  let mo=document.getElementById('inv-link-pick-mo');
+  if(!mo){mo=document.createElement('div');mo.id='inv-link-pick-mo';mo.className='mo';document.body.appendChild(mo)}
+  const emptyMsg=avail.length?'':'<div style="background:#FEE2E2;border:1px solid #DC2626;border-radius:6px;padding:10px;color:#991B1B;font-size:12px;margin-bottom:10px">אין יחידות פנויות של "'+esc(tplName)+'" — כולן אצל '+esc(uName)+' או שאין יחידות כלל. הוסיפי יחידה במלאי או שחררי אחת ממישהי אחרת.</div>';
+  mo.innerHTML=`<div class="md" style="max-width:520px"><div class="mt"><span>🔗 סמני יחידה של ${esc(tplName)} ל-${esc(uName)}</span><span class="mc" onclick="document.getElementById('inv-link-pick-mo').style.display='none'">×</span></div>
+    <div style="background:#EFF6FF;padding:8px;border-radius:6px;font-size:12px;margin-bottom:10px;color:#1E3A8A">שבוע ${esc(weekId)} · פעולה זו מתעדת שהיחידה נכנסה לפייפליין אצל ${esc(uName)}.</div>
+    ${emptyMsg}
+    ${avail.length?`<label style="font-size:11px;font-weight:700;color:var(--mut);margin-bottom:4px;display:block">בחרי יחידה *</label>
+    <select id="inv-link-pick-item" class="md-input">${opts}</select>
+    <div class="ma" style="margin-top:14px"><button class="btn-prim" style="flex:1;margin-top:0" onclick='saveInventoryLinkPicker(${JSON.stringify(weekId)},${JSON.stringify(uid)},${JSON.stringify(uName)})'>🔗 סמני</button><button class="btn-sec" onclick="document.getElementById('inv-link-pick-mo').style.display='none'">ביטול</button></div>`:'<div class="ma" style="margin-top:14px"><button class="btn-sec" onclick="document.getElementById(\'inv-link-pick-mo\').style.display=\'none\'">סגור</button></div>'}
+  </div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function saveInventoryLinkPicker(weekId,uid,uName){
+  const itemId=document.getElementById('inv-link-pick-item').value;
+  if(!itemId){alert('חובה לבחור יחידה');return}
+  await _invMoveItem(itemId,{location:'instructor:'+uid,locationName:uName},'סימון ידני מ-WSCH — '+weekId);
+  const mo=document.getElementById('inv-link-pick-mo');if(mo)mo.style.display='none';
+  if(typeof renderWschGrid==='function')renderWschGrid();
+  alert('✓ סומן — היחידה נכנסה לפייפליין אצל '+uName);
+}
+/* ==== INSTRUCTOR-SIDE VIEW (v38.7) ====
+   Renders "🎯 המערכים אצלי" on the instructor's own screen:
+   - list of unit chips
+   - defect-report button per unit
+   - resolved notifications flow via createNotification (handled by admin resolve). */
+function renderInstructorInventoryHeld(){
+  const el=document.getElementById('instructor-inventory-held');if(!el)return;
+  if(!cu||cu.role!=='instructor'){el.style.display='none';return}
+  const myUid=String(cu.uid||cu.id);
+  const items=getInventoryItems().filter(x=>!x.deleted&&x.location==='instructor:'+myUid);
+  if(!items.length){el.style.display='none';return}
+  el.style.display='block';
+  const reports=getInventoryReports().filter(r=>r.status==='open'&&r.reportedBy===cu.uid);
+  const openByItem={};reports.forEach(r=>{openByItem[r.itemId]=r});
+  const rows=items.map(it=>{
+    const itId=it.id||it._docId;
+    const label=_invUnitLabel(it);
+    const hasOpen=!!openByItem[itId];
+    const since=it.updatedAt?new Date(it.updatedAt).toLocaleDateString('he-IL'):'—';
+    return `<div style="background:white;border:1.5px solid ${hasOpen?'#DC2626':'#7C3AED'};border-radius:10px;padding:10px;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px"><div style="font-weight:800;font-size:13px">${it.type==='speaker'?'🔊 רמקול':'📦 '+esc(it.templateName||'—')} <span style="font-family:monospace">${esc(label)}</span></div><div style="font-size:11px;color:var(--mut)">קיבלת: ${since}${it.notes?' · '+esc(it.notes):''}${hasOpen?' · 🚨 דיווח פתוח':''}</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${hasOpen?'<span style="font-size:11px;color:#991B1B;font-weight:700;padding:6px 10px;background:#FEE2E2;border-radius:6px">🚨 דיווח פתוח</span>':`<button class="btn-sec" onclick='openInventoryReportCreateMo(${JSON.stringify(itId)})' style="padding:6px 10px;font-size:11px;background:#FEE2E2;color:#991B1B;border-color:#DC2626;font-weight:700">🚨 יש בעיה</button>`}</div>
+    </div>`;
+  }).join('');
+  el.innerHTML=`<div class="card-title"><div class="card-icon">🎯</div>המערכים אצלי</div>
+    <div style="font-size:12px;color:#5B21B6;margin-bottom:10px">${items.length} יחידות מלאי רשומות על שמך. לחצי על "יש בעיה" אם משהו נשבר / חסר.</div>
+    ${rows}`;
+}
+/* Auto-load instructor inventory when the mysched screen appears. */
+document.addEventListener('DOMContentLoaded',()=>{
+  const observer=new MutationObserver(()=>{
+    if(cu && cu.role==='instructor'){
+      const card=document.getElementById('instructor-inventory-held');
+      if(card && card.style.display==='none' && typeof syncInventoryItems==='function'){
+        Promise.all([syncInventoryItems(),syncInventoryReports&&syncInventoryReports()]).then(()=>renderInstructorInventoryHeld());
+      }
+    }
+  });
+  observer.observe(document.body,{attributes:true,subtree:true,attributeFilter:['style','class']});
+});
 /* ==== SLOT-KEY RETRO MIGRATION (v38.3) ====
    v38.2 added `slotKey` to NEW records so a garden with N slots on one day gets
    N independent records. Records from THIS week (>= 2026-09-06) were written
@@ -9313,7 +9865,7 @@ async function unlockAllAssignments(){
 }
 function renderWschGrid(){if(typeof renderRegionDirtyBanner==='function')renderRegionDirtyBanner();const el=document.getElementById('wsch-grid');if(!el)return;const titleEl=document.getElementById('wsch-title');const HE_MONTHS=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];if(titleEl)titleEl.textContent=(_wschViewMode==='year')?`📆 כל שנת הלימודים (${SCHOOL_YEAR.start} → ${SCHOOL_YEAR.end})`:`${HE_MONTHS[_wschViewMonth.getMonth()]} ${_wschViewMonth.getFullYear()}`;const _prevBtn=document.getElementById('wsch-prev-btn');const _nextBtn=document.getElementById('wsch-next-btn');const _viewToggleBtn=document.getElementById('wsch-view-toggle');if(_prevBtn)_prevBtn.style.display=_wschViewMode==='year'?'none':'';if(_nextBtn)_nextBtn.style.display=_wschViewMode==='year'?'none':'';if(_viewToggleBtn)_viewToggleBtn.textContent=_wschViewMode==='year'?'📅 חזור לחודש':'📆 כל השנה';const users=DB.get('users')||[];const _realAnimals=users.filter(u=>u.role!=='admin'&&_hasSpec(u,'animals')&&!u.offboarded);const _virtAnimals=(typeof getVirtualInstructors==='function'?getVirtualInstructors({status:'pending'}):[]).filter(v=>_hasSpec(v,'animals'));const animalInstructors=[..._realAnimals,..._virtAnimals];const instructorsByRegion={};const unassigned=[];REGIONS.forEach(r=>instructorsByRegion[r]=[]);animalInstructors.forEach(u=>{const r=inferInstructorRegion(u);if(r&&instructorsByRegion[r])instructorsByRegion[r].push(u);else unassigned.push(u)});const tabsHtml=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">${REGIONS.map(r=>{const count=instructorsByRegion[r].length;const active=_wschRegion===r;const bg=active?(REGION_COLORS[r]||'#1565C0'):'white';const fg=active?'white':'var(--text)';const border=active?(REGION_COLORS[r]||'#1565C0'):'var(--brd)';return`<button onclick="switchWschRegion('${r}')" style="padding:8px 14px;border:1.5px solid ${border};background:${bg};color:${fg};border-radius:18px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit">${esc(r)} <span style="background:${active?'rgba(255,255,255,0.25)':'#F3F4F6'};padding:2px 7px;border-radius:8px;margin-right:4px;font-size:11px">${count}</span></button>`}).join('')}${unassigned.length?`<button onclick="switchWschRegion('_unassigned')" style="padding:8px 14px;border:1.5px solid ${_wschRegion==='_unassigned'?'#E63946':'var(--brd)'};background:${_wschRegion==='_unassigned'?'#E63946':'white'};color:${_wschRegion==='_unassigned'?'white':'#C62828'};border-radius:18px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit">⚠ ללא אזור <span style="background:${_wschRegion==='_unassigned'?'rgba(255,255,255,0.25)':'#FFEBEE'};padding:2px 7px;border-radius:8px;margin-right:4px;font-size:11px">${unassigned.length}</span></button>`:''}</div>`;let instructorsInRegion;if(_wschRegion==='_unassigned')instructorsInRegion=unassigned;else instructorsInRegion=instructorsByRegion[_wschRegion]||[];const groupsInRegion=(_rotGroups||[]).filter(g=>g.regionName===_wschRegion);const groupedUids=new Set();groupsInRegion.forEach(g=>(g.instructorUids||[]).forEach(uid=>groupedUids.add(String(uid))));const freeInstructors=instructorsInRegion.filter(u=>!groupedUids.has(String(u.uid||u.id))).sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));const subTabs=[];const _seenGroupIds=new Set();groupsInRegion.forEach(g=>{if(_seenGroupIds.has(g.id))return;const cluster=[];const _q=[g.id];const _inClu=new Set();while(_q.length){const cur=_q.shift();if(_inClu.has(cur))continue;_inClu.add(cur);_seenGroupIds.add(cur);const grp=groupsInRegion.find(gg=>gg.id===cur);if(!grp)continue;cluster.push(grp);(grp.linkedGroupIds||[]).forEach(o=>{if(!_inClu.has(o))_q.push(o)})}const merged=[];cluster.forEach(gg=>{(gg.instructorUids||[]).forEach(uid=>{const u=instructorsInRegion.find(uu=>String(uu.uid||uu.id)===String(uid));if(u&&!merged.find(x=>String(x.uid||x.id)===String(u.uid||u.id)))merged.push(u)})});if(!merged.length)return;const isSuper=cluster.length>1;const label=isSuper?'🔗 '+cluster.map(gg=>gg.name||'קבוצה').join(' + '):'🔄 '+(cluster[0].name||'קבוצה');const cycleWeeks=isSuper?merged.length:(cluster[0].cycleWeeks||merged.length);subTabs.push({key:'g:'+cluster.map(gg=>gg.id).sort().join('|'),label,instructors:merged,isGroup:true,isSuper,cluster,group:{...cluster[0],cycleWeeks}})});if(freeInstructors.length||!subTabs.length)subTabs.push({key:'free',label:subTabs.length?'👤 חופשיות':'👤 כל המדריכות',instructors:freeInstructors,isGroup:false});/* Build a "all region" merged view + per-instructor group-badge map so every
    column shows which rotation group it belongs to. Only meaningful when there
-   is at least one rotation group in the region. */const _grpBadgePalette=['#7C3AED','#0EA5E9','#EF4444','#F59E0B','#10B981','#EC4899','#8B5CF6','#14B8A6'];const _grpBadgeMap={};let _grpBadgeIdx=0;subTabs.forEach(t=>{if(!t.isGroup)return;const _clr=_grpBadgePalette[_grpBadgeIdx++%_grpBadgePalette.length];const _lbl=t.label.replace(/^[🔗🔄]\s*/,'');(t.instructors||[]).forEach(u=>{const uid=String(u.uid||u.id);if(!_grpBadgeMap[uid])_grpBadgeMap[uid]={label:_lbl,color:_clr,isSuper:!!t.isSuper}})});const _hasAnyGroup=subTabs.some(t=>t.isGroup);if(_hasAnyGroup&&(subTabs.filter(t=>t.isGroup).length>1||freeInstructors.length)){const _allInst=instructorsInRegion.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));subTabs.unshift({key:'all',label:'🌐 כל האזור',instructors:_allInst,isGroup:false,isAll:true})}if(!_wschSubTab||!subTabs.find(t=>t.key===_wschSubTab))_wschSubTab=subTabs[0]?subTabs[0].key:null;const showSubTabs=subTabs.length>1;const activeSub=subTabs.find(t=>t.key===_wschSubTab)||subTabs[0];let instructors=_wschApplyColOrder(activeSub?activeSub.instructors.slice():[]);const routeStops=((_regionRoutes[_wschRegion]||{}).stops||[]);const routeBannerHtml=routeStops.length?`<div style="background:linear-gradient(90deg,#F5F3FF,#E0E7FF);border:1px solid #C4B5FD;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:#5B21B6;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-weight:700">🚗 מסלול נהג ב${esc(_wschRegion)}:</span>${routeStops.map((s,i)=>`<span style="background:white;padding:2px 8px;border-radius:10px;font-weight:600">${i+1}. ${esc(_rrStopLabel(s).replace(/^[👤🔄]\s*/,''))}</span>${i<routeStops.length-1?'<span style="color:#7C3AED">→</span>':''}`).join('')}<a onclick="document.getElementById('rotgroups-mo')||openRotGroupsMo();setTimeout(()=>{_rrSelRegion='${esc(_wschRegion)}';renderRouteEditor()},50)" style="margin-right:auto;color:#7C3AED;font-size:10px;text-decoration:underline;cursor:pointer">ערוך</a></div>`:'';const subTabsHtml=routeBannerHtml+(showSubTabs?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:#F5F3FF;border-radius:8px;border:1px dashed #C4B5FD"><span style="font-size:11px;color:#5B21B6;font-weight:700;align-self:center;margin-left:6px">סוג רוטציה:</span>${subTabs.map(t=>{const active=_wschSubTab===t.key;const bg=active?(t.isGroup?'#7C3AED':'#1565C0'):'white';const fg=active?'white':(t.isGroup?'#5B21B6':'#0C4A6E');const border=active?bg:'var(--brd)';const cyc=t.isGroup?` · מחזור ${t.group.cycleWeeks||t.instructors.length}שב׳`:'';return`<button onclick="_wschSubTab='${esc(t.key)}';renderWschGrid()" style="padding:6px 12px;border:1.5px solid ${border};background:${bg};color:${fg};border-radius:14px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit">${esc(t.label)} <span style="background:${active?'rgba(255,255,255,0.25)':'#F3F4F6'};padding:1px 7px;border-radius:8px;margin-right:4px;font-size:10px">${t.instructors.length}${esc(cyc)}</span></button>`}).join('')}</div>`:'');if(!instructors.length){el.innerHTML=tabsHtml+subTabsHtml+`<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">${_wschRegion==='_unassigned'?'אין מדריכות ללא אזור 🎉':'אין מדריכות בקטגוריה זו'}</div>`;return}const materials=getMaterials();if(!materials.length){el.innerHTML='<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">אין מערכים. עלי קודם מערכים בטאב "מערכים"</div>';return}const schedule=getWeeklySchedule();const weeks=[];if(_wschViewMode==='year'){const[ys,ms,ds]=SCHOOL_YEAR.start.split('-').map(n=>parseInt(n,10));const[ye,me,de]=SCHOOL_YEAR.end.split('-').map(n=>parseInt(n,10));const startDt=getSunday(new Date(ys,ms-1,ds));const endDt=new Date(ye,me-1,de);let curr=new Date(startDt);while(curr<=endDt){weeks.push(new Date(curr));curr.setDate(curr.getDate()+7)}}else{const firstDay=new Date(_wschViewMonth.getFullYear(),_wschViewMonth.getMonth(),1);const lastDay=new Date(_wschViewMonth.getFullYear(),_wschViewMonth.getMonth()+1,0);let curr=getSunday(firstDay);while(curr<=lastDay){weeks.push(new Date(curr));curr.setDate(curr.getDate()+7)}}const matsById={};materials.forEach(m=>matsById[m.id]=m);let html='<table style="border-collapse:collapse;width:100%;min-width:'+(180+instructors.length*140)+'px;font-size:12px"><thead><tr><th style="background:#1565C0;color:white;padding:10px;border:1px solid #ddd;position:sticky;right:0;z-index:2;min-width:140px">📅 תאריך</th>';instructors.forEach(u=>{const uid=u.uid||u.id;const curRegion=u.region||'';const _isVirt=u._isVirtual===true;const regionOpts=['<option value="">— ללא —</option>'].concat(REGIONS.map(r=>`<option value="${esc(r)}"${curRegion===r?' selected':''}>${esc(r)}</option>`)).join('');const _thBg=_isVirt?'linear-gradient(135deg,#F59E0B,#D97706)':'#1565C0';const _subLine=_isVirt?'<div style="font-size:10px;opacity:0.98;font-weight:700;margin-bottom:4px">🕐 תפקיד עתידי</div>':`<div style="font-size:10px;opacity:0.85;font-weight:400;margin-bottom:4px">@${esc(u.username||'')}</div>`;const _regionControl=_isVirt?`<div title="לעריכת האזור של תפקיד עתידי — פתחי את הכרטיס באדמין" onclick="openAddVirtualInstructorMo('${uid}')" style="padding:2px 6px;border:1px dashed white;background:rgba(255,255,255,0.2);color:white;border-radius:6px;font-size:10px;font-weight:700;font-family:inherit;width:90%;cursor:pointer;text-align:center;display:inline-block">${curRegion?esc(curRegion):'⚠ ללא אזור'} ✏</div>`:`<select onclick="event.stopPropagation()" onchange="setWschInstructorRegion('${uid}',this.value)" title="ערוך אזור פעילות" style="padding:2px 6px;border:1px solid white;background:${curRegion?'rgba(255,255,255,0.95)':'rgba(255,255,255,0.7)'};color:#1565C0;border-radius:6px;font-size:10px;font-weight:${curRegion?'700':'400'};font-family:inherit;width:90%;cursor:pointer">${regionOpts}</select>`;const _grpInfo=(activeSub&&activeSub.isAll)?_grpBadgeMap[String(uid)]:null;const _grpBadge=_grpInfo?`<div style="font-size:10px;font-weight:800;background:${_grpInfo.color};color:white;padding:2px 8px;border-radius:10px;margin-bottom:4px;display:inline-block;border:1px solid rgba(255,255,255,0.35)">${_grpInfo.isSuper?'🔗':'🔄'} ${esc(_grpInfo.label)}</div>`:(activeSub&&activeSub.isAll?`<div style="font-size:10px;font-weight:800;background:rgba(255,255,255,0.2);color:white;padding:2px 8px;border-radius:10px;margin-bottom:4px;display:inline-block;border:1px dashed rgba(255,255,255,0.5)">👤 חופשית</div>`:'');const _uidStr=String(uid);const _colBtns=`<div style="display:flex;justify-content:space-between;margin-bottom:4px;gap:2px"><button onclick="event.stopPropagation();moveWschColumn('${_uidStr}',1)" title="הזז את העמודה שמאלה" style="background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:white;border-radius:4px;padding:1px 6px;cursor:pointer;font-size:12px;font-family:inherit;line-height:1">◀</button><button onclick="event.stopPropagation();moveWschColumn('${_uidStr}',-1)" title="הזז את העמודה ימינה" style="background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:white;border-radius:4px;padding:1px 6px;cursor:pointer;font-size:12px;font-family:inherit;line-height:1">▶</button></div>`;html+=`<th data-uid="${_uidStr}" style="background:${_thBg};color:white;padding:8px;border:1px solid #ddd;min-width:140px;text-align:center">${_colBtns}${_grpBadge}<div style="font-weight:700">${esc(u.name)}</div>${_subLine}${_regionControl}</th>`});html+='</tr></thead><tbody>';weeks.forEach(weekStart=>{const weekId=formatDateISO(weekStart);const weekEnd=new Date(weekStart);weekEnd.setDate(weekEnd.getDate()+6);const weekData=schedule[weekId]||{assignments:{}};const holiday=getHolidayForWeek(weekId);const dateCellBg=holiday?(holiday.fullWeek?'#FFE0E6':'#FFF3E0'):'#FFF8E1';const dateCellFg=holiday?(holiday.fullWeek?'#9D174D':'#7C2D12'):'#7B5C00';const holidayLabel=holiday?`<div style="font-size:10px;font-weight:700;color:${dateCellFg};margin-top:4px;background:${holiday.fullWeek?'#FCA5A5':'#FBBF24'};padding:2px 6px;border-radius:6px;display:inline-block">${holiday.fullWeek?'🎉':'⚠'} ${esc(holiday.name)}</div>`:'';const toggleBtn=`<div style="font-size:9px;margin-top:4px"><a onclick="event.stopPropagation();toggleWeekHoliday('${weekId}')" style="color:#0EA5E9;text-decoration:underline;cursor:pointer">${holiday?'בטל':'+ סמני חופשה'}</a></div>`;html+=`<tr><td style="background:${dateCellBg};font-weight:700;color:${dateCellFg};padding:10px;border:1px solid #ddd;position:sticky;right:0;z-index:1;text-align:center">${formatDateDisplay(weekStart)}<br><span style="font-size:10px;font-weight:400">עד ${formatDateDisplay(weekEnd)}</span>${holidayLabel}${toggleBtn}</td>`;if(holiday&&holiday.fullWeek){html+=`<td colspan="${instructors.length}" style="background:repeating-linear-gradient(45deg,#FEE2E2,#FEE2E2 10px,#FECACA 10px,#FECACA 20px);color:#991B1B;text-align:center;font-weight:700;font-size:13px;padding:14px;border:1px solid #ddd">🎉 ${esc(holiday.name)} — אין פעילות השבוע</td>`}else{const _lockedSet=new Set(((weekData.lockedUids)||[]).map(String));const _matUseCount={};Object.values(weekData.assignments||{}).forEach(mid=>{if(mid)_matUseCount[mid]=(_matUseCount[mid]||0)+1});instructors.forEach(u=>{const uid=u.uid||u.id;const matId=weekData.assignments[uid]||'';const mat=matsById[matId];const bg=matId?matColorFor(matId):(holiday?'#FFF7ED':'#F5F5F5');const text=mat?mat.name:'';const fg=matId?'#000':'#888';const isLocked=_lockedSet.has(String(uid));const pushBtn=(matId&&!u._isVirtual)?`<button onclick="event.stopPropagation();sendMaterialPushToInstructor('${weekId}','${uid}')" title="שלחי פוש למדריכה על המערך הזה (שימושי לשינוי בדקה ה-90)" style="position:absolute;top:2px;right:2px;background:rgba(255,255,255,0.85);border:1px solid #FB923C;color:#9A3412;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:12px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;font-family:inherit">🔔</button>`:'';const dupCount=matId?(_matUseCount[matId]||0):0;const isDup=dupCount>1;const dupBtn=isDup?`<button onclick="event.stopPropagation();openDupSwapMo('${weekId}','${uid}','${matId}')" title="⚠ מערך זה משובץ אצל ${dupCount} מדריכות בשבוע זה — לחצי להצעות החלפה" style="position:absolute;bottom:2px;left:2px;background:#F59E0B;border:1px solid #B45309;color:white;border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:12px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;font-family:inherit;font-weight:800;z-index:2;box-shadow:0 1px 3px rgba(0,0,0,0.3)">⚠</button>`:'';const lockBtn=`<button onclick="event.stopPropagation();toggleWschLock('${weekId}','${uid}')" title="${isLocked?'🔒 נעול — לחצי לביטול':'🔓 לחצי לנעילה — האלגוריתם לא ידרוס'}" style="position:absolute;top:2px;left:2px;background:${isLocked?'#7C3AED':'rgba(255,255,255,0.75)'};border:1px solid ${isLocked?'#5B21B6':'#C4B5FD'};color:${isLocked?'white':'#5B21B6'};border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:11px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;font-family:inherit">${isLocked?'🔒':'🔓'}</button>`;const cellBorder=isLocked?'2.5px solid #7C3AED':'1px solid #ddd';html+=`<td style="border:${cellBorder};padding:0;background:${bg};color:${fg};cursor:pointer;text-align:center;font-weight:600;font-size:11px;min-height:50px;vertical-align:middle;position:relative" onclick="pickMaterialFor('${weekId}','${uid}')">${lockBtn}${dupBtn}${pushBtn}${text?'<div style="padding:10px 6px 6px">'+esc(text)+'</div>':'<div style="padding:18px 6px;color:#999">+ הוסף</div>'}</td>`})}html+='</tr>'});html+='</tbody></table>';el.innerHTML=tabsHtml+subTabsHtml+html}
+   is at least one rotation group in the region. */const _grpBadgePalette=['#7C3AED','#0EA5E9','#EF4444','#F59E0B','#10B981','#EC4899','#8B5CF6','#14B8A6'];const _grpBadgeMap={};let _grpBadgeIdx=0;subTabs.forEach(t=>{if(!t.isGroup)return;const _clr=_grpBadgePalette[_grpBadgeIdx++%_grpBadgePalette.length];const _lbl=t.label.replace(/^[🔗🔄]\s*/,'');(t.instructors||[]).forEach(u=>{const uid=String(u.uid||u.id);if(!_grpBadgeMap[uid])_grpBadgeMap[uid]={label:_lbl,color:_clr,isSuper:!!t.isSuper}})});const _hasAnyGroup=subTabs.some(t=>t.isGroup);if(_hasAnyGroup&&(subTabs.filter(t=>t.isGroup).length>1||freeInstructors.length)){const _allInst=instructorsInRegion.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','he'));subTabs.unshift({key:'all',label:'🌐 כל האזור',instructors:_allInst,isGroup:false,isAll:true})}if(!_wschSubTab||!subTabs.find(t=>t.key===_wschSubTab))_wschSubTab=subTabs[0]?subTabs[0].key:null;const showSubTabs=subTabs.length>1;const activeSub=subTabs.find(t=>t.key===_wschSubTab)||subTabs[0];let instructors=_wschApplyColOrder(activeSub?activeSub.instructors.slice():[]);const routeStops=((_regionRoutes[_wschRegion]||{}).stops||[]);const routeBannerHtml=routeStops.length?`<div style="background:linear-gradient(90deg,#F5F3FF,#E0E7FF);border:1px solid #C4B5FD;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:#5B21B6;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-weight:700">🚗 מסלול נהג ב${esc(_wschRegion)}:</span>${routeStops.map((s,i)=>`<span style="background:white;padding:2px 8px;border-radius:10px;font-weight:600">${i+1}. ${esc(_rrStopLabel(s).replace(/^[👤🔄]\s*/,''))}</span>${i<routeStops.length-1?'<span style="color:#7C3AED">→</span>':''}`).join('')}<a onclick="document.getElementById('rotgroups-mo')||openRotGroupsMo();setTimeout(()=>{_rrSelRegion='${esc(_wschRegion)}';renderRouteEditor()},50)" style="margin-right:auto;color:#7C3AED;font-size:10px;text-decoration:underline;cursor:pointer">ערוך</a></div>`:'';const subTabsHtml=routeBannerHtml+(showSubTabs?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:#F5F3FF;border-radius:8px;border:1px dashed #C4B5FD"><span style="font-size:11px;color:#5B21B6;font-weight:700;align-self:center;margin-left:6px">סוג רוטציה:</span>${subTabs.map(t=>{const active=_wschSubTab===t.key;const bg=active?(t.isGroup?'#7C3AED':'#1565C0'):'white';const fg=active?'white':(t.isGroup?'#5B21B6':'#0C4A6E');const border=active?bg:'var(--brd)';const cyc=t.isGroup?` · מחזור ${t.group.cycleWeeks||t.instructors.length}שב׳`:'';return`<button onclick="_wschSubTab='${esc(t.key)}';renderWschGrid()" style="padding:6px 12px;border:1.5px solid ${border};background:${bg};color:${fg};border-radius:14px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit">${esc(t.label)} <span style="background:${active?'rgba(255,255,255,0.25)':'#F3F4F6'};padding:1px 7px;border-radius:8px;margin-right:4px;font-size:10px">${t.instructors.length}${esc(cyc)}</span></button>`}).join('')}</div>`:'');if(!instructors.length){el.innerHTML=tabsHtml+subTabsHtml+`<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">${_wschRegion==='_unassigned'?'אין מדריכות ללא אזור 🎉':'אין מדריכות בקטגוריה זו'}</div>`;return}const materials=getMaterials();if(!materials.length){el.innerHTML='<div style="padding:24px;text-align:center;color:var(--mut);font-size:13px;background:var(--bg);border-radius:8px">אין מערכים. עלי קודם מערכים בטאב "מערכים"</div>';return}const schedule=getWeeklySchedule();const weeks=[];if(_wschViewMode==='year'){const[ys,ms,ds]=SCHOOL_YEAR.start.split('-').map(n=>parseInt(n,10));const[ye,me,de]=SCHOOL_YEAR.end.split('-').map(n=>parseInt(n,10));const startDt=getSunday(new Date(ys,ms-1,ds));const endDt=new Date(ye,me-1,de);let curr=new Date(startDt);while(curr<=endDt){weeks.push(new Date(curr));curr.setDate(curr.getDate()+7)}}else{const firstDay=new Date(_wschViewMonth.getFullYear(),_wschViewMonth.getMonth(),1);const lastDay=new Date(_wschViewMonth.getFullYear(),_wschViewMonth.getMonth()+1,0);let curr=getSunday(firstDay);while(curr<=lastDay){weeks.push(new Date(curr));curr.setDate(curr.getDate()+7)}}const matsById={};materials.forEach(m=>matsById[m.id]=m);let html='<table style="border-collapse:collapse;width:100%;min-width:'+(180+instructors.length*140)+'px;font-size:12px"><thead><tr><th style="background:#1565C0;color:white;padding:10px;border:1px solid #ddd;position:sticky;right:0;z-index:2;min-width:140px">📅 תאריך</th>';instructors.forEach(u=>{const uid=u.uid||u.id;const curRegion=u.region||'';const _isVirt=u._isVirtual===true;const regionOpts=['<option value="">— ללא —</option>'].concat(REGIONS.map(r=>`<option value="${esc(r)}"${curRegion===r?' selected':''}>${esc(r)}</option>`)).join('');const _thBg=_isVirt?'linear-gradient(135deg,#F59E0B,#D97706)':'#1565C0';const _subLine=_isVirt?'<div style="font-size:10px;opacity:0.98;font-weight:700;margin-bottom:4px">🕐 תפקיד עתידי</div>':`<div style="font-size:10px;opacity:0.85;font-weight:400;margin-bottom:4px">@${esc(u.username||'')}</div>`;const _regionControl=_isVirt?`<div title="לעריכת האזור של תפקיד עתידי — פתחי את הכרטיס באדמין" onclick="openAddVirtualInstructorMo('${uid}')" style="padding:2px 6px;border:1px dashed white;background:rgba(255,255,255,0.2);color:white;border-radius:6px;font-size:10px;font-weight:700;font-family:inherit;width:90%;cursor:pointer;text-align:center;display:inline-block">${curRegion?esc(curRegion):'⚠ ללא אזור'} ✏</div>`:`<select onclick="event.stopPropagation()" onchange="setWschInstructorRegion('${uid}',this.value)" title="ערוך אזור פעילות" style="padding:2px 6px;border:1px solid white;background:${curRegion?'rgba(255,255,255,0.95)':'rgba(255,255,255,0.7)'};color:#1565C0;border-radius:6px;font-size:10px;font-weight:${curRegion?'700':'400'};font-family:inherit;width:90%;cursor:pointer">${regionOpts}</select>`;const _grpInfo=(activeSub&&activeSub.isAll)?_grpBadgeMap[String(uid)]:null;const _grpBadge=_grpInfo?`<div style="font-size:10px;font-weight:800;background:${_grpInfo.color};color:white;padding:2px 8px;border-radius:10px;margin-bottom:4px;display:inline-block;border:1px solid rgba(255,255,255,0.35)">${_grpInfo.isSuper?'🔗':'🔄'} ${esc(_grpInfo.label)}</div>`:(activeSub&&activeSub.isAll?`<div style="font-size:10px;font-weight:800;background:rgba(255,255,255,0.2);color:white;padding:2px 8px;border-radius:10px;margin-bottom:4px;display:inline-block;border:1px dashed rgba(255,255,255,0.5)">👤 חופשית</div>`:'');const _uidStr=String(uid);const _colBtns=`<div style="display:flex;justify-content:space-between;margin-bottom:4px;gap:2px"><button onclick="event.stopPropagation();moveWschColumn('${_uidStr}',1)" title="הזז את העמודה שמאלה" style="background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:white;border-radius:4px;padding:1px 6px;cursor:pointer;font-size:12px;font-family:inherit;line-height:1">◀</button><button onclick="event.stopPropagation();moveWschColumn('${_uidStr}',-1)" title="הזז את העמודה ימינה" style="background:rgba(255,255,255,0.25);border:1px solid rgba(255,255,255,0.5);color:white;border-radius:4px;padding:1px 6px;cursor:pointer;font-size:12px;font-family:inherit;line-height:1">▶</button></div>`;html+=`<th data-uid="${_uidStr}" style="background:${_thBg};color:white;padding:8px;border:1px solid #ddd;min-width:140px;text-align:center">${_colBtns}${_grpBadge}<div style="font-weight:700">${esc(u.name)}</div>${_subLine}${_regionControl}</th>`});html+='</tr></thead><tbody>';weeks.forEach(weekStart=>{const weekId=formatDateISO(weekStart);const weekEnd=new Date(weekStart);weekEnd.setDate(weekEnd.getDate()+6);const weekData=schedule[weekId]||{assignments:{}};const holiday=getHolidayForWeek(weekId);const dateCellBg=holiday?(holiday.fullWeek?'#FFE0E6':'#FFF3E0'):'#FFF8E1';const dateCellFg=holiday?(holiday.fullWeek?'#9D174D':'#7C2D12'):'#7B5C00';const holidayLabel=holiday?`<div style="font-size:10px;font-weight:700;color:${dateCellFg};margin-top:4px;background:${holiday.fullWeek?'#FCA5A5':'#FBBF24'};padding:2px 6px;border-radius:6px;display:inline-block">${holiday.fullWeek?'🎉':'⚠'} ${esc(holiday.name)}</div>`:'';const toggleBtn=`<div style="font-size:9px;margin-top:4px"><a onclick="event.stopPropagation();toggleWeekHoliday('${weekId}')" style="color:#0EA5E9;text-decoration:underline;cursor:pointer">${holiday?'בטל':'+ סמני חופשה'}</a></div>`;html+=`<tr><td style="background:${dateCellBg};font-weight:700;color:${dateCellFg};padding:10px;border:1px solid #ddd;position:sticky;right:0;z-index:1;text-align:center">${formatDateDisplay(weekStart)}<br><span style="font-size:10px;font-weight:400">עד ${formatDateDisplay(weekEnd)}</span>${holidayLabel}${toggleBtn}</td>`;if(holiday&&holiday.fullWeek){html+=`<td colspan="${instructors.length}" style="background:repeating-linear-gradient(45deg,#FEE2E2,#FEE2E2 10px,#FECACA 10px,#FECACA 20px);color:#991B1B;text-align:center;font-weight:700;font-size:13px;padding:14px;border:1px solid #ddd">🎉 ${esc(holiday.name)} — אין פעילות השבוע</td>`}else{const _lockedSet=new Set(((weekData.lockedUids)||[]).map(String));const _matUseCount={};Object.values(weekData.assignments||{}).forEach(mid=>{if(mid)_matUseCount[mid]=(_matUseCount[mid]||0)+1});instructors.forEach(u=>{const uid=u.uid||u.id;const matId=weekData.assignments[uid]||'';const mat=matsById[matId];const bg=matId?matColorFor(matId):(holiday?'#FFF7ED':'#F5F5F5');const text=mat?mat.name:'';const fg=matId?'#000':'#888';const isLocked=_lockedSet.has(String(uid));const pushBtn=(matId&&!u._isVirtual)?`<button onclick="event.stopPropagation();sendMaterialPushToInstructor('${weekId}','${uid}')" title="שלחי פוש למדריכה על המערך הזה (שימושי לשינוי בדקה ה-90)" style="position:absolute;top:2px;right:2px;background:rgba(255,255,255,0.85);border:1px solid #FB923C;color:#9A3412;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:12px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;font-family:inherit">🔔</button>`:'';/* v38.7: link icon — visible when a material is assigned but instructor doesn't currently hold a unit of that template. Opens a picker to assign a specific inventory unit. */const _hasUnit=matId?(function(){try{const inv=(typeof getInventoryItems==='function')?getInventoryItems():[];return inv.some(x=>!x.deleted&&x.type==='material'&&x.templateId===matId&&x.location==='instructor:'+uid)}catch(e){return true}})():true;const linkBtn=(matId&&!u._isVirtual&&!_hasUnit)?`<button onclick="event.stopPropagation();openInventoryLinkPickerMo('${weekId}','${uid}','${matId}')" title="🔗 סמני יחידה פיזית של המערך למדריכה זו — כניסה לפייפליין" style="position:absolute;bottom:2px;right:2px;background:#E0E7FF;border:1px solid #6366F1;color:#3730A3;border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:11px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;font-family:inherit;font-weight:800;z-index:2">🔗</button>`:'';const dupCount=matId?(_matUseCount[matId]||0):0;const isDup=dupCount>1;const dupBtn=isDup?`<button onclick="event.stopPropagation();openDupSwapMo('${weekId}','${uid}','${matId}')" title="⚠ מערך זה משובץ אצל ${dupCount} מדריכות בשבוע זה — לחצי להצעות החלפה" style="position:absolute;bottom:2px;left:2px;background:#F59E0B;border:1px solid #B45309;color:white;border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:12px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;font-family:inherit;font-weight:800;z-index:2;box-shadow:0 1px 3px rgba(0,0,0,0.3)">⚠</button>`:'';const lockBtn=`<button onclick="event.stopPropagation();toggleWschLock('${weekId}','${uid}')" title="${isLocked?'🔒 נעול — לחצי לביטול':'🔓 לחצי לנעילה — האלגוריתם לא ידרוס'}" style="position:absolute;top:2px;left:2px;background:${isLocked?'#7C3AED':'rgba(255,255,255,0.75)'};border:1px solid ${isLocked?'#5B21B6':'#C4B5FD'};color:${isLocked?'white':'#5B21B6'};border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:11px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;font-family:inherit">${isLocked?'🔒':'🔓'}</button>`;const cellBorder=isLocked?'2.5px solid #7C3AED':'1px solid #ddd';html+=`<td style="border:${cellBorder};padding:0;background:${bg};color:${fg};cursor:pointer;text-align:center;font-weight:600;font-size:11px;min-height:50px;vertical-align:middle;position:relative" onclick="pickMaterialFor('${weekId}','${uid}')">${lockBtn}${dupBtn}${pushBtn}${linkBtn}${text?'<div style="padding:10px 6px 6px">'+esc(text)+'</div>':'<div style="padding:18px 6px;color:#999">+ הוסף</div>'}</td>`})}html+='</tr>'});html+='</tbody></table>';el.innerHTML=tabsHtml+subTabsHtml+html}
 let _pickerCtx=null;
 async function sendMaterialPushToInstructor(weekId,uid){const users=DB.get('users')||[];const user=users.find(u=>(u.uid||u.id)===uid);if(!user||!user.uid){alert('המדריכה לא נמצאה (חסר UID)');return}const schedule=getWeeklySchedule();const matId=(schedule[weekId]&&schedule[weekId].assignments[uid])||'';if(!matId){alert('אין מערך משובץ לשבוע הזה');return}const materials=getMaterials();const mat=materials.find(m=>m.id===matId);if(!mat){alert('המערך לא נמצא');return}const animalName=mat.animalName||mat.name||'המערך השבועי';const ws=new Date(weekId);const dayNames=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];const monthNames=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];const weekLabel=`יום ${dayNames[ws.getDay()]} ${ws.getDate()} ב${monthNames[ws.getMonth()]}`;if(!confirm(`לשלוח פוש ל-${user.name} על המערך "${mat.name}" לשבוע ${weekLabel}?\n\n💡 שימושי לעדכון בדקה ה-90.`))return;try{await createNotification(user.uid,'weekly_material_manual','🐾',`עדכון: המערך השבועי שלך — ${animalName}`,`החל מ${weekLabel} – המערך "${mat.name}" זמין באפליקציה. 🎯`,{screen:'att'});alert('✓ הפוש נשלח ל-'+user.name+'\n(אם אישרה התראות תקבל מיידית)')}catch(e){alert('שגיאה: '+(e.message||e))}}
 function pickMaterialFor(weekId,uid){const users=DB.get('users')||[];const user=users.find(u=>(u.uid||u.id)===uid);const userName=user?user.name:'';const materials=getMaterials();const schedule=getWeeklySchedule();const currentMatId=(schedule[weekId]&&schedule[weekId].assignments[uid])||'';_pickerCtx={weekId,uid,materials,currentMatId};let mo=document.getElementById('wsch-pick-mo');if(!mo){mo=document.createElement('div');mo.id='wsch-pick-mo';mo.className='mo';document.body.appendChild(mo)}mo.innerHTML=`<div class="md" style="max-width:520px;max-height:90vh;overflow-y:auto"><div class="mt"><span>בחירת מערך<br><span style="font-size:13px;font-weight:400">לשבוע ${weekId} · ${esc(userName)}</span></span><span class="mc" onclick="document.getElementById('wsch-pick-mo').style.display='none'">×</span></div>${currentMatId?`<button class="btn-sec" style="width:100%;margin-bottom:10px;background:#FFEBEE;color:#C62828;border-color:#EF5350" onclick="confirmWschAssignment('${weekId}','${uid}','')">🗑 הסר שיבוץ</button>`:''}${(()=>{const sug=(typeof _suggestTop3ForCell==='function')?_suggestTop3ForCell(weekId,uid):[];if(!sug.length)return '';const anyRelaxed=sug.some(s=>s.relaxed);const chips=sug.map((s,i)=>{const m=s.m;const catInfo=(typeof MAT_CATEGORIES!=='undefined'&&MAT_CATEGORIES[m.category])||{color:'#64748B',emoji:'📦',label:m.category||''};const rank=['🥇','🥈','🥉'][i]||'';const warnHtml=(s.warnings&&s.warnings.length)?`<div style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:6px 8px;margin-top:6px;font-size:10px;color:#78350F;line-height:1.5">${s.warnings.map(w=>'⚠ '+esc(w)).join('<br>')}</div>`:'';const borderColor=(s.warnings&&s.warnings.length)?'#F59E0B':catInfo.color;return`<div style="background:white;border:2px solid ${borderColor};border-radius:10px;padding:10px;margin-bottom:6px;cursor:pointer;transition:transform 0.1s" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'" onclick="confirmWschAssignment('${weekId}','${uid}','${esc(m.id)}')"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">${rank}</span><span style="background:${catInfo.color};color:white;padding:3px 10px;border-radius:8px;font-size:12px;font-weight:700">${catInfo.emoji} ${esc(m.name||'?')}</span><span style="font-size:10px;color:var(--mut);margin-right:auto">ציון: ${s.score}</span></div><div style="font-size:11px;color:var(--mut);margin-top:4px">${esc(catInfo.label)}${m.seasonality&&m.seasonality!=='any'?' · '+(typeof MAT_SEASONALITY!=='undefined'&&MAT_SEASONALITY[m.seasonality]?MAT_SEASONALITY[m.seasonality].label:(SEASON_HOLIDAY_WINDOWS[m.seasonality]?SEASON_HOLIDAY_WINDOWS[m.seasonality].label:m.seasonality)):''}</div>${warnHtml}</div>`}).join('');const relaxedNote=anyRelaxed?`<div style="background:#FEE2E2;border:1px solid #DC2626;border-radius:6px;padding:6px 8px;margin-bottom:8px;font-size:11px;color:#991B1B;font-weight:600">🚨 אין מערך שעובר את כל החוקים לתא זה — מוצגות ההצעות הפחות גרועות (עם אזהרות). כנראה כל המערכים הזמינים כבר הוצגו לגניה, או שאין מערך מתאים לעונה.</div>`:'';return`<div style="background:linear-gradient(135deg,#EDE9FE,#DBEAFE);border:1.5px solid #7C3AED;border-radius:10px;padding:10px;margin-bottom:12px"><div style="font-size:12px;font-weight:800;color:#5B21B6;margin-bottom:8px">🧠 ${sug.length} הצעות חכמות לתא הזה</div>${relaxedNote}${chips}<div style="font-size:10px;color:#5B21B6;margin-top:6px;line-height:1.4">💡 לחצי על הצעה כדי לשבץ אותה. השינוי יסמן את האזור כדורש רענון (כדי שההשפעה תפרסם קדימה).</div></div>`})()}<div style="position:relative;margin-bottom:10px"><input type="text" id="picker-search" class="md-input" placeholder="🔍 חיפוש מערך לפי שם..." oninput="filterPickerMats(this.value)" autocomplete="off" style="padding-right:34px"><span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--mut);font-size:14px;pointer-events:none">🔍</span></div><div id="picker-list" style="max-height:55vh;overflow-y:auto"></div><div class="ma" style="margin-top:14px"><button class="btn-sec" onclick="document.getElementById('wsch-pick-mo').style.display='none'">סגור</button></div></div>`;mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';filterPickerMats('');setTimeout(()=>{const s=document.getElementById('picker-search');if(s)s.focus()},100)}
@@ -10402,7 +10954,15 @@ function renderSalaryScreen(){if(!cu||cu.role!=='admin')return;const monthEl=doc
 let _slrSearchDebounceTimer=null;
 function _slrFilterOnly(){const monthEl=document.getElementById('slr-month');const month=monthEl?monthEl.value:_instrRptPreviousMonth();if(!month)return;_slrRenderList(month,_instrRptMonthLabel(month))}
 function _slrDebouncedFilter(){if(_slrSearchDebounceTimer)clearTimeout(_slrSearchDebounceTimer);_slrSearchDebounceTimer=setTimeout(()=>{_slrFilterOnly();_slrSearchDebounceTimer=null},180)}
-function _slrRenderList(month,monthLabel){const list=document.getElementById('slr-list');const summaryEl=document.getElementById('slr-summary');if(!list)return;const searchQ=(document.getElementById('slr-search')?.value||'').trim().toLowerCase();const sortMode=document.getElementById('slr-sort')?.value||'name';const onlyWithRecords=!!document.getElementById('slr-only-with-records')?.checked;const users=(DB.get('users')||[]).filter(u=>u.role!=='admin');const rows=users.map(u=>{const calc=_slrCalcForUser(u,month);const pay=_slrPaymentsCache[String(u.uid||u.id)]||null;const uidKey=String(u.uid||u.id);const rpt=_slrReportsCache[String(u.uid||'')]||_slrReportsCache[uidKey]||null;const hasActivity=(calc.records&&calc.records.length>0)||(calc.expenses&&calc.expenses.length>0)||(calc.travel>0)||(calc.expensesManualOverride>0)||(calc.campSessions&&calc.campSessions.length>0)||!!rpt||!!pay;return{user:u,calc,pay,hasActivity}});let filtered=rows.filter(r=>{const isOffboarded=!!r.user.offboardedAt;if(isOffboarded&&!r.hasActivity)return false;if(onlyWithRecords&&!r.hasActivity)return false;if(searchQ&&!(r.user.name||'').toLowerCase().includes(searchQ))return false;return true});filtered.sort((a,b)=>{if(sortMode==='name')return(a.user.name||'').localeCompare(b.user.name||'','he');if(sortMode==='total_desc')return b.calc.total-a.calc.total;if(sortMode==='unpaid_first'){const ap=a.pay&&a.pay.paid?1:0;const bp=b.pay&&b.pay.paid?1:0;if(ap!==bp)return ap-bp;return(a.user.name||'').localeCompare(b.user.name||'','he')}if(sortMode==='paid_first'){const ap=a.pay&&a.pay.paid?1:0;const bp=b.pay&&b.pay.paid?1:0;if(ap!==bp)return bp-ap;return(a.user.name||'').localeCompare(b.user.name||'','he')}return 0});/* Summary boxes */const totInstr=filtered.length;const totToPay=filtered.reduce((s,r)=>s+r.calc.total,0);const totPaid=filtered.filter(r=>r.pay&&r.pay.paid).reduce((s,r)=>s+(Number(r.pay.amount)||r.calc.total),0);const totReported=filtered.filter(r=>_slrReportsCache[String(r.user.uid||r.user.id)]).length;if(summaryEl){summaryEl.innerHTML=`<div style="flex:1;min-width:130px;background:#E1F2FA;border-radius:10px;padding:12px;text-align:center;border:1.5px solid #90CDF4"><div style="font-size:11px;color:#0C4A6E;font-weight:700">מדריכות בחודש</div><div style="font-size:24px;font-weight:800;color:#0C4A6E;margin-top:2px">${totInstr}</div></div><div style="flex:1;min-width:130px;background:#FFF3E0;border-radius:10px;padding:12px;text-align:center;border:1.5px solid #FDBA74"><div style="font-size:11px;color:#7B341E;font-weight:700">סה"כ לתשלום</div><div style="font-size:22px;font-weight:800;color:#7B341E;margin-top:2px">${totToPay.toFixed(2)}₪</div></div><div style="flex:1;min-width:130px;background:#D8F3DC;border-radius:10px;padding:12px;text-align:center;border:1.5px solid #52B788"><div style="font-size:11px;color:#1B4332;font-weight:700">סה"כ שולם (${monthLabel})</div><div style="font-size:22px;font-weight:800;color:#1B4332;margin-top:2px">${totPaid.toFixed(2)}₪</div></div><div style="flex:1;min-width:130px;background:#EDE7F6;border-radius:10px;padding:12px;text-align:center;border:1.5px solid #B39DDB"><div style="font-size:11px;color:#4527A0;font-weight:700">דוחות שפורסמו</div><div style="font-size:24px;font-weight:800;color:#4527A0;margin-top:2px">${totReported}/${totInstr}</div></div>`}if(!filtered.length){list.innerHTML='<div class="emp"><div class="ei">💰</div><p>אין מדריכות תואמות לסינון</p></div>';return}list.innerHTML=filtered.map(r=>{const u=r.user;const c=r.calc;const p=r.pay;const uidKey=String(u.uid||u.id);const paidBadge=p&&p.paid?`<span style="background:#D8F3DC;color:#1B4332;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:700">✓ שולם ${p.paidAt?new Date(p.paidAt).toLocaleDateString('he-IL'):''}</span>`:`<span style="background:#FEF3C7;color:#78350F;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:700">⏳ לא שולם</span>`;const rpt=_slrReportsCache[String(u.uid||'')]||_slrReportsCache[uidKey]||null;const rptBadge=rpt?`<span style="background:#E9F7EF;color:#1B4332;font-size:10.5px;padding:3px 8px;border-radius:10px;font-weight:700;border:1px solid #52B788">📄 פורסם ${rpt.approvedAt?new Date(rpt.approvedAt).toLocaleDateString('he-IL'):''} ${rpt.storageUrl?`&middot; <a href="${esc(rpt.storageUrl)}" target="_blank" rel="noopener" style="color:#1B4332;text-decoration:underline">👁 צפייה</a>`:''}</span>`:`<span style="background:#F3E8FF;color:#5B21B6;font-size:10.5px;padding:3px 8px;border-radius:10px;font-weight:700;border:1px solid #C4B5FD">📄 טרם פורסם</span>`;const vatStatus=u.vatStatus||'patur';const vatEmoji=vatStatus==='morshe'?'💼':(vatStatus==='atzmai_sakhir'?'👔':'🌿');const vatBadge=`<select onchange="updateInstrVatFromSalary('${esc(uidKey)}',this.value)" style="font-size:11px;padding:2px 6px;border:1px solid var(--brd);border-radius:8px;background:#F9FAFB;font-family:inherit;font-weight:600;cursor:pointer" title="סטטוס מע&quot;מ"><option value="patur"${vatStatus==='patur'?' selected':''}>🌿 פטור</option><option value="morshe"${vatStatus==='morshe'?' selected':''}>💼 מורשה</option><option value="atzmai_sakhir"${vatStatus==='atzmai_sakhir'?' selected':''}>👔 עצמאי שכיר</option></select>`;const travelInp=`<input type="number" min="0" step="0.01" value="${c.travel||''}" onchange="saveInstrTravelForMonth('${esc(uidKey)}','${month}',this.value)" placeholder="0" style="width:80px;padding:4px 8px;border:1.5px solid #FFD970;border-radius:6px;background:#FFF8E1;color:#7B5C00;font-weight:700;font-family:inherit;font-size:12px" title="נסיעות לחודש זה. ריק = 0. משנה רק את החודש הזה, לא את ברירת המחדל.">`;const travelHint=c.travelOverride!=null?`<span style="font-size:9.5px;color:#7B5C00">(עדכני לחודש זה)</span>`:(c.travelBase>0?`<span style="font-size:9.5px;color:var(--mut)">(ברירת מחדל)</span>`:'');const manualExpInp=`<input type="number" min="0" step="0.01" value="${c.expensesManualOverride||''}" onchange="saveInstrExpensesManualForMonth('${esc(uidKey)}','${month}',this.value)" placeholder="0" style="width:80px;padding:4px 8px;border:1.5px solid #FDBA74;border-radius:6px;background:#FFF7ED;color:#7B341E;font-weight:700;font-family:inherit;font-size:12px" title="החזר הוצאות ידני לחודש זה. בנוסף להחזרי הוצאות מקבלות מאושרות. ריק = 0.">`;const paidCb=`<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--mut);cursor:pointer;padding:6px 10px;background:${p&&p.paid?'#D8F3DC':'#F9FAFB'};border-radius:8px;border:1.5px solid ${p&&p.paid?'#52B788':'var(--brd)'}"><input type="checkbox" ${p&&p.paid?'checked':''} onchange="toggleSalaryPaid('${esc(uidKey)}','${month}',${c.total.toFixed(2)},this.checked)" style="width:15px;height:15px;cursor:pointer">✓ הועבר תשלום</label>`;const paidDate=p&&p.paid&&p.paidAt?`<div style="font-size:10px;color:var(--mut);margin-top:2px">🗓 ${new Date(p.paidAt).toLocaleDateString('he-IL')} · העביר: ${esc(p.paidByName||'')}</div>`:'';return`<div class="ir" style="background:white;border:1.5px solid var(--brd);border-radius:10px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,0.03)"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px"><div style="flex:1;min-width:180px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px"><div style="font-size:15px;font-weight:800;color:#1B4332">${esc(u.name||'ללא שם')}</div>${u.offboardedAt?`<span style="background:#F3E5F5;color:#6A1B9A;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:700" title="עוזבה ב-${esc(u.offboardedAt)}">🚪 לא פעילה</span>`:''}${paidBadge}${rptBadge}</div><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--mut)">${vatBadge}<span>·</span><span>📊 ${c.records.length} דיווחים</span></div></div><div style="text-align:left;min-width:130px"><div style="font-size:10px;color:var(--mut);font-weight:700">סה"כ לתשלום</div><div style="font-size:24px;font-weight:800;color:#2D6A4F;letter-spacing:-0.5px;line-height:1.1">${c.total.toFixed(2)}₪</div><div style="font-size:10.5px;color:var(--mut);margin-top:2px">${[c.workPay>0?`שכר ${c.workPay.toFixed(2)}`:null,c.expensesTotal>0?`הוצ׳ ${c.expensesTotal.toFixed(2)}`:null,c.expensesManualOverride>0?`הוצ׳ ידני ${Number(c.expensesManualOverride).toFixed(2)}`:null,c.travel>0?`נסיעות ${c.travel.toFixed(2)}`:null].filter(Boolean).join(' + ')||'—'}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;padding:10px;background:#F9FAFB;border-radius:8px;margin-bottom:10px"><div><div style="font-size:10px;color:var(--mut);font-weight:700;margin-bottom:2px">שכר עבודה</div><div style="font-size:13px;font-weight:700;color:#1B4332">${c.workPay.toFixed(2)}₪</div><div style="font-size:9.5px;color:var(--mut)">${c.records.length} דיווחים · ${(c.workBase).toFixed(2)}+${(c.workVat).toFixed(2)} מע"מ</div></div><div><div style="font-size:10px;color:var(--mut);font-weight:700;margin-bottom:2px">החזר הוצאות</div><div style="font-size:13px;font-weight:700;color:#7B341E">${c.expensesTotal.toFixed(2)}₪</div><div style="font-size:9.5px;color:var(--mut)">${c.expenses.length} קבלות מאושרות</div></div><div><div style="font-size:10px;color:var(--mut);font-weight:700;margin-bottom:2px">🚗 נסיעות ${travelHint}</div>${travelInp}</div><div><div style="font-size:10px;color:var(--mut);font-weight:700;margin-bottom:2px">💵 החזר הוצאות (ידני)</div>${manualExpInp}<div style="font-size:9px;color:var(--mut);margin-top:2px">בנוסף לקבלות מאושרות</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button onclick="openInstrRecordsModal('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:#E1F2FA;color:#0C4A6E;border:1.5px solid #90CDF4;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">📄 צפייה בדיווחים</button><button onclick="openExpenseDiagnosticMo('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:#FEF3C7;color:#78350F;border:1.5px solid #FBBF24;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer" title="למה החזר ההוצאות 0?">🔧 אבחון הוצאות</button>${(()=>{const pending=_slrPendingReceiptsFor(u,month);const totalReceipts=_slrTotalReceiptsFor(u,month);if(!totalReceipts)return '';const bg=pending>0?'#FFEBEE':'#F0FDF4';const border=pending>0?'#DC2626':'#16A34A';const color=pending>0?'#7F1D1D':'#166534';const lbl=pending>0?`📋 קבלות ממתינות (${pending})`:`📋 כל הקבלות אושרו (${totalReceipts})`;return `<button onclick="jumpToReceiptsApproval('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:${bg};color:${color};border:1.5px solid ${border};border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer" title="עברי לאישור קבלות של המדריכה הזו לחודש זה">${lbl}</button>`})()}<button onclick="publishSalaryReportForInstructor('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:${rpt?'#7C3AED':'#2D6A4F'};color:white;border:1.5px solid ${rpt?'#5B21B6':'#1B4332'};border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">${rpt?'📤 פרסמי מחדש':'📤 פרסמי דוח PDF'}</button><button onclick="previewSalaryReportForInstructor('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:#F9FAFB;color:#0C4A6E;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">👁 תצוגה</button>${paidCb}</div>${paidDate}</div>`}).join('')}
+/* v38.8 — % executed monthly scale. Compute planned slots (from weeklySchedule × biweekly parity)
+   vs executed records for the month. Read-only, no schema changes. */
+function _slrPlannedSlotsFor(user,month){if(!user||!month)return[];const sched=user.weeklySchedule||{};const parts=String(month).split('-');if(parts.length<2)return[];const y=parseInt(parts[0],10),m=parseInt(parts[1],10);if(!y||!m)return[];const daysInMonth=new Date(y,m,0).getDate();const out=[];for(let d=1;d<=daysInMonth;d++){const date=new Date(y,m-1,d);const dow=date.getDay();const parity=_weekParityFor(date);const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;const dayRaw=sched[dow]||sched[String(dow)]||[];const entries=dayRaw.map(_readEntry).filter(e=>e&&_entryMatchesWeek(e,parity));entries.forEach(e=>{if(!e||!e.garden)return;out.push({date:dateStr,day:dow,garden:e.garden,start:e.start||'',end:e.end||'',note:e.note||'',entry:e})})}return out}
+function _slrExecutedSlotsFor(user,month){return _getInstrMonthRecords(user,month).filter(r=>r&&r.status!=='not_executed')}
+function _slrSlotMatch(plannedSlot,records){if(!plannedSlot||!records||!records.length)return null;const wanted=_mySchedSlotKey(plannedSlot.start,plannedSlot.end);const candidates=records.filter(r=>r&&r.date===plannedSlot.date&&r.garden===plannedSlot.garden);if(!candidates.length)return null;const bySlot=candidates.find(r=>r.slotKey&&r.slotKey===wanted);if(bySlot)return bySlot;const legacy=candidates.find(r=>!r.slotKey);if(legacy)return legacy;return candidates[0]||null}
+function _slrExecutionPercent(user,month){const planned=_slrPlannedSlotsFor(user,month);const executed=_slrExecutedSlotsFor(user,month);if(!planned.length)return{planned:0,executed:executed.length,matched:0,missing:[],details:[],percent:0};const remaining=executed.slice();const details=planned.map(ps=>{const wanted=_mySchedSlotKey(ps.start,ps.end);let idx=remaining.findIndex(r=>r.date===ps.date&&r.garden===ps.garden&&r.slotKey===wanted);if(idx===-1)idx=remaining.findIndex(r=>r.date===ps.date&&r.garden===ps.garden&&!r.slotKey);if(idx===-1)idx=remaining.findIndex(r=>r.date===ps.date&&r.garden===ps.garden);let rec=null;if(idx!==-1){rec=remaining[idx];remaining.splice(idx,1)}return{slot:ps,record:rec}});const missing=details.filter(d=>!d.record).map(d=>d.slot);const matched=details.length-missing.length;return{planned:planned.length,executed:executed.length,matched,missing,details,percent:planned.length?(executed.length/planned.length):0}}
+function _slrExecColor(pct){if(pct>=0.85)return{bg:'#D8F3DC',bar:'#2D6A4F',text:'#1B4332',border:'#52B788'};if(pct>=0.60)return{bg:'#FEF3C7',bar:'#B45309',text:'#78350F',border:'#FBBF24'};return{bg:'#FEE2E2',bar:'#B91C1C',text:'#7F1D1D',border:'#DC2626'}}
+function openSlrExecutionDetailMo(uidKey,month){if(!cu||cu.role!=='admin')return;const users=DB.get('users')||[];const u=users.find(x=>String(x.uid||x.id)===String(uidKey));if(!u){alert('לא נמצאה מדריכה');return}const info=_slrExecutionPercent(u,month);const monthLabel=_instrRptMonthLabel(month);let mo=document.getElementById('slr-exec-detail-mo');if(!mo){mo=document.createElement('div');mo.id='slr-exec-detail-mo';mo.className='mo';document.body.appendChild(mo)}const dayNames=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];const pct=Math.round(info.percent*100);const col=_slrExecColor(info.percent);const rows=info.details.slice().sort((a,b)=>{const am=a.record?1:0,bm=b.record?1:0;if(am!==bm)return am-bm;const dc=(a.slot.date||'').localeCompare(b.slot.date||'');if(dc!==0)return dc;return(a.slot.start||'').localeCompare(b.slot.start||'')});const bodyRows=rows.map(d=>{const s=d.slot;const dt=new Date(s.date+'T00:00:00');const dowName=isNaN(dt)?'':dayNames[dt.getDay()];const timeStr=s.start&&s.end?`${s.start}-${s.end}`:(s.start||'—');const reported=d.record?`<span style="color:#065F46;font-weight:800;font-size:14px" title="דווח ${d.record.slotKey?'· '+esc(d.record.slotKey):''}">✓</span>`:`<span style="color:#B91C1C;font-weight:800;font-size:14px">✗</span>`;const bg=d.record?'':'background:#FFF7ED;';return`<tr style="border-bottom:1px solid var(--brd);${bg}"><td style="padding:6px 8px;font-size:12px;text-align:center">${reported}</td><td style="padding:6px 8px;font-size:12px;white-space:nowrap">${esc(s.date)}</td><td style="padding:6px 8px;font-size:12px;text-align:center">${esc(dowName)}</td><td style="padding:6px 8px;font-size:12px">${esc(s.garden||'—')}</td><td style="padding:6px 8px;font-size:12px;text-align:center;white-space:nowrap">${esc(timeStr)}</td><td style="padding:6px 8px;font-size:11px;color:var(--mut)">${esc(s.note||'')}</td></tr>`}).join('');const emptyMsg=info.planned===0?`<div style="padding:30px;text-align:center;color:var(--mut);background:#F9FAFB;border-radius:8px">אין תכנון החודש (weeklySchedule ריק)</div>`:'';const barPct=Math.min(100,Math.max(0,pct));mo.innerHTML=`<div class="md" style="max-width:900px;max-height:92vh;overflow-y:auto"><div class="mt"><span>⚡ פירוט ביצוע — ${esc(u.name)} · ${esc(monthLabel)}</span><span class="mc" onclick="document.getElementById('slr-exec-detail-mo').style.display='none'">×</span></div><div style="background:${col.bg};border:1.5px solid ${col.border};border-radius:10px;padding:12px 14px;margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div style="font-size:13px;color:${col.text};font-weight:800">⚡ ביצוע ${esc(_INSTR_RPT_MONTHS_HE[parseInt(month.slice(5,7),10)-1]||'')} · ${pct}%</div><div style="font-size:12px;color:${col.text};font-weight:700">${info.executed} / ${info.planned} סשנים דווחו · ${info.missing.length} לא דווחו</div></div><div style="background:white;border-radius:6px;height:12px;overflow:hidden;border:1px solid ${col.border}"><div style="height:100%;width:${barPct}%;background:${col.bar};transition:width .3s"></div></div></div>${emptyMsg||`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;background:white"><thead><tr style="background:#F3F4F6;color:#1B4332"><th style="padding:8px;text-align:center;font-size:11px;border-bottom:2px solid #D1D5DB;width:60px">דווח?</th><th style="padding:8px;text-align:right;font-size:11px;border-bottom:2px solid #D1D5DB">תאריך</th><th style="padding:8px;text-align:center;font-size:11px;border-bottom:2px solid #D1D5DB">יום</th><th style="padding:8px;text-align:right;font-size:11px;border-bottom:2px solid #D1D5DB">גן</th><th style="padding:8px;text-align:center;font-size:11px;border-bottom:2px solid #D1D5DB">שעות</th><th style="padding:8px;text-align:right;font-size:11px;border-bottom:2px solid #D1D5DB">הערה</th></tr></thead><tbody>${bodyRows}</tbody></table></div><div style="margin-top:10px;font-size:11px;color:var(--mut);line-height:1.5">📌 שורות שלא דווחו מסודרות ראשונות (עוזר במעקב אחר החוסרים). ההתאמה: תאריך + גן + slotKey (אם קיים), עם תאימות אחורה לרשומות ישנות ללא slotKey.</div>`}<div class="ma" style="margin-top:14px"><button class="btn-sec" onclick="document.getElementById('slr-exec-detail-mo').style.display='none'" style="width:100%">סגור</button></div></div>`;mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center'}
+function _slrRenderList(month,monthLabel){const list=document.getElementById('slr-list');const summaryEl=document.getElementById('slr-summary');if(!list)return;const searchQ=(document.getElementById('slr-search')?.value||'').trim().toLowerCase();const sortMode=document.getElementById('slr-sort')?.value||'name';const onlyWithRecords=!!document.getElementById('slr-only-with-records')?.checked;const users=(DB.get('users')||[]).filter(u=>u.role!=='admin');const rows=users.map(u=>{const calc=_slrCalcForUser(u,month);const pay=_slrPaymentsCache[String(u.uid||u.id)]||null;const uidKey=String(u.uid||u.id);const rpt=_slrReportsCache[String(u.uid||'')]||_slrReportsCache[uidKey]||null;const exec=_slrExecutionPercent(u,month);const hasActivity=(calc.records&&calc.records.length>0)||(calc.expenses&&calc.expenses.length>0)||(calc.travel>0)||(calc.expensesManualOverride>0)||(calc.campSessions&&calc.campSessions.length>0)||!!rpt||!!pay;return{user:u,calc,pay,hasActivity,exec}});let filtered=rows.filter(r=>{const isOffboarded=!!r.user.offboardedAt;if(isOffboarded&&!r.hasActivity)return false;if(onlyWithRecords&&!r.hasActivity)return false;if(searchQ&&!(r.user.name||'').toLowerCase().includes(searchQ))return false;return true});filtered.sort((a,b)=>{if(sortMode==='name')return(a.user.name||'').localeCompare(b.user.name||'','he');if(sortMode==='total_desc')return b.calc.total-a.calc.total;if(sortMode==='unpaid_first'){const ap=a.pay&&a.pay.paid?1:0;const bp=b.pay&&b.pay.paid?1:0;if(ap!==bp)return ap-bp;return(a.user.name||'').localeCompare(b.user.name||'','he')}if(sortMode==='paid_first'){const ap=a.pay&&a.pay.paid?1:0;const bp=b.pay&&b.pay.paid?1:0;if(ap!==bp)return bp-ap;return(a.user.name||'').localeCompare(b.user.name||'','he')}if(sortMode==='executed_asc'){const ap=(a.exec&&a.exec.planned>0)?a.exec.percent:99;const bp=(b.exec&&b.exec.planned>0)?b.exec.percent:99;if(ap!==bp)return ap-bp;return(a.user.name||'').localeCompare(b.user.name||'','he')}if(sortMode==='executed_desc'){const ap=(a.exec&&a.exec.planned>0)?a.exec.percent:-1;const bp=(b.exec&&b.exec.planned>0)?b.exec.percent:-1;if(ap!==bp)return bp-ap;return(a.user.name||'').localeCompare(b.user.name||'','he')}return 0});/* Summary boxes */const totInstr=filtered.length;const totToPay=filtered.reduce((s,r)=>s+r.calc.total,0);const totPaid=filtered.filter(r=>r.pay&&r.pay.paid).reduce((s,r)=>s+(Number(r.pay.amount)||r.calc.total),0);const totReported=filtered.filter(r=>_slrReportsCache[String(r.user.uid||r.user.id)]).length;const totPlanned=filtered.reduce((s,r)=>s+((r.exec&&r.exec.planned)||0),0);const totExecuted=filtered.reduce((s,r)=>s+((r.exec&&r.exec.executed)||0),0);const avgExecPct=totPlanned>0?(totExecuted/totPlanned):0;if(summaryEl){summaryEl.innerHTML=`<div style="flex:1;min-width:130px;background:#E1F2FA;border-radius:10px;padding:12px;text-align:center;border:1.5px solid #90CDF4"><div style="font-size:11px;color:#0C4A6E;font-weight:700">מדריכות בחודש</div><div style="font-size:24px;font-weight:800;color:#0C4A6E;margin-top:2px">${totInstr}</div></div><div style="flex:1;min-width:130px;background:#FFF3E0;border-radius:10px;padding:12px;text-align:center;border:1.5px solid #FDBA74"><div style="font-size:11px;color:#7B341E;font-weight:700">סה"כ לתשלום</div><div style="font-size:22px;font-weight:800;color:#7B341E;margin-top:2px">${totToPay.toFixed(2)}₪</div></div><div style="flex:1;min-width:130px;background:#D8F3DC;border-radius:10px;padding:12px;text-align:center;border:1.5px solid #52B788"><div style="font-size:11px;color:#1B4332;font-weight:700">סה"כ שולם (${monthLabel})</div><div style="font-size:22px;font-weight:800;color:#1B4332;margin-top:2px">${totPaid.toFixed(2)}₪</div></div><div style="flex:1;min-width:130px;background:#EDE7F6;border-radius:10px;padding:12px;text-align:center;border:1.5px solid #B39DDB"><div style="font-size:11px;color:#4527A0;font-weight:700">דוחות שפורסמו</div><div style="font-size:24px;font-weight:800;color:#4527A0;margin-top:2px">${totReported}/${totInstr}</div></div><div style="flex:1;min-width:130px;background:linear-gradient(135deg,#FEF3C7,#FDE68A);border-radius:10px;padding:12px;text-align:center;border:1.5px solid #F59E0B"><div style="font-size:11px;color:#78350F;font-weight:700">⚡ ממוצע ביצוע</div><div style="font-size:24px;font-weight:800;color:#78350F;margin-top:2px">${totPlanned?Math.round(avgExecPct*100)+'%':'—'}</div><div style="font-size:9.5px;color:#78350F;font-weight:700;margin-top:2px">${totExecuted} / ${totPlanned} סשנים</div></div>`}if(!filtered.length){list.innerHTML='<div class="emp"><div class="ei">💰</div><p>אין מדריכות תואמות לסינון</p></div>';return}list.innerHTML=filtered.map(r=>{const u=r.user;const c=r.calc;const p=r.pay;const uidKey=String(u.uid||u.id);const paidBadge=p&&p.paid?`<span style="background:#D8F3DC;color:#1B4332;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:700">✓ שולם ${p.paidAt?new Date(p.paidAt).toLocaleDateString('he-IL'):''}</span>`:`<span style="background:#FEF3C7;color:#78350F;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:700">⏳ לא שולם</span>`;const rpt=_slrReportsCache[String(u.uid||'')]||_slrReportsCache[uidKey]||null;const rptBadge=rpt?`<span style="background:#E9F7EF;color:#1B4332;font-size:10.5px;padding:3px 8px;border-radius:10px;font-weight:700;border:1px solid #52B788">📄 פורסם ${rpt.approvedAt?new Date(rpt.approvedAt).toLocaleDateString('he-IL'):''} ${rpt.storageUrl?`&middot; <a href="${esc(rpt.storageUrl)}" target="_blank" rel="noopener" style="color:#1B4332;text-decoration:underline">👁 צפייה</a>`:''}</span>`:`<span style="background:#F3E8FF;color:#5B21B6;font-size:10.5px;padding:3px 8px;border-radius:10px;font-weight:700;border:1px solid #C4B5FD">📄 טרם פורסם</span>`;const vatStatus=u.vatStatus||'patur';const vatEmoji=vatStatus==='morshe'?'💼':(vatStatus==='atzmai_sakhir'?'👔':'🌿');const vatBadge=`<select onchange="updateInstrVatFromSalary('${esc(uidKey)}',this.value)" style="font-size:11px;padding:2px 6px;border:1px solid var(--brd);border-radius:8px;background:#F9FAFB;font-family:inherit;font-weight:600;cursor:pointer" title="סטטוס מע&quot;מ"><option value="patur"${vatStatus==='patur'?' selected':''}>🌿 פטור</option><option value="morshe"${vatStatus==='morshe'?' selected':''}>💼 מורשה</option><option value="atzmai_sakhir"${vatStatus==='atzmai_sakhir'?' selected':''}>👔 עצמאי שכיר</option></select>`;const travelInp=`<input type="number" min="0" step="0.01" value="${c.travel||''}" onchange="saveInstrTravelForMonth('${esc(uidKey)}','${month}',this.value)" placeholder="0" style="width:80px;padding:4px 8px;border:1.5px solid #FFD970;border-radius:6px;background:#FFF8E1;color:#7B5C00;font-weight:700;font-family:inherit;font-size:12px" title="נסיעות לחודש זה. ריק = 0. משנה רק את החודש הזה, לא את ברירת המחדל.">`;const travelHint=c.travelOverride!=null?`<span style="font-size:9.5px;color:#7B5C00">(עדכני לחודש זה)</span>`:(c.travelBase>0?`<span style="font-size:9.5px;color:var(--mut)">(ברירת מחדל)</span>`:'');const manualExpInp=`<input type="number" min="0" step="0.01" value="${c.expensesManualOverride||''}" onchange="saveInstrExpensesManualForMonth('${esc(uidKey)}','${month}',this.value)" placeholder="0" style="width:80px;padding:4px 8px;border:1.5px solid #FDBA74;border-radius:6px;background:#FFF7ED;color:#7B341E;font-weight:700;font-family:inherit;font-size:12px" title="החזר הוצאות ידני לחודש זה. בנוסף להחזרי הוצאות מקבלות מאושרות. ריק = 0.">`;const paidCb=`<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--mut);cursor:pointer;padding:6px 10px;background:${p&&p.paid?'#D8F3DC':'#F9FAFB'};border-radius:8px;border:1.5px solid ${p&&p.paid?'#52B788':'var(--brd)'}"><input type="checkbox" ${p&&p.paid?'checked':''} onchange="toggleSalaryPaid('${esc(uidKey)}','${month}',${c.total.toFixed(2)},this.checked)" style="width:15px;height:15px;cursor:pointer">✓ הועבר תשלום</label>`;const paidDate=p&&p.paid&&p.paidAt?`<div style="font-size:10px;color:var(--mut);margin-top:2px">🗓 ${new Date(p.paidAt).toLocaleDateString('he-IL')} · העביר: ${esc(p.paidByName||'')}</div>`:'';return`<div class="ir" style="background:white;border:1.5px solid var(--brd);border-radius:10px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,0.03)"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px"><div style="flex:1;min-width:180px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px"><div style="font-size:15px;font-weight:800;color:#1B4332">${esc(u.name||'ללא שם')}</div>${u.offboardedAt?`<span style="background:#F3E5F5;color:#6A1B9A;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:700" title="עוזבה ב-${esc(u.offboardedAt)}">🚪 לא פעילה</span>`:''}${paidBadge}${rptBadge}</div><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--mut)">${vatBadge}<span>·</span><span>📊 ${c.records.length} דיווחים</span></div></div><div style="text-align:left;min-width:130px"><div style="font-size:10px;color:var(--mut);font-weight:700">סה"כ לתשלום</div><div style="font-size:24px;font-weight:800;color:#2D6A4F;letter-spacing:-0.5px;line-height:1.1">${c.total.toFixed(2)}₪</div><div style="font-size:10.5px;color:var(--mut);margin-top:2px">${[c.workPay>0?`שכר ${c.workPay.toFixed(2)}`:null,c.expensesTotal>0?`הוצ׳ ${c.expensesTotal.toFixed(2)}`:null,c.expensesManualOverride>0?`הוצ׳ ידני ${Number(c.expensesManualOverride).toFixed(2)}`:null,c.travel>0?`נסיעות ${c.travel.toFixed(2)}`:null].filter(Boolean).join(' + ')||'—'}</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;padding:10px;background:#F9FAFB;border-radius:8px;margin-bottom:10px"><div><div style="font-size:10px;color:var(--mut);font-weight:700;margin-bottom:2px">שכר עבודה</div><div style="font-size:13px;font-weight:700;color:#1B4332">${c.workPay.toFixed(2)}₪</div><div style="font-size:9.5px;color:var(--mut)">${c.records.length} דיווחים · ${(c.workBase).toFixed(2)}+${(c.workVat).toFixed(2)} מע"מ</div></div><div><div style="font-size:10px;color:var(--mut);font-weight:700;margin-bottom:2px">החזר הוצאות</div><div style="font-size:13px;font-weight:700;color:#7B341E">${c.expensesTotal.toFixed(2)}₪</div><div style="font-size:9.5px;color:var(--mut)">${c.expenses.length} קבלות מאושרות</div></div><div><div style="font-size:10px;color:var(--mut);font-weight:700;margin-bottom:2px">🚗 נסיעות ${travelHint}</div>${travelInp}</div><div><div style="font-size:10px;color:var(--mut);font-weight:700;margin-bottom:2px">💵 החזר הוצאות (ידני)</div>${manualExpInp}<div style="font-size:9px;color:var(--mut);margin-top:2px">בנוסף לקבלות מאושרות</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button onclick="openInstrRecordsModal('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:#E1F2FA;color:#0C4A6E;border:1.5px solid #90CDF4;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">📄 צפייה בדיווחים</button><button onclick="openExpenseDiagnosticMo('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:#FEF3C7;color:#78350F;border:1.5px solid #FBBF24;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer" title="למה החזר ההוצאות 0?">🔧 אבחון הוצאות</button>${(()=>{const pending=_slrPendingReceiptsFor(u,month);const totalReceipts=_slrTotalReceiptsFor(u,month);if(!totalReceipts)return '';const bg=pending>0?'#FFEBEE':'#F0FDF4';const border=pending>0?'#DC2626':'#16A34A';const color=pending>0?'#7F1D1D':'#166534';const lbl=pending>0?`📋 קבלות ממתינות (${pending})`:`📋 כל הקבלות אושרו (${totalReceipts})`;return `<button onclick="jumpToReceiptsApproval('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:${bg};color:${color};border:1.5px solid ${border};border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer" title="עברי לאישור קבלות של המדריכה הזו לחודש זה">${lbl}</button>`})()}<button onclick="publishSalaryReportForInstructor('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:${rpt?'#7C3AED':'#2D6A4F'};color:white;border:1.5px solid ${rpt?'#5B21B6':'#1B4332'};border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">${rpt?'📤 פרסמי מחדש':'📤 פרסמי דוח PDF'}</button><button onclick="previewSalaryReportForInstructor('${esc(uidKey)}','${month}')" style="padding:7px 12px;background:#F9FAFB;color:#0C4A6E;border:1.5px solid var(--brd);border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">👁 תצוגה</button>${paidCb}</div>${paidDate}</div>`}).join('')}
 async function updateInstrVatFromSalary(uidKey,newVat){if(!cu||cu.role!=='admin'){alert('רק אדמין');return}const users=DB.get('users')||[];const i=users.findIndex(u=>String(u.uid||u.id)===String(uidKey));if(i===-1){alert('לא נמצאה מדריכה');return}users[i].vatStatus=newVat;if(users[i].uid&&window.fbDb){try{await fbDb.collection('users').doc(users[i].uid).update({vatStatus:newVat})}catch(e){console.error('vat update failed',e);alert('שגיאה: '+(e.message||e));return}}localStorage.setItem('bz3_users',JSON.stringify(users));renderSalaryScreen()}
 async function saveInstrExpensesManualForMonth(uidKey,month,val){if(!cu||cu.role!=='admin'){alert('רק אדמין');return}const users=DB.get('users')||[];const i=users.findIndex(u=>String(u.uid||u.id)===String(uidKey));if(i===-1)return;if(!users[i].expensesManualOverride||typeof users[i].expensesManualOverride!=='object')users[i].expensesManualOverride={};const parsed=parseFloat(val);if(val===''||val==null||isNaN(parsed)){delete users[i].expensesManualOverride[month]}else{users[i].expensesManualOverride[month]=parsed}if(users[i].uid&&window.fbDb){try{await fbDb.collection('users').doc(users[i].uid).update({expensesManualOverride:users[i].expensesManualOverride||{}})}catch(e){console.error('expensesManualOverride update failed',e);alert('שגיאה: '+(e.message||e));return}}localStorage.setItem('bz3_users',JSON.stringify(users));renderSalaryScreen()}
 async function saveInstrTravelForMonth(uidKey,month,val){if(!cu||cu.role!=='admin'){alert('רק אדמין');return}const users=DB.get('users')||[];const i=users.findIndex(u=>String(u.uid||u.id)===String(uidKey));if(i===-1)return;if(!users[i].travelMonthlyOverride||typeof users[i].travelMonthlyOverride!=='object')users[i].travelMonthlyOverride={};const parsed=parseFloat(val);if(val===''||val==null||isNaN(parsed)){delete users[i].travelMonthlyOverride[month]}else{users[i].travelMonthlyOverride[month]=parsed}if(users[i].uid&&window.fbDb){try{await fbDb.collection('users').doc(users[i].uid).update({travelMonthlyOverride:users[i].travelMonthlyOverride||{}})}catch(e){console.error('travel override update failed',e);alert('שגיאה: '+(e.message||e));return}}localStorage.setItem('bz3_users',JSON.stringify(users));renderSalaryScreen()}

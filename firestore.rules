@@ -320,6 +320,20 @@ service cloud.firestore {
       allow create: if isAdmin() || isOffice();
       allow update, delete: if isAdmin();
     }
+    // INVENTORY REPORTS (v38.7) — defect reports on physical inventory units.
+    // Instructors create their own; admin/office (with adm_materials) resolve.
+    // Reporter can read her own; admin/office read all.
+    match /inventoryReports/{docId} {
+      allow read: if isSignedIn() && (
+        isAdmin()
+        || isOffice()
+        || resource.data.reportedBy == request.auth.uid
+      );
+      allow create: if isSignedIn()
+        && request.resource.data.reportedBy == request.auth.uid;
+      allow update: if isAdmin() || isOffice();
+      allow delete: if isAdmin();
+    }
 
     // FINAL DENY — anything not matched above is closed.
     // This replaces the previous permissive catch-all that allowed any signed-in user
