@@ -273,6 +273,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
   </header>
   <main class="body">
     <div id="s-att" class="screen active">
+      <div id="tax-invoice-banner" style="display:none;background:linear-gradient(135deg,#DC2626,#EF4444);border:2px solid #7F1D1D;border-radius:var(--rs);padding:14px;margin-bottom:14px"></div>
       <div id="unsync-banner" style="display:none;background:linear-gradient(135deg,#FFF8E1,#FFE0B2);border:2px solid #FB923C;border-radius:var(--rs);padding:12px 14px;margin-bottom:14px;cursor:pointer" onclick="retryUnsyncedRecords().then(r=>{if(r&&r.ok>0)alert('✓ '+r.ok+' דיווחים סונכרנו');else if(r&&r.fail>0)alert('⚠ עדיין '+r.fail+' לא מסונכרנים — בדקי חיבור אינטרנט')})">
         <div style="display:flex;align-items:center;gap:10px"><div style="font-size:24px">⏳</div><div style="flex:1"><div style="font-weight:700;color:#9A3412;font-size:13px"><span id="unsync-banner-count">0</span> דיווחים ממתינים לסנכרון לענן</div><div style="font-size:11px;color:#9A3412;opacity:0.85;margin-top:2px">לחצי כדי לנסות שוב עכשיו · המערכת מנסה אוטומטית כשיש חיבור יציב</div></div></div>
       </div>
@@ -804,6 +805,7 @@ body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--txt);direct
             <button class="btn-sec" onclick="publishInstrRptBulkFromSalary()" style="padding:9px 14px;font-size:13px;background:#E1F2FA;border-color:#90CDF4;color:#0C4A6E;font-weight:700">👥 פרסמי דוחות לכולן</button>
             <button class="btn-sec" onclick="publishInstrRptBulkTravelOnly()" style="padding:9px 14px;font-size:13px;background:#FFF8E1;border-color:#FBC02D;color:#7B5C00;font-weight:700" title="פרסמי דוחות מחדש רק למדריכות עם נסיעות מוגדרות">🚗 פרסמי מחדש למי שיש נסיעות</button>
           </div>
+          <div id="slr-invoice-summary"></div>
           <div id="slr-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:14px;padding:12px;background:#F9FAFB;border-radius:8px;border:1px solid var(--brd)">
             <div style="flex:2;min-width:180px">
@@ -13354,6 +13356,187 @@ async function submitMonthlyReject(docId) {
     if (btn) { btn.disabled = false; btn.textContent = 'שלח לאדמין'; }
   }
 }
+
+/* =====================================================================
+   TAX-INVOICE FLOW (v38.9.6, 2026-09-14)
+
+   Problem: instructors receive salary but delay sending the legal tax
+   invoice, which hurts the company's bookkeeping (can't offset VAT,
+   can't record the payment as a recognized expense).
+
+   Model:
+   - Each salary month {YYYY-MM} needs ONE tax_invoice receipt per
+     instructor whose salary state is 'paid' (or is about to be marked
+     paid). Receipt lives in the existing `receipts` collection with
+     `type='tax_invoice'`, plus `month`, `amount`, `invoiceNumber`,
+     `invoiceDate`, `storageUrl`, `storagePath`.
+   - Deadline: 10th of the month AFTER the salary month.
+   - Block 1 (admin gate): toggling "✓ הועבר תשלום" to true when no
+     invoice exists asks for an override reason; the reason is stored
+     on the salaryPayment doc and shown in the row.
+   - Block 2 (instructor red card): on the home screen, whenever the
+     instructor has an unpaid tax-invoice obligation (salary was earned
+     for a past month and no tax_invoice exists), a red banner shows
+     the amount + deadline + "העלי חשבונית" button. Escalates visually
+     past the deadline. Does NOT block any other feature. */
+
+function _slrCurrentMonthKey(d){d=d||new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')}
+function _slrPrevMonthKey(d){d=d||new Date();const m=new Date(d.getFullYear(),d.getMonth()-1,1);return _slrCurrentMonthKey(m)}
+function _slrInvoiceDeadlineFor(month){/* month = 'YYYY-MM' salary month. Returns Date object of 10th of the next month. */
+  const[y,m]=String(month).split('-').map(Number);return new Date(y,m,10,23,59,59)}
+function _slrGetTaxInvoice(uid,month){const receipts=DB.get('receipts')||[];const uidS=String(uid);return receipts.find(r=>r&&r.type==='tax_invoice'&&String(r.instructorUid||r.instructorId||'')===uidS&&r.month===month)||null}
+function _slrInvoiceStatus(uid,month,salaryPay){/* returns {status:'ok'|'missing'|'late'|'not_owed', amount, deadlineISO, daysLeft} */
+  if(!salaryPay||salaryPay<=0)return{status:'not_owed'};
+  const inv=_slrGetTaxInvoice(uid,month);
+  const dl=_slrInvoiceDeadlineFor(month);const today=new Date();
+  const daysLeft=Math.ceil((dl-today)/(24*60*60*1000));
+  if(inv)return{status:'ok',amount:salaryPay,deadlineISO:dl.toISOString().slice(0,10),daysLeft,invoice:inv};
+  if(today>dl)return{status:'late',amount:salaryPay,deadlineISO:dl.toISOString().slice(0,10),daysLeft};
+  return{status:'missing',amount:salaryPay,deadlineISO:dl.toISOString().slice(0,10),daysLeft};
+}
+
+/* ---------- BLOCK 1: gate `toggleSalaryPaid` on tax-invoice ---------- */
+if(typeof toggleSalaryPaid==='function'&&!window._toggleSalaryPaid_gated){
+  window._toggleSalaryPaid_gated=true;
+  const _origToggle=toggleSalaryPaid;
+  window.toggleSalaryPaid=async function(uidKey,month,amount,paid){
+    if(paid){
+      /* Only gate when trying to mark as paid. Un-marking is free. */
+      const inv=_slrGetTaxInvoice(uidKey,month);
+      if(!inv){
+        const users=DB.get('users')||[];
+        const u=users.find(x=>String(x.uid||x.id)===String(uidKey));
+        const uname=(u&&u.name)||'המדריכה';
+        const reason=prompt(`⚠ ${uname} טרם העלתה חשבונית מס לחודש ${month}.\n\nלסמן כהועבר בכל זאת דורש נימוק חריגה (יירשם).\n\nהזיני נימוק:`);
+        if(!reason||!reason.trim()){alert('לא סומן — חובה לרשום נימוק חריגה כשאין חשבונית');return}
+        /* Piggyback the reason onto the payment doc via a side write */
+        try{await fbDb.collection('salaryPayments').doc(`${uidKey}_${month}`).set({overrideNoInvoice:true,overrideNoInvoiceReason:reason.trim(),overrideNoInvoiceAt:new Date().toISOString(),overrideNoInvoiceBy:cu&&cu.uid||'admin'},{merge:true})}catch(e){console.warn('override log failed',e)}
+      }
+    }
+    return _origToggle.apply(this,arguments);
+  };
+}
+
+/* ---------- Instructor upload flow ---------- */
+async function openTaxInvoiceUploadMo(prefillMonth){
+  if(!cu||cu.role==='admin')return;
+  const month=prefillMonth||_slrPrevMonthKey();
+  const monthsHe=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const monthLbl=monthsHe[parseInt(month.slice(5,7),10)-1]+' '+month.slice(0,4);
+  /* Compute expected amount = workPay for that month */
+  let expectedAmt=0;try{const calc=(typeof _slrCalcForUser==='function')?_slrCalcForUser(cu,month):null;if(calc&&calc.workPay)expectedAmt=Number(calc.workPay)||0}catch(e){}
+  let mo=document.getElementById('tax-inv-mo');
+  if(!mo){mo=document.createElement('div');mo.id='tax-inv-mo';mo.className='mo';document.body.appendChild(mo)}
+  mo.innerHTML=`<div class="md" style="max-width:520px"><div class="mt"><span>📄 העלי חשבונית מס</span><span class="mc" onclick="document.getElementById('tax-inv-mo').style.display='none'">×</span></div>
+    <div style="background:#EBF8FF;border-right:4px solid #3B82F6;padding:10px 12px;border-radius:8px;margin-bottom:12px;font-size:12px;color:#1E40AF;line-height:1.6">
+      <b>חשבונית לחודש ${monthLbl}</b><br>הסכום ששולם בפועל: <b>${expectedAmt.toFixed(2)}₪</b><br>הפיקי חשבונית לסכום זה, ואז העלי כאן צילום/PDF שלה.
+    </div>
+    <div class="fg"><label>מספר חשבונית</label><input type="text" id="tax-inv-num" class="md-input" placeholder="לדוגמה: 20260812"></div>
+    <div class="fg"><label>תאריך החשבונית</label><input type="date" id="tax-inv-date" class="md-input" value="${new Date().toISOString().slice(0,10)}"></div>
+    <div class="fg"><label>סכום החשבונית (₪)</label><input type="number" step="0.01" min="0" id="tax-inv-amt" class="md-input" value="${expectedAmt.toFixed(2)}"></div>
+    <div class="fg"><label>קובץ (PDF / תמונה)</label><input type="file" id="tax-inv-file" accept="image/*,application/pdf" class="md-input"></div>
+    <input type="hidden" id="tax-inv-month" value="${month}">
+    <div class="ma"><button class="btn-prim" id="tax-inv-submit-btn" onclick="submitTaxInvoiceUpload()">📤 העלי</button><button class="btn-sec" onclick="document.getElementById('tax-inv-mo').style.display='none'">ביטול</button></div></div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+async function submitTaxInvoiceUpload(){
+  if(!cu||!window.fbDb||!window.fbStorage){alert('חיבור לענן לא זמין');return}
+  const btn=document.getElementById('tax-inv-submit-btn');if(btn){btn.disabled=true;btn.textContent='⏳ מעלה...'}
+  try{
+    const month=document.getElementById('tax-inv-month').value;
+    const num=(document.getElementById('tax-inv-num').value||'').trim();
+    const dt=document.getElementById('tax-inv-date').value;
+    const amt=Number(document.getElementById('tax-inv-amt').value||0);
+    const fileEl=document.getElementById('tax-inv-file');const file=fileEl&&fileEl.files&&fileEl.files[0];
+    if(!num){alert('חסר מספר חשבונית');if(btn){btn.disabled=false;btn.textContent='📤 העלי'}return}
+    if(!dt){alert('חסר תאריך');if(btn){btn.disabled=false;btn.textContent='📤 העלי'}return}
+    if(!amt||amt<=0){alert('חסר סכום');if(btn){btn.disabled=false;btn.textContent='📤 העלי'}return}
+    if(!file){alert('חסר קובץ');if(btn){btn.disabled=false;btn.textContent='📤 העלי'}return}
+    const uid=cu.uid;const ext=(file.name.split('.').pop()||'pdf').toLowerCase();
+    const storagePath=`receipts/${uid}/tax-invoice-${month}-${Date.now()}.${ext}`;
+    const ref=fbStorage.ref().child(storagePath);
+    await ref.put(file);
+    const url=await ref.getDownloadURL();
+    const docId=`taxinv_${uid}_${month}_${Date.now()}`;
+    await fbDb.collection('receipts').doc(docId).set({
+      id:docId,type:'tax_invoice',instructorUid:uid,instructorName:cu.name||'',
+      month,amount:amt,invoiceNumber:num,invoiceDate:dt,storagePath,storageUrl:url,
+      uploadedAt:new Date().toISOString(),uploadedBy:uid,status:'submitted'
+    });
+    if(typeof syncReceipts==='function')await syncReceipts();
+    document.getElementById('tax-inv-mo').style.display='none';
+    alert('✓ החשבונית עלתה. שיר תראה אותה בטאב שכר.');
+    if(typeof renderInstructorHomeBanners==='function')renderInstructorHomeBanners();
+  }catch(e){alert('שגיאה: '+(e.message||e));if(btn){btn.disabled=false;btn.textContent='📤 העלי'}}
+}
+
+/* ---------- Instructor home banner renderer ---------- */
+function renderInstructorHomeBanners(){
+  const b=document.getElementById('tax-invoice-banner');if(!b)return;
+  if(!cu||cu.role==='admin'){b.style.display='none';return}
+  /* Which past months owe an invoice? Scan up to the last 3 months. */
+  const now=new Date();const owed=[];
+  for(let i=1;i<=3;i++){
+    const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+    const mk=_slrCurrentMonthKey(d);
+    let workPay=0;try{const c=(typeof _slrCalcForUser==='function')?_slrCalcForUser(cu,mk):null;if(c&&c.workPay)workPay=Number(c.workPay)||0}catch(e){}
+    if(workPay<=0)continue;
+    const st=_slrInvoiceStatus(cu.uid,mk,workPay);
+    if(st.status==='missing'||st.status==='late')owed.push({month:mk,amount:workPay,status:st});
+  }
+  if(!owed.length){b.style.display='none';return}
+  const monthsHe=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const totOwed=owed.reduce((s,o)=>s+o.amount,0);
+  const anyLate=owed.some(o=>o.status.status==='late');
+  const bg=anyLate?'linear-gradient(135deg,#7F1D1D,#991B1B)':'linear-gradient(135deg,#DC2626,#EF4444)';
+  const lines=owed.map(o=>{const nm=monthsHe[parseInt(o.month.slice(5,7),10)-1]+' '+o.month.slice(0,4);const dl=o.status.deadlineISO;const late=o.status.status==='late';return `<div style="background:rgba(255,255,255,0.15);padding:6px 10px;border-radius:6px;margin-top:6px;display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:12px"><b>${nm}</b> · ${o.amount.toFixed(2)}₪ ${late?'· 🚨 חריגה':'· deadline '+dl}</div><button onclick="openTaxInvoiceUploadMo('${o.month}');event.stopPropagation()" style="background:white;color:#991B1B;border:none;padding:5px 12px;border-radius:6px;font-weight:800;font-size:12px;cursor:pointer;font-family:inherit">📤 העלי</button></div>`}).join('');
+  b.style.background=bg;b.style.borderColor=anyLate?'#450A0A':'#7F1D1D';
+  b.innerHTML=`<div style="color:white"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><div style="font-size:28px">${anyLate?'🚨':'⚠'}</div><div style="flex:1"><div style="font-weight:800;font-size:15px">${anyLate?'חשבוניות באיחור — השכר עלול להיעצר':'חשבוניות ממתינות'}</div><div style="font-size:11px;opacity:0.95;margin-top:2px">סה"כ ${totOwed.toFixed(2)}₪ · ${owed.length} חודשים · העלאה מהירה = תשלום בזמן</div></div></div>${lines}</div>`;
+  b.style.display='block';
+}
+if(typeof window!=='undefined'){
+  /* Wire the banner to render whenever the home tab becomes active or user changes. */
+  const _tryRender=()=>{try{renderInstructorHomeBanners()}catch(e){}};
+  document.addEventListener('DOMContentLoaded',_tryRender);
+  window.addEventListener('focus',_tryRender);
+  setInterval(_tryRender,60000);/* refresh every minute so deadline math stays fresh */
+}
+
+/* ---------- Admin salary tab: summary tile + per-row badge ---------- */
+function _slrRenderInvoiceSummaryTile(month){
+  const el=document.getElementById('slr-invoice-summary');if(!el)return;
+  const users=(DB.get('users')||[]).filter(u=>u.role!=='admin'&&!u.offboardedAt);
+  const missing=[];let totMissingAmt=0;let totOverride=0;
+  users.forEach(u=>{
+    const uid=String(u.uid||u.id);
+    let workPay=0;try{const c=_slrCalcForUser(u,month);if(c&&c.workPay)workPay=Number(c.workPay)||0}catch(e){}
+    if(workPay<=0)return;
+    const st=_slrInvoiceStatus(uid,month,workPay);
+    if(st.status==='missing'||st.status==='late'){
+      const pay=_slrPaymentsCache[uid];
+      if(pay&&pay.overrideNoInvoice)totOverride++;
+      missing.push({name:u.name||'',uid,amount:workPay,late:st.status==='late',override:!!(pay&&pay.overrideNoInvoice)});
+      totMissingAmt+=workPay;
+    }
+  });
+  if(!missing.length){el.innerHTML=`<div style="background:linear-gradient(135deg,#D8F3DC,#B7E4C7);border:2px solid #52B788;border-radius:12px;padding:12px 16px;margin-bottom:10px;color:#1B4332;font-weight:800;font-size:13px">✅ כל המדריכות העלו חשבוניות לחודש זה</div>`;return}
+  const rows=missing.map(m=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;background:${m.override?'#FEF3C7':'rgba(255,255,255,0.2)'};border-radius:6px;margin-top:4px;font-size:12px"><span style="color:white;font-weight:700">${esc(m.name)} · ${m.amount.toFixed(2)}₪ ${m.late?'🚨':''}</span>${m.override?'<span style="background:#F59E0B;color:white;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:800">חריגה מאושרת</span>':''}</div>`).join('');
+  el.innerHTML=`<div style="background:linear-gradient(135deg,#991B1B,#DC2626);color:white;border-radius:12px;padding:12px 16px;margin-bottom:10px;box-shadow:0 3px 8px rgba(153,27,27,0.25)"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div><div style="font-weight:800;font-size:14px">🚨 חשבוניות חסרות</div><div style="font-size:11px;opacity:0.9">${missing.length} מדריכות · סה"כ ${totMissingAmt.toFixed(2)}₪${totOverride?` · ${totOverride} חריגות מאושרות`:''}</div></div><div style="font-size:24px;font-weight:900">${missing.length}</div></div>${rows}</div>`;
+}
+
+/* Hook: whenever the salary list re-renders, also refresh the invoice summary tile. */
+if(typeof _slrRenderList==='function'&&!window._slrRenderList_taxWrap){
+  window._slrRenderList_taxWrap=true;
+  const _origSlrRender=_slrRenderList;
+  window._slrRenderList=function(month,monthLabel){
+    const r=_origSlrRender.apply(this,arguments);
+    try{_slrRenderInvoiceSummaryTile(month)}catch(e){console.warn('invoice summary render failed',e)}
+    return r;
+  };
+}
+
+window.__TAX_INVOICE_LOADED='v38.9.6';
+console.log('[tax-invoice] extensions loaded:',window.__TAX_INVOICE_LOADED);
 
 /* ---------- Marker for verification ---------- */
 window.__SALARY_FLOW_EXT_MARKER = 'salary-flow-2026-07-15-v1';
