@@ -13380,6 +13380,17 @@ async function submitMonthlyReject(docId) {
      the amount + deadline + "העלי חשבונית" button. Escalates visually
      past the deadline. Does NOT block any other feature. */
 
+/* Feature flag — default 'shadow' (nothing visible or enforced). Admin flips to 'live' when ready.
+   Modes: 'shadow' | 'admin_only' | 'live'.
+   Stored in localStorage so it survives reloads. Set via console:
+     localStorage.setItem('bz3_tax_invoice_mode','live'); location.reload();
+   Or via the small toggle in the admin salary tab settings. */
+function _taxInvMode(){try{return localStorage.getItem('bz3_tax_invoice_mode')||'shadow'}catch(e){return 'shadow'}}
+function _taxInvIsLive(){const m=_taxInvMode();return m==='live'}
+function _taxInvVisibleToAdmin(){const m=_taxInvMode();return m==='live'||m==='admin_only'}
+function _taxInvVisibleToInstructor(){return _taxInvMode()==='live'}
+function _taxInvSetMode(mode){try{if(!['shadow','admin_only','live'].includes(mode))return;localStorage.setItem('bz3_tax_invoice_mode',mode);location.reload()}catch(e){}}
+
 function _slrCurrentMonthKey(d){d=d||new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')}
 function _slrPrevMonthKey(d){d=d||new Date();const m=new Date(d.getFullYear(),d.getMonth()-1,1);return _slrCurrentMonthKey(m)}
 function _slrInvoiceDeadlineFor(month){/* month = 'YYYY-MM' salary month. Returns Date object of 10th of the next month. */
@@ -13400,7 +13411,7 @@ if(typeof toggleSalaryPaid==='function'&&!window._toggleSalaryPaid_gated){
   window._toggleSalaryPaid_gated=true;
   const _origToggle=toggleSalaryPaid;
   window.toggleSalaryPaid=async function(uidKey,month,amount,paid){
-    if(paid){
+    if(paid && _taxInvIsLive()){/* Feature flag: only gate in live mode */
       /* Only gate when trying to mark as paid. Un-marking is free. */
       const inv=_slrGetTaxInvoice(uidKey,month);
       if(!inv){
@@ -13474,6 +13485,7 @@ async function submitTaxInvoiceUpload(){
 function renderInstructorHomeBanners(){
   const b=document.getElementById('tax-invoice-banner');if(!b)return;
   if(!cu||cu.role==='admin'){b.style.display='none';return}
+  if(!_taxInvVisibleToInstructor()){b.style.display='none';return}/* Feature flag: hidden from instructor unless mode='live' */
   /* Which past months owe an invoice? Scan up to the last 3 months. */
   const now=new Date();const owed=[];
   for(let i=1;i<=3;i++){
@@ -13505,6 +13517,7 @@ if(typeof window!=='undefined'){
 /* ---------- Admin salary tab: summary tile + per-row badge ---------- */
 function _slrRenderInvoiceSummaryTile(month){
   const el=document.getElementById('slr-invoice-summary');if(!el)return;
+  if(!_taxInvVisibleToAdmin()){el.innerHTML=`<div style="background:#F3F4F6;border:1px dashed #9CA3AF;border-radius:8px;padding:8px 12px;margin-bottom:10px;color:#6B7280;font-size:11px;text-align:center">💤 מעקב חשבוניות במצב <b>שקוף</b> — לא מוצג למדריכות. <button onclick="_taxInvOpenSettingsMo()" style="background:none;border:none;color:#7C3AED;font-weight:700;cursor:pointer;font-family:inherit;text-decoration:underline">שנה מצב</button></div>`;return}
   const users=(DB.get('users')||[]).filter(u=>u.role!=='admin'&&!u.offboardedAt);
   const missing=[];let totMissingAmt=0;let totOverride=0;
   users.forEach(u=>{
@@ -13535,8 +13548,25 @@ if(typeof _slrRenderList==='function'&&!window._slrRenderList_taxWrap){
   };
 }
 
+/* Admin-only settings modal for the tax-invoice feature flag */
+function _taxInvOpenSettingsMo(){
+  if(!cu||cu.role!=='admin')return;
+  const cur=_taxInvMode();
+  let mo=document.getElementById('tax-inv-settings-mo');
+  if(!mo){mo=document.createElement('div');mo.id='tax-inv-settings-mo';mo.className='mo';document.body.appendChild(mo)}
+  const opt=(val,title,desc,emoji,col)=>`<label style="display:block;border:2.5px solid ${cur===val?col:'#E5E7EB'};background:${cur===val?col+'11':'white'};border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;font-family:inherit"><div style="display:flex;align-items:flex-start;gap:10px"><input type="radio" name="txm" value="${val}" ${cur===val?'checked':''} style="margin-top:3px;width:16px;height:16px"><div style="flex:1"><div style="font-weight:800;color:${col};font-size:13px">${emoji} ${title}${cur===val?' <span style=\"background:'+col+';color:white;padding:1px 7px;border-radius:8px;font-size:10px;margin-right:6px\">פעיל</span>':''}</div><div style="font-size:11px;color:#4B5563;margin-top:4px;line-height:1.5">${desc}</div></div></div></label>`;
+  mo.innerHTML=`<div class="md" style="max-width:520px"><div class="mt"><span>⚙ מצב תכונת חשבוניות מס</span><span class="mc" onclick="document.getElementById('tax-inv-settings-mo').style.display='none'">×</span></div>
+    <div style="background:#FEF3C7;border-right:4px solid #F59E0B;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#78350F;line-height:1.6">💡 <b>שלוש רמות:</b> אפשר לבחון בשקט קודם ("שקוף"), אחר-כך להראות רק לך ("אדמין"), ולבסוף לפרסם לכולן ("חי").</div>
+    ${opt('shadow','שקוף — לא מוצג לאף אחד','אף אחד לא רואה שום דבר. הבאנר האדום נסתר. הצ׳קבוקס "הועבר תשלום" לא מבקש נימוק. הטופס עדיין קיים בקוד ותוכל לפתוח אותו ידנית אם תרצי.','💤','#6B7280')}
+    ${opt('admin_only','אדמין בלבד — בדיקה שקטה','את רואה את תיבת "🚨 חשבוניות חסרות" בטאב שכר. הצ׳קבוקס עדיין לא נחסם והמדריכות לא רואות שום דבר. שלב מומלץ לפני עלייה חיה.','🔬','#7C3AED')}
+    ${opt('live','חי — פעיל למדריכות','כל השכבות פועלות: באנר אדום בבית של המדריכות, בקשת נימוק חריגה על "הועבר תשלום", תיבת סיכום באדמין. השלב הסופי — לאחר שהוצאת הודעה מסודרת.','🚀','#DC2626')}
+    <div class="ma"><button class="btn-prim" onclick="_taxInvSetMode(document.querySelector('input[name=txm]:checked').value)">💾 שמור והפעל</button><button class="btn-sec" onclick="document.getElementById('tax-inv-settings-mo').style.display='none'">ביטול</button></div>
+  </div>`;
+  mo.style.display='flex';mo.style.alignItems='center';mo.style.justifyContent='center';
+}
+
 window.__TAX_INVOICE_LOADED='v38.9.6';
-console.log('[tax-invoice] extensions loaded:',window.__TAX_INVOICE_LOADED);
+console.log('[tax-invoice] extensions loaded:',window.__TAX_INVOICE_LOADED,'· mode:',_taxInvMode());
 
 /* ---------- Marker for verification ---------- */
 window.__SALARY_FLOW_EXT_MARKER = 'salary-flow-2026-07-15-v1';
