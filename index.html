@@ -13435,78 +13435,123 @@ function _nawGetPref(){try{return JSON.parse(localStorage.getItem(_NAW_PREF_KEY)
 function _nawSetPref(patch){try{const cur=_nawGetPref();localStorage.setItem(_NAW_PREF_KEY,JSON.stringify(Object.assign(cur,patch)));renderWschNewAnimalsPanel()}catch(e){}}
 function _nawAnimalKey(m){if(!m)return'';if(m.animalName)return String(m.animalName).trim();if(typeof AL!=='undefined'&&AL[m.name])return AL[m.name];const parts=String(m.name||'').split(/\s*[-–—]\s*/);return(parts[0]||'').trim()}
 function _nawSundayISO(d){const dd=new Date(d);dd.setHours(0,0,0,0);const dow=dd.getDay();dd.setDate(dd.getDate()-dow);return dd.toISOString().slice(0,10)}
+/* v38.9.10: rewritten — show ALL animals per week (not just first-time debuts), grouped by region,
+   with a 🆕 badge on animals making their first appearance. Includes 'העתק לוואטסאפ' per week. */
+function _nawBuildWeekView(wISO,schedule,matById,userByUid,firstSeenAt){
+  const wk=schedule[wISO];if(!wk||!wk.assignments)return null;
+  const byRegion={};/* region → Map(animalKey → {mats:Set, isNew:bool, uids:Set}) */
+  Object.entries(wk.assignments).forEach(([uid,matId])=>{
+    if(!matId)return;const m=matById.get(matId);if(!m)return;
+    const key=_nawAnimalKey(m);if(!key)return;
+    const u=userByUid.get(String(uid));
+    let region='(לא-משויך)';
+    if(u){
+      if(typeof inferInstructorRegion==='function'){try{region=inferInstructorRegion(u)||u.region||'(לא-משויך)'}catch(e){region=u.region||'(לא-משויך)'}}
+      else region=u.region||'(לא-משויך)';
+    }
+    if(!byRegion[region])byRegion[region]=new Map();
+    let a=byRegion[region].get(key);
+    if(!a){a={mats:new Set(),uids:new Set(),isNew:firstSeenAt.get(key)===wISO};byRegion[region].set(key,a)}
+    a.mats.add(matId);a.uids.add(uid);
+  });
+  return{weekISO:wISO,byRegion};
+}
+
 function renderWschNewAnimalsPanel(){
   const el=document.getElementById('wsch-new-animals-panel');if(!el)return;
   const pref=_nawGetPref();
   const collapsed=!!pref.collapsed;
-  const horizon=pref.horizon||'planning';/* 'planning' = next 6 weeks · 'year' = full school year */
+  const horizon=pref.horizon||'planning';
   const schedule=(typeof getWeeklySchedule==='function')?(getWeeklySchedule()||{}):{};
   const materials=(typeof getMaterials==='function')?(getMaterials()||[]):[];
+  const users=(DB.get('users')||[]);
   const matById=new Map(materials.map(m=>[m.id,m]));
-  /* First appearance per animalKey across the WHOLE year sorted by weekISO. */
+  const userByUid=new Map();users.forEach(u=>{if(u.uid)userByUid.set(String(u.uid),u);if(u.id!=null)userByUid.set(String(u.id),u)});
+  /* First appearance per animalKey across the whole year */
   const weekKeys=Object.keys(schedule).sort();
-  const firstSeenAt=new Map();/* animalKey → weekISO of first appearance */
-  const animalToMats=new Map();/* animalKey → Set(matIds) */
+  const firstSeenAt=new Map();
   weekKeys.forEach(wISO=>{
     const wk=schedule[wISO];if(!wk||!wk.assignments)return;
     Object.values(wk.assignments).forEach(mid=>{
       if(!mid)return;const m=matById.get(mid);if(!m)return;
       const key=_nawAnimalKey(m);if(!key)return;
       if(!firstSeenAt.has(key))firstSeenAt.set(key,wISO);
-      if(!animalToMats.has(key))animalToMats.set(key,new Set());
-      animalToMats.get(key).add(mid);
     });
   });
-  /* Group by week */
-  const newByWeek=new Map();
-  firstSeenAt.forEach((wISO,key)=>{if(!newByWeek.has(wISO))newByWeek.set(wISO,[]);newByWeek.get(wISO).push(key)});
-  /* Choose which weeks to show */
   const today=new Date();today.setHours(0,0,0,0);
   const curSunday=_nawSundayISO(today);
   const startISO=(typeof SCHOOL_YEAR!=='undefined'&&SCHOOL_YEAR.start)?SCHOOL_YEAR.start:'2026-09-06';
   const endISO=(typeof SCHOOL_YEAR!=='undefined'&&SCHOOL_YEAR.end)?SCHOOL_YEAR.end:'2027-08-06';
-  let weeks=[...newByWeek.keys()].filter(w=>w>=startISO&&w<=endISO).sort();
-  if(horizon==='planning'){
-    /* Show ALL upcoming weeks with new animals — no artificial cap. Admin can scroll horizontally. */
-    weeks=weeks.filter(w=>w>=curSunday);
-  }
-  if(collapsed){
-    const totalUpcoming=[...newByWeek.entries()].filter(([w,arr])=>w>=curSunday).reduce((s,[w,a])=>s+a.length,0);
-    el.innerHTML=`<div style="background:linear-gradient(135deg,#FFF7ED,#FFEDD5);border:1.5px solid #F59E0B;border-radius:10px;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="_nawSetPref({collapsed:false})"><div style="font-weight:800;color:#78350F;font-size:13px">🐾 חיות חדשות לפי שבוע <span style="background:#F59E0B;color:white;padding:2px 8px;border-radius:8px;font-size:11px;margin-right:6px">${totalUpcoming} עתידיות</span></div><div style="font-size:11px;color:#78350F;font-weight:700">▼ הצג</div></div>`;
-    return;
-  }
-  if(!weeks.length){
-    el.innerHTML=`<div style="background:linear-gradient(135deg,#F0FDF4,#DCFCE7);border:1.5px solid #16A34A;border-radius:10px;padding:8px 14px;display:flex;justify-content:space-between;align-items:center"><div style="font-weight:800;color:#166534;font-size:13px">🐾 חיות חדשות לפי שבוע — אין חיות חדשות ${horizon==='planning'?'מהיום ואילך':'השנה'}</div><div style="display:flex;gap:4px"><button onclick="_nawSetPref({horizon:'${horizon==='planning'?'year':'planning'}'})" style="background:white;border:1px solid #16A34A;color:#166534;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">${horizon==='planning'?'📆 כל השנה':'⏭ קדימה בלבד'}</button><button onclick="_nawSetPref({collapsed:true})" style="background:white;border:1px solid #16A34A;color:#166534;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">▲ סגור</button></div></div>`;
-    return;
-  }
+  let weeks=weekKeys.filter(w=>w>=startISO&&w<=endISO);
+  if(horizon==='planning')weeks=weeks.filter(w=>w>=curSunday);
+  const views=weeks.map(w=>_nawBuildWeekView(w,schedule,matById,userByUid,firstSeenAt)).filter(v=>v&&Object.keys(v.byRegion).length>0);
   const HE_M=['ינ׳','פב׳','מרץ','אפ׳','מאי','יונ׳','יול׳','אוג׳','ספט׳','אוק׳','נוב׳','דצמ׳'];
-  const cards=weeks.map(wISO=>{
+  /* Stash views on window for the copy button */
+  window._nawCurrentViews=new Map(views.map(v=>[v.weekISO,v]));
+  const upcomingWeeks=views.filter(v=>v.weekISO>=curSunday);
+  const totalUpcomingAnimals=upcomingWeeks.reduce((s,v)=>s+Object.values(v.byRegion).reduce((ss,mp)=>ss+mp.size,0),0);
+  if(collapsed){
+    el.innerHTML=`<div style="background:linear-gradient(135deg,#FFF7ED,#FFEDD5);border:1.5px solid #F59E0B;border-radius:10px;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="_nawSetPref({collapsed:false})"><div style="font-weight:800;color:#78350F;font-size:13px">🐾 מערכים שיוצאים כל שבוע <span style="background:#F59E0B;color:white;padding:2px 8px;border-radius:8px;font-size:11px;margin-right:6px">${upcomingWeeks.length} שבועות · ${totalUpcomingAnimals} שיבוצים</span></div><div style="font-size:11px;color:#78350F;font-weight:700">▼ הצג</div></div>`;
+    return;
+  }
+  if(!views.length){
+    el.innerHTML=`<div style="background:linear-gradient(135deg,#F0FDF4,#DCFCE7);border:1.5px solid #16A34A;border-radius:10px;padding:8px 14px;display:flex;justify-content:space-between;align-items:center"><div style="font-weight:800;color:#166534;font-size:13px">🐾 מערכים שיוצאים כל שבוע — אין שיבוצים ${horizon==='planning'?'מהיום ואילך':'השנה'}</div><div style="display:flex;gap:4px"><button onclick="_nawSetPref({horizon:'${horizon==='planning'?'year':'planning'}'})" style="background:white;border:1px solid #16A34A;color:#166534;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">${horizon==='planning'?'📆 כל השנה':'⏭ קדימה בלבד'}</button><button onclick="_nawSetPref({collapsed:true})" style="background:white;border:1px solid #16A34A;color:#166534;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">▲ סגור</button></div></div>`;
+    return;
+  }
+  const cards=views.map(v=>{
+    const wISO=v.weekISO;
     const d=new Date(wISO+'T00:00:00');const lbl=`${d.getDate()} ${HE_M[d.getMonth()]}`;
     const isPast=wISO<curSunday;const isCurrent=wISO===curSunday;
-    const animals=(newByWeek.get(wISO)||[]).sort((a,b)=>a.localeCompare(b,'he'));
-    const rowsHtml=animals.map(k=>{
-      const mats=[...(animalToMats.get(k)||[])].map(mid=>matById.get(mid)).filter(Boolean);
-      const catEmoji=(mats[0]&&mats[0].category&&(typeof MAT_CATEGORIES!=='undefined')&&MAT_CATEGORIES[mats[0].category])?MAT_CATEGORIES[mats[0].category].emoji+' ':'';
-      const matNames=mats.map(m=>m.name).join(' · ');
-      return `<div style="background:white;padding:4px 8px;border-radius:6px;margin-top:3px;font-size:11px;border:1px solid #FED7AA" title="${esc(matNames)}"><b style="color:#78350F">${catEmoji}${esc(k)}</b><div style="font-size:9.5px;color:#92400E;opacity:0.85;margin-top:1px">${esc(matNames)}</div></div>`;
+    const totalAnimals=Object.values(v.byRegion).reduce((s,mp)=>s+mp.size,0);
+    const newCount=Object.values(v.byRegion).reduce((s,mp)=>s+[...mp.values()].filter(a=>a.isNew).length,0);
+    /* Region order: preserve REGIONS constant order if available */
+    const regionOrder=(typeof REGIONS!=='undefined'&&REGIONS.length)?REGIONS.slice():[];
+    const regionsInWeek=Object.keys(v.byRegion).sort((a,b)=>{
+      const ia=regionOrder.indexOf(a);const ib=regionOrder.indexOf(b);
+      if(ia===-1&&ib===-1)return a.localeCompare(b,'he');
+      if(ia===-1)return 1;if(ib===-1)return -1;return ia-ib;
+    });
+    const regionsHtml=regionsInWeek.map(reg=>{
+      const mp=v.byRegion[reg];
+      const animals=[...mp.entries()].sort((a,b)=>{const na=a[1].isNew?0:1,nb=b[1].isNew?0:1;if(na!==nb)return na-nb;return a[0].localeCompare(b[0],'he')});
+      const rows=animals.map(([k,info])=>`<div style="font-size:11px;padding:2px 0;color:#7B341E;display:flex;align-items:center;gap:4px">${info.isNew?'<span style="background:#DC2626;color:white;padding:1px 5px;border-radius:4px;font-size:8px;font-weight:800">🆕</span>':''}<span style="font-weight:${info.isNew?'800':'600'}">${esc(k)}</span>${info.uids.size>1?`<span style="font-size:9px;color:#92400E;opacity:0.7">×${info.uids.size}</span>`:''}</div>`).join('');
+      const regColor=(typeof REGION_COLORS!=='undefined'&&REGION_COLORS[reg])||'#78350F';
+      return`<div style="margin-bottom:8px"><div style="font-weight:800;color:${regColor};font-size:11.5px;border-bottom:1.5px solid ${regColor};padding-bottom:2px;margin-bottom:3px;display:flex;justify-content:space-between">${esc(reg)}<span style="font-size:10px;opacity:0.85;font-weight:700">${mp.size}</span></div>${rows}</div>`;
     }).join('');
     const bg=isPast?'#F3F4F6':(isCurrent?'#FEF3C7':'#FFF7ED');
     const border=isPast?'#9CA3AF':(isCurrent?'#F59E0B':'#FDBA74');
     const opacity=isPast?'0.55':'1';
     const badgeCol=isPast?'#6B7280':(isCurrent?'#B45309':'#C2410C');
     const ring=isCurrent?'box-shadow:0 0 0 3px rgba(245,158,11,0.35);':'';
-    return `<div style="min-width:200px;max-width:240px;background:${bg};border:2px solid ${border};border-radius:10px;padding:8px 10px;opacity:${opacity};${ring}"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><div style="font-weight:800;color:${badgeCol};font-size:13px">${isCurrent?'⏰ השבוע':lbl}</div><div style="background:${badgeCol};color:white;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:800">🆕 ${animals.length}</div></div>${rowsHtml}</div>`;
+    return`<div style="min-width:230px;max-width:260px;background:${bg};border:2px solid ${border};border-radius:10px;padding:10px;opacity:${opacity};${ring};display:flex;flex-direction:column"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:800;color:${badgeCol};font-size:13px">${isCurrent?'⏰ השבוע':lbl}</div><div style="display:flex;gap:3px"><span style="background:${badgeCol};color:white;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:800">${totalAnimals} שיבוצים</span>${newCount>0?`<span style="background:#DC2626;color:white;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:800">🆕 ${newCount}</span>`:''}</div></div><div style="flex:1">${regionsHtml}</div><button onclick="_nawCopyToWhatsApp('${wISO}');event.stopPropagation()" style="width:100%;background:#25D366;color:white;border:none;padding:6px;border-radius:6px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit;margin-top:8px">📋 העתק לוואטסאפ</button></div>`;
   }).join('');
-  const totalOver=[...newByWeek.entries()].filter(([w])=>w>=curSunday).reduce((s,[w,a])=>s+a.length,0);
   el.innerHTML=`
     <div style="background:linear-gradient(135deg,#FFF7ED,#FFEDD5);border:1.5px solid #F59E0B;border-radius:12px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-        <div style="font-weight:800;color:#78350F;font-size:14px">🐾 חיות חדשות לפי שבוע ${horizon==='planning'?'· כל הקדימה':'· כל השנה'} <span style="background:#F59E0B;color:white;padding:2px 8px;border-radius:8px;font-size:11px;margin-right:6px">${totalOver} עתידיות · ${weeks.length} שבועות</span></div>
+        <div style="font-weight:800;color:#78350F;font-size:14px">🐾 מערכים שיוצאים כל שבוע ${horizon==='planning'?'· קדימה':'· כל השנה'} <span style="background:#F59E0B;color:white;padding:2px 8px;border-radius:8px;font-size:11px;margin-right:6px">${views.length} שבועות</span></div>
         <div style="display:flex;gap:4px"><button onclick="_nawSetPref({horizon:'${horizon==='planning'?'year':'planning'}'})" style="background:white;border:1px solid #F59E0B;color:#78350F;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">${horizon==='planning'?'📆 כל השנה':'⏭ קדימה בלבד'}</button><button onclick="_nawSetPref({collapsed:true})" style="background:white;border:1px solid #F59E0B;color:#78350F;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">▲ סגור</button></div>
       </div>
-      <div style="font-size:10.5px;color:#78350F;margin-bottom:8px;line-height:1.5">💡 מציג את השבועות בהם חיה מופיעה בפעם הראשונה השנה במערכות של כל המדריכות. את יכולה להכין את החיות והמערך מבעוד מועד.</div>
+      <div style="font-size:10.5px;color:#78350F;margin-bottom:8px;line-height:1.5">💡 כל כרטיס = שבוע. בתוכו — החיות המשובצות לאותו שבוע, מפוצלות לפי אזור, כמו רשימת ההכנה של באבי. תג <b style="background:#DC2626;color:white;padding:0 4px;border-radius:3px">🆕</b> = פעם ראשונה השנה. הכפתור הירוק — מעתיק את הרשימה בפורמט וואטסאפ.</div>
       <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px">${cards}</div>
     </div>`;
+}
+
+async function _nawCopyToWhatsApp(wISO){
+  const v=(window._nawCurrentViews||new Map()).get(wISO);
+  if(!v){alert('לא נמצא שבוע');return}
+  const d=new Date(wISO+'T00:00:00');const lbl=`${d.getDate()}.${d.getMonth()+1}`;
+  let text=`מערכים שצריכים לצאת השבוע - ${lbl}\n\n`;
+  const regionOrder=(typeof REGIONS!=='undefined'&&REGIONS.length)?REGIONS.slice():[];
+  const regs=Object.keys(v.byRegion).sort((a,b)=>{const ia=regionOrder.indexOf(a);const ib=regionOrder.indexOf(b);if(ia===-1&&ib===-1)return a.localeCompare(b,'he');if(ia===-1)return 1;if(ib===-1)return -1;return ia-ib});
+  regs.forEach(reg=>{
+    const mp=v.byRegion[reg];
+    text+=`${reg} -\n`;
+    const animals=[...mp.entries()].sort((a,b)=>{const na=a[1].isNew?0:1,nb=b[1].isNew?0:1;if(na!==nb)return na-nb;return a[0].localeCompare(b[0],'he')});
+    animals.forEach(([k,info])=>{text+=`${info.isNew?'🆕 ':''}${k}\n`});
+    text+='\n';
+  });
+  try{await navigator.clipboard.writeText(text.trim());alert('✓ הועתק ללוח. אפשר להדביק בוואטסאפ.\n\n'+text.slice(0,200)+'...')}
+  catch(e){/* Fallback: show in a prompt */prompt('העתיקי ידנית (Ctrl+A → Ctrl+C):',text.trim())}
 }
 
 /* Hook: renderWschGrid should also refresh the new-animals panel */
