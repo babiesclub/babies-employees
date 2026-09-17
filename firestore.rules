@@ -307,6 +307,15 @@ service cloud.firestore {
       allow write: if isAdmin() || isOffice();
     }
 
+    // TRANSFER-ASSIGNMENT LEARNING (v38.9.12) — teaches which client
+    // owns each transfer amount. Written on 'זו ההעברה' click in the
+    // reports amount search. Only admin/office can teach; both can read.
+    match /transferAssignments/{docId} {
+      allow read: if isAdmin() || isOffice();
+      allow create, update: if isAdmin() || isOffice();
+      allow delete: if isAdmin();
+    }
+
     // INVENTORY (v38.6) — physical material units + speakers.
     // Instructors read (so they see what they own); only admin/office write.
     // Non-destructive: delete flips `deleted:true` — hard delete is admin-only.
