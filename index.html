@@ -13610,6 +13610,173 @@ async function _bdRemoveDesc(idx){
 }
 
 /* =====================================================================
+   BANK STATEMENT IMPORT — ONE ZERO (v38.9.15, 2026-09-17)
+
+   Reads a One Zero XLSX/CSV export and matches each זיכוי (credit) row
+   against every garden.bankDescriptions + network bankDescriptions.
+   Also supports paste-a-range from Excel (tab-separated) for quick
+   single-batch matching without a file save.
+
+   One Zero columns (RTL export, in Hebrew):
+     תאריך תנועה | תאריך ערך | סוג פעולה | תיאור | סכום פעולה
+     | מטבע | זיכוי/חיוב | יתרה | אסמכתא
+
+   Only זיכוי rows are considered (חיוב = outgoing salaries etc.).
+   The description column is the identifier; extra tokens like the
+   account number `10-725-013640091` are the strongest hints. */
+
+function _bankImportOpen(){
+  const el=document.getElementById('bank-import-panel');if(!el)return;
+  el.innerHTML=`<div style="background:linear-gradient(135deg,#EFF6FF,#DBEAFE);border:2px solid #3B82F6;border-radius:12px;padding:12px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+      <div style="font-weight:800;color:#1E40AF;font-size:14px">🏦 העלאת תנועות בנק — One Zero → זיהוי אוטומטי לפי תיאורי בנק</div>
+      <button onclick="document.getElementById('bank-import-panel').innerHTML=''" style="background:white;border:1px solid #3B82F6;color:#1E40AF;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">✕ סגור</button>
+    </div>
+    <div style="font-size:11px;color:#1E40AF;margin-bottom:10px;line-height:1.6">💡 שיטה 1: העלי את קובץ ה-XLSX שירדת מ-One Zero. שיטה 2: הדביקי טווח מהאקסל (עמודות: תאריך · תיאור · סכום · זיכוי/חיוב).</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <input type="file" id="bank-import-file" accept=".xlsx,.xls,.csv" onchange="_bankImportHandleFile(event)" style="flex:1;min-width:200px;font-family:inherit;font-size:13px;padding:6px;background:white;border:1.5px solid #3B82F6;border-radius:6px">
+      <button onclick="_bankImportShowPaste()" style="background:#7C3AED;color:white;border:none;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit">📋 או הדבק טווח מהאקסל</button>
+    </div>
+    <div id="bank-import-paste-box"></div>
+    <div id="bank-import-results"></div>
+  </div>`;
+}
+function _bankImportShowPaste(){
+  const b=document.getElementById('bank-import-paste-box');if(!b)return;
+  b.innerHTML=`<div style="background:white;border:1.5px dashed #7C3AED;border-radius:8px;padding:10px;margin-bottom:10px">
+    <div style="font-size:11px;color:#5B21B6;margin-bottom:6px;font-weight:700">📋 הדביקי כאן טווח מהאקסל (Ctrl+V) — כל שורה = תנועה. עמודות מזוהות אוטומטית:</div>
+    <textarea id="bank-import-paste" rows="6" placeholder="בחרי טווח באקסל כולל כותרות, Ctrl+C, ותדביקי כאן..." style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;padding:8px;border:1.5px solid #7C3AED;border-radius:6px;resize:vertical" dir="auto"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px"><button onclick="_bankImportParsePaste()" style="flex:1;background:#7C3AED;color:white;border:none;padding:8px;border-radius:6px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit">▶ נתח והצג התאמות</button><button onclick="document.getElementById('bank-import-paste-box').innerHTML=''" style="background:#F3F4F6;border:1px solid var(--brd);color:#4B5563;padding:8px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit">ביטול</button></div>
+  </div>`;
+}
+function _bankImportHandleFile(ev){
+  const f=ev.target.files&&ev.target.files[0];if(!f)return;
+  const reader=new FileReader();
+  reader.onload=(e)=>{try{
+    const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
+    const sheet=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:''});
+    _bankImportProcessRows(rows);
+  }catch(err){alert('שגיאה בקריאת הקובץ: '+(err.message||err))}};
+  reader.readAsArrayBuffer(f);
+}
+function _bankImportParsePaste(){
+  const t=(document.getElementById('bank-import-paste')?.value||'').trim();
+  if(!t){alert('חסר טקסט להדבקה');return}
+  const rows=t.split(/\r?\n/).map(line=>line.split('\t'));
+  _bankImportProcessRows(rows);
+}
+/* Find column indexes by header keywords, RTL-agnostic. */
+function _bankImportDetectColumns(headerRow){
+  const norm=s=>String(s||'').replace(/\s+/g,'').toLowerCase();
+  const map={date:-1,desc:-1,amount:-1,type:-1};
+  headerRow.forEach((h,i)=>{
+    const n=norm(h);
+    if(n.includes('תאריךתנועה')||n.includes('תאריךערך')||n==='תאריך')map.date=map.date<0?i:map.date;
+    if(n==='תיאור'||n.includes('פרטים')||n.includes('description'))map.desc=i;
+    if(n.includes('סכוםפעולה')||n==='סכום'||n==='amount')map.amount=i;
+    if(n.includes('זיכוי')||n.includes('חיוב')||n==='סוג')map.type=i;
+  });
+  return map;
+}
+function _bankImportProcessRows(rows){
+  if(!rows||rows.length<2){alert('לא זוהו שורות');return}
+  /* Detect the header row — could be row 0, or after some metadata. */
+  let headerIdx=-1,cols=null;
+  for(let i=0;i<Math.min(rows.length,10);i++){
+    const cand=_bankImportDetectColumns(rows[i]||[]);
+    if(cand.desc>=0&&cand.amount>=0){headerIdx=i;cols=cand;break;}
+  }
+  if(!cols||cols.desc<0){alert('לא הצליחה לזהות עמודת "תיאור" בקובץ. ודאי שהקובץ מכיל כותרת "תיאור".');return}
+  const dataRows=rows.slice(headerIdx+1).filter(r=>r&&r.some(c=>String(c||'').trim()!==''));
+  /* Filter to credit rows only. If type column exists, use it. Otherwise, positive amount = credit. */
+  const credits=dataRows.filter(r=>{
+    if(cols.type>=0){const t=String(r[cols.type]||'').trim();if(t.includes('זיכוי'))return true;if(t.includes('חיוב'))return false}
+    /* Fallback: positive number in amount column */
+    const amt=parseFloat(String(r[cols.amount]||'').replace(/,/g,''));
+    return !isNaN(amt)&&amt>0;
+  });
+  if(!credits.length){alert('לא נמצאו זיכויים בקובץ (רק חיובים).');return}
+  _bankImportRenderMatches(credits.map(r=>({
+    date:String(r[cols.date]||'').trim(),
+    desc:String(r[cols.desc]||'').trim(),
+    amountRaw:String(r[cols.amount]||'').trim(),
+    amount:Math.abs(parseFloat(String(r[cols.amount]||'').replace(/,/g,''))||0)
+  })));
+}
+/* Normalize + match: use the existing _txaNormalize + _txaDescScore already defined for consistency. */
+function _bankMatchForDescription(description){
+  const qNorm=_txaNormalize(description);if(!qNorm)return[];
+  const results=[];
+  const gardens=DB.get('gardens')||[];
+  gardens.forEach(g=>{if(typeof g==='string')return;const arr=Array.isArray(g.bankDescriptions)?g.bankDescriptions:[];arr.forEach(d=>{const sc=_txaDescScore(qNorm,_txaNormalize(d));if(sc>=0.6)results.push({gardenName:g.name,networkName:null,storedDesc:d,score:sc,source:'garden'})})});
+  Object.keys(_networkSettings||{}).forEach(nn=>{const arr=Array.isArray(_networkSettings[nn].bankDescriptions)?_networkSettings[nn].bankDescriptions:[];arr.forEach(d=>{const sc=_txaDescScore(qNorm,_txaNormalize(d));if(sc>=0.6)results.push({gardenName:nn,networkName:nn,storedDesc:d,score:sc,source:'network'})})});
+  return results.sort((a,b)=>b.score-a.score);
+}
+function _bankImportRenderMatches(credits){
+  const el=document.getElementById('bank-import-results');if(!el)return;
+  const gardens=DB.get('gardens')||[];
+  const gardenNames=gardens.map(g=>typeof g==='string'?g:g.name).filter(Boolean).sort((a,b)=>a.localeCompare(b,'he'));
+  const rowsHtml=credits.map((row,idx)=>{
+    const matches=_bankMatchForDescription(row.desc);
+    const top=matches[0]||null;
+    const matched=!!top;
+    const rowBg=matched?'#DCFCE7':'#FEF3C7';
+    const rowBorder=matched?'#16A34A':'#F59E0B';
+    const rowTxt=matched?'#166534':'#78350F';
+    const label=matched?`✓ זוהה: <b>${esc(top.gardenName)}</b> ${top.networkName?'<span style="background:#DBEAFE;color:#1E40AF;font-size:10px;padding:1px 6px;border-radius:5px;font-weight:800">רשת</span>':''} <span style="background:#16A34A;color:white;font-size:10px;padding:1px 6px;border-radius:5px;font-weight:800">${Math.round(top.score*100)}%</span>`:'⚠ לא זוהה — בחרי גן ידנית:';
+    const gardenPicker=`<select onchange="_bankImportTeach(${idx},this.value)" style="font-size:11px;padding:4px 6px;border:1.5px solid #F59E0B;border-radius:5px;background:white;max-width:220px;font-family:inherit"><option value="">-- בחרי גן/רשת --</option>${gardenNames.map(n=>`<option value="__G:${esc(n)}">🌿 ${esc(n)}</option>`).join('')}${Object.keys(_networkSettings||{}).sort((a,b)=>a.localeCompare(b,'he')).map(n=>`<option value="__N:${esc(n)}">🏢 רשת: ${esc(n)}</option>`).join('')}</select>`;
+    return `<tr id="bi-row-${idx}" style="background:${rowBg}"><td style="padding:6px 8px;font-size:11px;color:${rowTxt};white-space:nowrap">${esc(row.date)}</td><td style="padding:6px 8px;font-size:11px;color:${rowTxt};direction:auto;word-break:break-word">${esc(row.desc)}</td><td style="padding:6px 8px;font-size:12px;color:${rowTxt};font-weight:800;white-space:nowrap">${row.amount.toFixed(2)}₪</td><td style="padding:6px 8px;font-size:11px;color:${rowTxt}"><div>${label}</div>${matched?'':`<div style="margin-top:4px">${gardenPicker}</div>`}</td></tr>`;
+  }).join('');
+  const total=credits.length;
+  const matchedCount=credits.filter(r=>_bankMatchForDescription(r.desc).length).length;
+  const unmatchedCount=total-matchedCount;
+  const summary=`<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+    <div style="background:#DCFCE7;color:#166534;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:800">✓ זוהו: ${matchedCount}/${total}</div>
+    <div style="background:${unmatchedCount?'#FEF3C7':'#F3F4F6'};color:${unmatchedCount?'#78350F':'#6B7280'};padding:6px 12px;border-radius:8px;font-size:12px;font-weight:800">⚠ לא זוהו: ${unmatchedCount}</div>
+    <div style="background:#EFF6FF;color:#1E40AF;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:800">💰 סה"כ זיכויים: ${credits.reduce((s,r)=>s+r.amount,0).toFixed(2)}₪</div>
+  </div>`;
+  window._bankImportCredits=credits;
+  el.innerHTML=summary+`<div class="tbl-wrap" style="max-height:60vh;overflow-y:auto"><table class="rt" style="width:100%"><thead style="position:sticky;top:0"><tr><th style="background:#F0F9FF">תאריך</th><th style="background:#F0F9FF">תיאור מהבנק</th><th style="background:#F0F9FF">סכום</th><th style="background:#F0F9FF">התאמה</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
+}
+async function _bankImportTeach(rowIdx,valueSpec){
+  if(!valueSpec)return;
+  const kind=valueSpec.slice(0,3)==='__G'?'garden':(valueSpec.slice(0,3)==='__N'?'network':null);
+  if(!kind){alert('בחירה לא תקינה');return}
+  const name=valueSpec.slice(4);
+  const credit=(window._bankImportCredits||[])[rowIdx];if(!credit){alert('שורה לא נמצאה');return}
+  try{
+    if(kind==='garden'){
+      const cur=_gardenBankDescs(name);
+      if(!cur.some(d=>d.toLowerCase()===credit.desc.toLowerCase()))cur.push(credit.desc);
+      await _saveGardenBankDescs(name,cur);
+    }else{
+      const cur=_networkBankDescs(name);
+      if(!cur.some(d=>d.toLowerCase()===credit.desc.toLowerCase()))cur.push(credit.desc);
+      await _saveNetworkBankDescs(name,cur);
+    }
+    /* Re-render the results table so this row moves to green */
+    _bankImportRenderMatches(window._bankImportCredits||[]);
+    if(typeof filterRepGardenTable==='function')filterRepGardenTable();
+  }catch(e){alert('שגיאה: '+(e.message||e))}
+}
+
+/* Add a launcher button to open the import panel. It sits above the amount-search row. */
+function _bankImportEnsureLauncher(){
+  if(document.getElementById('bank-import-launcher'))return;
+  const container=document.getElementById('bank-import-panel');
+  if(!container||!container.parentElement)return;
+  const btn=document.createElement('button');
+  btn.id='bank-import-launcher';btn.type='button';
+  btn.style.cssText='background:linear-gradient(135deg,#1E40AF,#3B82F6);color:white;border:none;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;margin-bottom:8px;width:100%';
+  btn.textContent='🏦 העלי קובץ תנועות בנק / הדבק טווח → זיהוי אוטומטי';
+  btn.setAttribute('onclick','_bankImportOpen()');
+  container.parentElement.insertBefore(btn,container);
+}
+/* Periodic sweep to ensure the launcher is present whenever the reports panel is active. */
+setInterval(()=>{try{_bankImportEnsureLauncher()}catch(e){}},2000);
+
+/* =====================================================================
    TRANSFER-LEARNING (v38.9.12, 2026-09-17)
 
    Admin's problem: she gets bank transfers with only an amount (no
